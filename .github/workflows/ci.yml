@@ -37,7 +37,7 @@ jobs:
       - name: Ruff (lint + opmaak)
         run: |
           (cd apps/api && ruff check . && ruff format --check .)
-          ruff check tests/e2e deploy/allinone tools && ruff format --check tests/e2e deploy/allinone tools
+          ruff check tests/e2e tests/interop deploy/allinone tools && ruff format --check tests/e2e tests/interop deploy/allinone tools
       - name: Mypy
         working-directory: apps/api
         run: mypy

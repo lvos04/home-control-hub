@@ -3,7 +3,7 @@ PY ?= .venv/bin/python
 API := apps/api
 IMAGE ?= home-control-hub:dev
 
-.PHONY: lint test e2e openapi lock image smoke clean
+.PHONY: lint test e2e interop openapi lock image smoke clean
 
 lint:
 	cd $(API) && ../../$(PY) -m ruff check . && ../../$(PY) -m ruff format --check . && ../../$(PY) -m mypy
@@ -13,6 +13,10 @@ test:
 
 e2e:
 	$(PY) -m pytest -q tests/e2e -p no:cacheprovider
+
+# Interop met de ECHTE Hub (alleen lokaal): HUB_PY = Python van een venv met het pakket 'hub' van ai-server-manager.
+interop:
+	HCH_REAL_HUB_PYTHON=$(HUB_PY) $(PY) -m pytest -q tests/interop -p no:cacheprovider
 
 openapi:
 	$(PY) -m integrations openapi --out docs/openapi/home-control-hub.openapi.json
