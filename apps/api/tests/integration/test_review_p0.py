@@ -317,6 +317,21 @@ def test_migration_refused_when_backup_fails(
     assert _revision(settings.database_url) == "9999"
 
 
+def _newest_pg_restore() -> str | None:
+    """De nieuwste pg_restore die er is: die leest ook archieven van oudere pg_dump-versies.
+
+    Op een machine met meerdere PostgreSQL-clients kiest Debians pg_wrapper voor ``pg_dump -h …`` de nieuwste versie,
+    maar voor ``pg_restore --list`` (zonder server) de versie van het standaardcluster; een ouder pg_restore kan het
+    nieuwere archiefformaat dan niet lezen. In de image staat alleen PostgreSQL 16, dus daar speelt dit niet.
+    """
+    candidates = sorted(
+        Path("/usr/lib/postgresql").glob("*/bin/pg_restore"),
+        key=lambda p: int(p.parts[-3]) if p.parts[-3].isdigit() else 0,
+        reverse=True,
+    )
+    return str(candidates[0]) if candidates else shutil.which("pg_restore")
+
+
 def test_backup_before_migration_with_real_pg_dump(two_step_migrations: Settings, tmp_path: Path) -> None:
     import os
 
@@ -331,7 +346,7 @@ def test_backup_before_migration_with_real_pg_dump(two_step_migrations: Settings
     assert len(dumps) == 1 and dumps[0].stat().st_size > 0
     assert _revision(settings.database_url) == "9999"
     # de dump is een geldig pg_dump-archief met het schema van vóór de migratie
-    pg_restore = shutil.which("pg_restore")
+    pg_restore = _newest_pg_restore()
     if pg_restore:
         listing = subprocess.run(  # noqa: S603 - vaste argumenten
             [pg_restore, "--list", str(dumps[0])], capture_output=True, text=True, check=False

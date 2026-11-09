@@ -27,8 +27,8 @@ nok() { echo "FOUT $*"; FAIL=$((FAIL + 1)); }
 check() { if eval "$2"; then ok "$1"; else nok "$1"; fi; }
 
 wait_healthy() {
-  local c="$1" i
-  for i in $(seq 1 60); do
+  local c="$1"
+  for _ in $(seq 1 60); do
     case "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null || echo weg)" in
       healthy) return 0 ;;
       weg) return 1 ;;
@@ -50,6 +50,9 @@ run() { # naam, datamap, extra args
     --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
     --health-interval 3s --health-start-period 60s "$@" "$IMAGE" >/dev/null
 }
+# Bestanden in de datamap bekijken via een wegwerpcontainer (als root in de container): de datamap is van 568 met
+# 0700/0600, dus een gewone hostgebruiker (zoals de CI-runner) kan ze zelf niet lezen.
+in_work() { docker run --rm --network none -v "$WORK:/w" --entrypoint sh "$IMAGE" -c "$1"; }
 # SQL in de ingebouwde database (als 568, via de unix-socket; alleen voor deze test)
 sql() { docker exec --user 568:568 "$1" psql -h /tmp/hch-pg -U hch -d hch -tAc "$2"; }
 marker_write() {
@@ -83,19 +86,21 @@ check "postgres, api en worker draaien als 568" \
 check "geen netwerkpoort voor PostgreSQL (alleen unix-socket)" \
   "! docker exec $NAME python -c 'import socket;s=socket.socket();s.settimeout(1);s.connect((\"127.0.0.1\",5432))' 2>/dev/null"
 check "geheimen 0600 en eigenaar 568" \
-  "[ \"\$(stat -c '%a %u' $WORK/root/secrets/vault.key)\" = '600 568' ] && [ \"\$(stat -c '%a %u' $WORK/root/secrets/identity.ed25519)\" = '600 568' ]"
+  "[ \"\$(in_work 'stat -c \"%a %u\" /w/root/secrets/vault.key /w/root/secrets/identity.ed25519' | sort -u)\" = '600 568' ]"
 check "ontkoppelcode staat in de app-log" "log_has $NAME 'Lokale ontkoppelcode'"
 check "geen setuid/setgid-bestanden in de image" \
   "[ -z \"\$(docker exec $NAME sh -c 'find / -xdev -perm /6000 -type f 2>/dev/null')\" ]"
 check "te groot verzoek zonder login geeft 413" too_large
 check "markeerrij in de database geschreven" marker_write
 check "pg_dump werkt in de image (back-up vóór migratie)" pg_dump_works
-SUM1="$(sha256sum "$WORK/root/secrets/vault.key" | cut -d' ' -f1)"
+SUM1="$(in_work 'sha256sum /w/root/secrets/vault.key' | cut -d' ' -f1)"
+check "vault.key leesbaar voor de controle" "[ -n '$SUM1' ]"
 
 echo "== 2. herstart: data en geheimen blijven"
 docker restart "$NAME" >/dev/null
 check "na herstart weer healthy" "wait_healthy $NAME"
-check "vault.key ongewijzigd na herstart" "[ \"\$(sha256sum $WORK/root/secrets/vault.key | cut -d' ' -f1)\" = '$SUM1' ]"
+check "vault.key ongewijzigd na herstart" \
+  "[ \"\$(in_work 'sha256sum /w/root/secrets/vault.key' | cut -d' ' -f1)\" = '$SUM1' ]"
 check "databasegegevens behouden na herstart" marker_present
 
 echo "== 3. harde kill (stroomuitval) en opnieuw starten"
@@ -103,7 +108,8 @@ docker kill "$NAME" >/dev/null
 docker start "$NAME" >/dev/null
 check "na harde kill weer healthy" "wait_healthy $NAME"
 check "databasegegevens behouden na harde kill" marker_present
-check "geen back-up nodig zonder openstaande migratie" "[ -z \"\$(ls -A $WORK/root/backups 2>/dev/null)\" ]"
+check "geen back-up nodig zonder openstaande migratie" \
+  "[ \"\$(in_work 'echo leeg; ls -A /w/root/backups 2>/dev/null')\" = leeg ]"
 docker rm -f "$NAME" >/dev/null
 
 echo "== 4. start direct als 568 op een 568-map"
@@ -113,6 +119,8 @@ check "als 568 gestart en healthy" "wait_healthy $NAME-568"
 docker rm -f "$NAME-568" >/dev/null
 
 echo "== 5. verkeerde rechten geven een duidelijke Nederlandse fout"
+# de map expliciet van root (0755) maken: anders hangt de uitkomst af van de uid van de hostgebruiker
+in_work 'chown 0:0 /w/bad && chmod 0755 /w/bad'
 docker run -d --name "$NAME-bad" -v "$WORK/bad:/appdata" --user 1000:1000 "$IMAGE" >/dev/null
 sleep 8
 check "fout 'geen schrijfrechten' in de log" "log_has $NAME-bad 'FOUT: geen schrijfrechten'"
