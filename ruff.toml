@@ -1,0 +1,7 @@
+# Ruff voor bestanden buiten apps/api (procesbewaker van de image en dienst-E2E). Zelfde regels als apps/api.
+extend = "apps/api/pyproject.toml"
+
+[lint.per-file-ignores]
+# vaste argumentlijsten naar eigen binaries in de image; /tmp/hch-pg is de socketmap binnen de container
+"deploy/allinone/*.py" = ["S603", "S607", "S108", "SIM105"]
+"tests/e2e/*.py" = ["S101", "S105", "S603", "SIM115"]

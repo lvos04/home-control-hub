@@ -1,0 +1,102 @@
+# Manifest volgens de manifeststandaard (contract §9, eigenaar appstore-en-fork). Installatie uitsluitend als
+# standaard TrueNAS Custom App; een 'compose'-veld is verboden. De digest van de eigen GHCR-image vult de release-CI.
+manifest_version: "1"
+app_id: home-control-hub
+name: Home Control Hub
+owner_repo: lvos04/home-control-hub
+category: integraties
+description_nl: >-
+  Integratiedienst: netwerk/privacy (NetAlertX, AdGuard Home, Tailscale, Cloudflared), Node-RED-automatisering,
+  Authentik/SSO met beheerherstel (noodtoegang, herstelregister) en energie/resources. API-dienst met een kleine
+  statuspagina; alle schermen staan in de Hub.
+version: 0.1.0
+install:
+  method: custom_app
+image:
+  repository: ghcr.io/lvos04/home-control-hub
+  tag: 0.1.0
+  digest: null  # wordt door release.yml ingevuld (release/digests.json); nooit installeren zonder digest
+custom_app:
+  ports:
+    - name: web
+      container_port: 30420
+      host_port: 30420  # voorstel; de Hub controleert vooraf op conflicten via de TrueNAS-API
+      protocol: tcp
+  storage:
+    - name: appdata
+      mount: /appdata
+      source: dataset_picker
+  env: []  # geen verplichte variabelen; HUB_URL + eenmalig koppeltoken zet de Hub zelf (zie parameters)
+  resources:
+    cpus: 1
+    memory_mib: 512
+  gpu: none
+  run_as:
+    start_user: root  # alleen om /appdata aan 568:568 te geven
+    runtime_uid: 568
+    runtime_gid: 568
+parameters:
+  - name: HUB_URL
+    type: url
+    source: wizard
+    required: false
+    description_nl: Adres van de Hub (uit het dienstenregister); nooit een voorbeeldwaarde.
+  - name: HUB_ENROLLMENT_TOKEN
+    type: string
+    source: generated
+    required: false
+    description_nl: Eenmalig koppeltoken (vervalt na 60 min of na eerste gebruik); daarna waardeloos.
+  - name: appdata_dataset
+    type: dataset
+    source: dataset_picker
+    required: true
+    description_nl: Dataset voor /appdata (database, geheimen, back-ups).
+storage:
+  - name: appdata
+    mount: /appdata
+    kind: config
+    required_dataset_role: apps
+network:
+  ports: [30420]
+  host_network: false
+  joins_platform_network: false
+privileges:
+  privileged: false
+  cap_add: []
+  devices: []
+  gpu: none
+privilege_reason: Geen extra rechten nodig. Start als root uitsluitend voor het eigenaarschap van /appdata.
+healthcheck:
+  type: http
+  path: /readyz
+  port: 30420
+  interval_s: 30
+  timeout_s: 8
+  start_period_s: 90
+  retries: 3
+backup:
+  db_export: pg_dump -Fc (ingebouwd vóór migraties; /appdata/backups)
+  snapshot_datasets: [appdata]
+  rpo: onbekend (D16)
+  rto: onbekend (D16)
+dependencies:
+  - app_id: ai-server-manager
+    kind: hub
+    required: false  # zonder Hub draait de app en toont eerlijk 'niet gekoppeld'
+sso: none  # eigen gebruikers heeft de app niet; gebruikerscontext komt als Hub-JWT
+risk:
+  install: R2
+  update: R2
+  uninstall: R2
+upgrade:
+  migrations: alembic (automatisch bij start, met back-up vooraf)
+  tag_only_rollback_safe: false  # 0.1.0 is het eerste schema; terug naar 'niets' = dataset/snapshot
+decisions_required: [D01, D02, D03, D17]
+docs:
+  - deploy/truenas/CUSTOM_APP.md
+  - docs/platform-v2/03_INSTALLATIE/I09_AUTHENTIK.md
+  - docs/platform-v2/03_INSTALLATIE/I10_NODE_RED.md
+  - docs/platform-v2/03_INSTALLATIE/I11_NETALERTX.md
+  - docs/platform-v2/03_INSTALLATIE/I12_ADGUARD_HOME.md
+  - docs/platform-v2/03_INSTALLATIE/I21_TAILSCALE_CLOUDFLARED.md
+validation_status: NIET GEVALIDEERD (echte NAS)

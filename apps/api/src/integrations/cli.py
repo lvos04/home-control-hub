@@ -72,10 +72,17 @@ def cmd_worker(settings: Settings, once: bool) -> int:
     return 0
 
 
-def export_openapi(settings: Settings) -> str:
+def export_openapi(settings: Settings | None = None) -> str:
+    """Deterministische export; gebruikt een tijdelijke datamap (raakt /appdata en de database niet aan)."""
+    import dataclasses
+    import tempfile
+
     from .app import create_app
 
-    return json.dumps(create_app(settings).openapi(), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    base = settings or Settings()
+    with tempfile.TemporaryDirectory(prefix="hch-openapi-") as tmp:
+        app = create_app(dataclasses.replace(base, data_dir=Path(tmp)))
+        return json.dumps(app.openapi(), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
 
 
 def cmd_openapi(settings: Settings, out: str | None) -> int:

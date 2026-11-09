@@ -1,0 +1,26 @@
+# ALLEEN VOOR ONTWIKKELING EN CI — dit is GEEN installatiemethode.
+# Installeren op TrueNAS gebeurt uitsluitend als standaard Custom App (deploy/truenas/CUSTOM_APP.md).
+#
+#   docker compose -f deploy/dev/compose.yaml up --build
+#   → statuspagina op http://127.0.0.1:30420
+name: hch-dev
+services:
+  home-control-hub:
+    build:
+      context: ../..
+      dockerfile: deploy/allinone/Dockerfile
+    image: home-control-hub:dev
+    ports:
+      - "127.0.0.1:30420:30420"
+    volumes:
+      - hch-appdata:/appdata
+    environment:
+      # optioneel voor lokaal testen met een Hub; standaard leeg = eerlijk 'niet gekoppeld'
+      HUB_URL: ${HUB_URL:-}
+      HUB_ENROLLMENT_TOKEN: ${HUB_ENROLLMENT_TOKEN:-}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]  # alleen voor de eigenaarswissel van /appdata bij start
+volumes:
+  hch-appdata:

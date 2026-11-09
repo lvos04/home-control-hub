@@ -15,3 +15,5 @@ obj/
 .env
 /appdata/
 release/
+.lockvenv/
+.appdata/
