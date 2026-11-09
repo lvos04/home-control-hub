@@ -419,6 +419,16 @@ tijdelijk terug te zetten.
 | `python tests/ui/ontwerpreview.py --uit tests/ui/review-uit` (CI-commando, na de reparatie) | **140 metingen, 0 overtredingen**; laagste tekst 8,34, rand 4,86, icoon 5,71, focus 7,79 |
 | `actionlint .github/workflows/*.yml`, `shellcheck deploy/allinone/smoke-test.sh` | geen bevindingen |
 
+GitHub Actions:
+- Run `42677974905` (commit `87f1d06`, de nieuwe actieversies): **geslaagd**, met de jobs `python`, `statuspagina-ui`
+  en `image`.
+- Run `42678823148` (commit `089858f`): **geslaagd**.
+  - Job `python`: 567 geslaagd en 1 overgeslagen. De overgeslagen test is de lokale Peil-vergelijking, want in CI is
+    er geen checkout van ai-server-manager; daar vergelijkt CI online. E2E: 14 geslaagd.
+  - Job `statuspagina-ui`: UI-tests 18 geslaagd. De ontwerpreview meet nu ook in CI echt: **140 metingen, 0
+    overtredingen**.
+  - Job `image`: rooktest 31 geslaagd.
+
 ### Nog steeds NIET GEVALIDEERD
 - Alles op een echte NAS:
   - het Custom App-formulier (tag met `@sha256`);
