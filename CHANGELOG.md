@@ -1,5 +1,24 @@
 # Wijzigingen
 
+## 0.1.0 — onafhankelijke review contract 1.2 (QA, ADR-0013, nog niet uitgebracht)
+
+**Gerepareerd**
+- Een onleesbaar `/appdata/secrets/hub-link.json` blijft fail-closed, ook als er daarna iets geschreven wordt (bv. een
+  mislukt env-token). Vroeger werd het stil vervangen door "nooit gekoppeld" en kwam het koppelformulier terug. Het
+  origineel blijft bewaard als `hub-link.json.onleesbaar-<tijd>`. `/readyz` meldt `koppelstatus_onleesbaar`. Herstel
+  gaat via een nieuw token van de Hub.
+- Een bronmeting ouder dan 15 minuten is nu ook in `GET /integrations/v1/sources`, de connector-items en
+  `GET /connector/v1/health` `unknown` (`meting_verouderd`), nooit meer de laatst bekende stand.
+- Een Hub-JWT met `aud` als lijst wordt geweigerd (`invalid_token`); `aud` moet precies `home-control-hub` zijn.
+- Hub- en bronadressen met een IP-adres in een afwijkende vorm worden geweigerd. Voorbeelden: `127.1`, `2130706433`,
+  `0x7f000001`, `0`, `010.0.0.1`, en `localhost.` met een punt achteraan. Een IP-adres moet `a.b.c.d` zijn.
+- De healthcheck zet ook no-new-privileges als de container als 568 start (Custom User).
+- `EVIDENCE.json` verwijst alleen nog naar tests die bestaan; een nieuwe test bewaakt dat.
+- De ontwerpreview in CI (`ontwerpreview.py --uit tests/ui/review-uit`) beoordeelde door een padfout 0 metingen en
+  slaagde toch. Nu is het pad absoluut en faalt de review als het aantal metingen niet klopt. De eerdere CI-claims
+  zijn gecorrigeerd.
+- CI: GitHub-acties naar de huidige majors (Node 24), op commit-SHA gepind.
+
 ## 0.1.0 — onafhankelijke ontwerpreview van de statuspagina (ADR-0012, nog niet uitgebracht)
 
 **Gewijzigd (alleen woorden, redenen en meldingen op `GET /`; het Peil-sjabloon is ongewijzigd)**

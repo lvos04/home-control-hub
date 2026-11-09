@@ -255,7 +255,7 @@ Er staan geen uitroeptekens, geen "OK", geen "Weet je het zeker?" en geen groen 
 | R-4 | Koppelen bezig: waarmee, laatste melding en de waarschuwing over het formulier; foutmelding `koppelen_bezig` zonder vaste minuut. | `_koppel_controle`, `FOUTEN` | `test_pending_reason_names_the_attempt_and_the_last_error` |
 | R-5 | Na een mislukte poging met formulier: "vul alle velden opnieuw in". | `bouw_model`, `OPNIEUW_INVULLEN_NL` | `test_failed_attempt_says_fields_must_be_filled_in_again` |
 | R-6 | Kortere kop; duidelijkere toelichting bij het totaal; "Hub" niet in kleine letters; "Opnieuw koppelen gaat via de Hub" na intrekken/ontkoppelen; de reden bij onleesbaar verwijst naar de melding. | `DIENST_OMSCHRIJVING`, `_totaal`, `_koppel_controle` | `test_header_copy_is_short_and_not_repeated`, `test_refused_key_rotation_is_limited_but_ready`, `test_linked_and_confirmed_is_healthy_with_neutral_link_pill` |
-| R-7 | De ontwerpreview als herhaalbare test op de draaiende dienst (lokaal en in CI). | `tests/ui/ontwerpreview.py`, `tests/ui/ontwerpreview.mjs`, `Makefile` (`ontwerpreview`), `.github/workflows/ci.yml` | 140 metingen + 14 tekstafstandcontroles, 0 overtredingen |
+| R-7 | De ontwerpreview als herhaalbare test op de draaiende dienst (lokaal en in CI; in CI beoordeelde hij tot ADR-0013 door een padfout 0 metingen, nu faalt hij als het aantal metingen niet klopt). | `tests/ui/ontwerpreview.py`, `tests/ui/ontwerpreview.mjs`, `Makefile` (`ontwerpreview`), `.github/workflows/ci.yml` | 140 metingen + 14 tekstafstandcontroles, 0 overtredingen |
 | R-8 | Geen woord van 20 tekens meer in de foutmelding (16 px); de variabelenaam staat in de controle. | `bouw_model` (melding onleesbaar), `_koppel_controle` | `test_pill_words_follow_the_icon`; ontwerpreview-regel "tekstafstand" |
 
 Het sjabloon (`design/ontwerptaal/statuspagina.html`/`.css`) is **niet** gewijzigd: de Peil-kopie blijft byte-gelijk
@@ -286,6 +286,9 @@ Voor de eigenaar van `ai-server-manager/design/ontwerptaal` (`bouw/statuspagina.
   pagina nooit groen. Dit vraagt een besluit van de bouwer of de gebruiker.
 - **V-1 (API, buiten deze review):** `GET /readyz` (`health.py`, controle `bronnen`) gebruikt nog de laatst bekende
   probe zonder leeftijdsgrens. Dezelfde grens van 15 minuten is daar aan te raden ("nooit healthy op stale cache").
+  **Opgelost in ADR-0013:** het ging niet om `/readyz` (dat heeft geen controle op bronnen), maar om
+  `GET /connector/v1/health` (controle `bronnen`), `GET /integrations/v1/sources` en de connector-items. Die gebruiken
+  nu dezelfde grens (`sources.PROBE_MAX_AGE`): een oudere meting is `unknown` (`meting_verouderd`).
 - **V-2:** de schermlezertekst van het totaal leest pil en toelichting aan elkaar ("Niet gereed Deels onbekend …"). Dat
   is te verbeteren met een scheidingsteken in het sjabloon (S-reeks) of met `aria-describedby`.
 - **V-3:** een echte schermlezertest (NVDA/TalkBack), een echte telefoon in fel licht en de pagina via

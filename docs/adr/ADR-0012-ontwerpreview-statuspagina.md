@@ -59,7 +59,9 @@ Peil-eigenaar (ai-server-manager). Wat de dienst invult (woorden, redenen, meldi
    PEIL_REVIEW.md (A-1); de toelichting naast de pil noemt de afwijkingen al expliciet.
 9. **Ontwerpreview als herhaalbare test.** `tests/ui/ontwerpreview.py` (processen en toestanden) en
    `tests/ui/ontwerpreview.mjs` (browser en metingen) draaien in CI in de job `statuspagina-ui`, en lokaal met
-   `make ontwerpreview`. Het script faalt bij elke overtreding van deze eisen:
+   `make ontwerpreview`. *(Correctie, ADR-0013: tot de review van contract 1.2 beoordeelde de CI-stap door een
+   padfout 0 metingen; nu faalt het script ook als het aantal metingen niet klopt.)* Het script faalt bij elke
+   overtreding van deze eisen:
    - axe WCAG 2.2 AA heeft overtredingen;
    - tekstcontrast is lager dan 4,5:1, of een betekenisdragende rand, een icoon of de focusring is lager dan 3:1;
    - een doel is kleiner dan 44 px, of er is overloop, tekst kleiner dan 14 px of een ellips;
@@ -73,7 +75,8 @@ Peil-eigenaar (ai-server-manager). Wat de dienst invult (woorden, redenen, meldi
 - Unit-tests zijn er voor elk besluit: pilwoord en icoon, verouderd, reden bij herstel, koppelen bezig, opnieuw invullen
   en de kop. De bestaande tests zijn aangepast aan de nieuwe woorden.
 - `/readyz` (`health.py`, controle `bronnen`) gebruikt nog wel de laatst bekende probe zonder leeftijdsgrens. Dat is
-  API-gedrag en valt buiten deze review; het staat als vervolgpunt in PEIL_REVIEW.md (V-1).
+  API-gedrag en valt buiten deze review; het staat als vervolgpunt in PEIL_REVIEW.md (V-1). *Opgelost in ADR-0013
+  (het ging om de connector-health en de bronweergave in de API, niet om `/readyz`).*
 - Validatie: **Sim-getest** (de echte dienst en de Hub-simulator in Chromium). NIET GEVALIDEERD zijn een echte
   schermlezer (NVDA/TalkBack), een echte telefoon in fel licht, de pagina achter de portpublicatie van TrueNAS en de
   echte Hub.

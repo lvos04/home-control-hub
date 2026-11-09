@@ -333,14 +333,19 @@ Er waren geen echte NAS, Hub, telefoon of schermlezer: de Hub is `tests/e2e/sim_
 
 GitHub Actions, run `42671473510` (commit `603f8a1`):
 - Pogingen 1 en 2: job `python` **geslaagd** en job `statuspagina-ui` **geslaagd**. Die laatste bevat de nieuwe stap
-  "Ontwerpreview tegen de draaiende dienst" (ruim 3 minuten, 0 overtredingen).
+  "Ontwerpreview tegen de draaiende dienst" (ruim 3 minuten, 0 overtredingen). **Correctie (review contract 1.2,
+  ADR-0013):** in CI beoordeelde die stap **0 metingen**. Door het relatieve `--uit`-pad schreef de browser zijn
+  resultaten naar `tests/ui/tests/ui/review-uit`, terwijl de beoordeling `tests/ui/review-uit` las. "0 overtredingen"
+  was in CI dus niets waard. De 140 metingen hierboven zijn lokaal gedaan (absoluut standaardpad).
 - In beide pogingen maakte GitHub de job `image` niet aan, en poging 3 startte niet ("workflow file issue").
 - Op dat moment meldde githubstatus.com een **major outage van GitHub Actions** ("Incident with Actions", 18:23 UTC).
   Ook andere repos van het programma hadden toen runs zonder jobs.
 - Het image en de rooktest zijn daarom lokaal gedraaid (zie hierboven).
 
 GitHub Actions, run `42673722426` (commit `b62abeb`, dezelfde code): **geslaagd**, met de jobs `python`,
-`statuspagina-ui` (UI-tests en de ontwerpreview tegen de draaiende dienst) en `image` (rooktest).
+`statuspagina-ui` (UI-tests en de ontwerpreview tegen de draaiende dienst) en `image` (rooktest). **Correctie
+(ADR-0013):** ook in deze run beoordeelde de ontwerpreview-stap 0 metingen (log: "0 metingen; … overtredingen: 0");
+de UI-tests (18) en de rooktest waren wel echt.
 
 ### Wat de review aantoont (Sim-getest)
 - In geen enkele toestand, breedte of thema is onbekend of verouderd groen. Een meting ouder dan 15 minuten telt als
@@ -361,3 +366,64 @@ GitHub Actions, run `42673722426` (commit `b62abeb`, dezelfde code): **geslaagd*
 - De pagina op een echte NAS achter de portpublicatie van TrueNAS.
 - Koppelen met de echte Hub via deze pagina.
 - De sjabloonpunten S-1…S-8 vragen een nieuwe Peil-versie in ai-server-manager.
+
+## Onafhankelijke review contract 1.2 — QA (2026-11-09, Ubuntu 26.04-bouwmachine)
+
+Een onafhankelijke reviewer heeft na de bouwrondes HC1–HC11 en A1–A7 alles opnieuw gedraaid zoals de CI het doet.
+Daarnaast is de code gelezen tegen contract 1.2 §1–§13. Bevindingen en besluiten staan in ADR-0013. Er waren geen echte
+NAS, Hub-installatie, Authentik of accounts. De Hub is `tests/e2e/sim_hub.py`; de interop-test draait lokaal tegen de
+echte Hub-API (venv uit ai-server-manager `b4c7a0e`).
+
+### Nulmeting (HEAD `182aea3`, vóór wijzigingen)
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && ruff check . && ruff format --check . && mypy`; ruff op `tests/e2e tests/interop tests/ui deploy/allinone tools` | geen bevindingen (63 bronbestanden) |
+| `actionlint .github/workflows/*.yml`, `shellcheck deploy/allinone/smoke-test.sh` | geen bevindingen |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q -p no:cacheprovider` | 552 geslaagd |
+| `pytest -q tests/e2e -p no:cacheprovider` | 14 geslaagd |
+| `python -m integrations migrate` → `--down base` → `migrate` (database `hch_qa_mig`) | op/neer/op zonder fouten (0003) |
+| OpenAPI-export + `git diff --exit-code docs/openapi` | geen drift |
+| `tools/peil_kopie.py controleer` + `vergelijk --bron ../ai-server-manager` | in orde |
+| `pip-audit -r apps/api/requirements.lock` | geen bekende kwetsbaarheden |
+| sha256 van `PLATFORM_CONTRACTEN.md` en `CONTRACT_1.2_CONFORMITEIT.md` tegen ai-server-manager | byte-gelijk |
+| `jl-manifest validate deploy/manifest/home-control-hub.manifest.yaml` (validator van appstore-en-fork `ce80d40`) | GELDIG, 0 fouten, 1 verwachte waarschuwing (`digest_pending_release`) |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load …` + `smoke-test.sh` | gebouwd; 30 geslaagd, 0 mislukt |
+| `genereer_toestanden.py` + `npx playwright test` | 18 geslaagd |
+| `python tests/ui/ontwerpreview.py --uit tests/ui/review-uit` (het CI-commando) | **"0 metingen; overtredingen: 0", exit 0**: de review mat niets en slaagde toch (zie hieronder) |
+
+### Gevonden en gerepareerd (ADR-0013)
+Bij elke reparatie hoort een test die op de vorige code faalt. Dat is gecontroleerd door de oude bronbestanden
+tijdelijk terug te zetten.
+
+| # | Bevinding | Reparatie (commit) | Test |
+|---|---|---|---|
+| 1 | Onleesbaar `hub-link.json` + mislukt env-token (of ongeldige `HUB_URL`) → bestand stil vervangen door `nooit_gekoppeld` → koppelformulier terug (open bij fout) | origineel bewaard als `hub-link.json.onleesbaar-<tijd>`, status blijft onbekend tot een geslaagde koppeling; `/readyz` meldt `koppelstatus_onleesbaar` (`6f3aad0`) | `test_hublink_unit.py::test_write_over_unreadable_file_keeps_it_and_stays_fail_closed`, `::test_unreadable_file_without_write_is_untouched`, `test_contract_1_2_link.py::test_unreadable_link_file_stays_fail_closed_after_a_failed_env_token` |
+| 2 | Bronmeting van > 15 min nog `healthy` in `GET /integrations/v1/sources`, connector-items en `GET /connector/v1/health` | `sources.PROBE_MAX_AGE`: `unknown`/`meting_verouderd` (`b7bbe80`) | `test_platform_core.py::test_stale_probe_is_never_shown_as_healthy` |
+| 3 | JWT met `aud: ["home-control-hub", "zoeken-en-persoonlijke-ai"]` geaccepteerd | `strict_aud` + controle op exact de string (`87f1d06`) | `test_security.py::test_invalid_claims` (2 nieuwe gevallen) |
+| 4 | `127.1`, `2130706433`, `0x7f000001`, `0`, `010.0.0.1` en `localhost.` omzeilden de adresregels van §3.2 | alleen `a.b.c.d`, punt achteraan telt niet (`32740ab`) | `test_catalog_and_contracts.py::test_hub_url_rejected` (8 nieuwe gevallen) |
+| 5 | Healthcheck-exec bij start als 568: `NoNewPrivs 0` | altijd `PR_SET_NO_NEW_PRIVS` (`727f70a`) | rooktest "als 568: healthcheck-exec zet ook no-new-privileges" (oude code: `568 0…0 0`, nieuwe: `568 0…0 1`) |
+| 6 | EVIDENCE.json verwees naar 7 tests die niet meer bestaan, plus een sjabloonrest `{T}` (EX16, B13-002) | verwijzingen vervangen | `test_contract_docs.py::test_evidence_references_existing_tests` |
+| 7 | Ontwerpreview in CI: relatief `--uit` → browser schreef naar `tests/ui/tests/ui/review-uit`, beoordeling las `tests/ui/review-uit` → 0 metingen, toch geslaagd (ook CI-run 42674398952) | absoluut pad; review faalt bij 0 of te weinig metingen (`6755c78`); claims in dit rapport, ADR-0012, PEIL_REVIEW en EX16 gecorrigeerd | `beoordeel()` op een lege map → 1 overtreding; CI-commando lokaal → 140 metingen |
+| 8 | CI-acties op Node 20 | huidige majors op SHA, gecontroleerd met `git ls-remote` (`9641e33`) | actionlint; CI-run hieronder |
+
+### Eindstand
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && ruff check . && ruff format --check . && mypy` + ruff op de overige mappen | geen bevindingen |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q -p no:cacheprovider` | **568 geslaagd** (16 nieuw) |
+| `pytest -q tests/e2e -p no:cacheprovider` | **14 geslaagd** |
+| `HCH_REAL_HUB_PYTHON=<venv met hub uit ai-server-manager b4c7a0e> pytest -q tests/interop` | **1 geslaagd** (lokaal, niet in CI) |
+| OpenAPI-export + diff | geen drift |
+| `docker buildx build …` + `deploy/allinone/smoke-test.sh home-control-hub:qa` | **31 geslaagd, 0 mislukt** (nieuw: healthcheck als 568) |
+| `genereer_toestanden.py` + `SCHERMAFDRUKKEN=1 npx playwright test` | **18 geslaagd**. De afdrukken zijn niet opnieuw ingecheckt: de 5 vaste toestanden zien er hetzelfde uit. |
+| `python tests/ui/ontwerpreview.py --uit tests/ui/review-uit` (CI-commando, na de reparatie) | **140 metingen, 0 overtredingen**; laagste tekst 8,34, rand 4,86, icoon 5,71, focus 7,79 |
+| `actionlint .github/workflows/*.yml`, `shellcheck deploy/allinone/smoke-test.sh` | geen bevindingen |
+
+### Nog steeds NIET GEVALIDEERD
+- Alles op een echte NAS:
+  - het Custom App-formulier (tag met `@sha256`);
+  - het bron-IP achter de Docker-NAT, dat de rate-limit bepaalt;
+  - koppelen met de echte Hub op de NAS;
+  - de statuspagina via `http://<NAS-adres>:30420`.
+- Echte Authentik-accounts (B13-002…005).
+- Een echte schermlezer en een echte telefoon.
