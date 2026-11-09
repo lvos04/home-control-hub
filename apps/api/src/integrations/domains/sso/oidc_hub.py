@@ -526,18 +526,43 @@ def check_hub_client(
         if prov.get("issuer_mode") == "per_provider"
         else "Globale issuer: de Hub moet dan een andere issuer controleren.",
     )
-    if bindings is None:
-        add("toegang", "onbekend", "Bindingen konden niet gelezen worden.")
+    groups_read = state.get("groups")
+    if bindings is None or groups_read is None:
+        add("toegang", "onbekend", "Bindingen of groepen konden niet gelezen worden.")
     else:
-        groups = {g["name"]: str(g.get("pk")) for g in state.get("groups") or []}
-        wanted = {groups.get(n) for n, _r in hub_role_groups if n in groups}
-        bound = {str(b.get("group")) for b in bindings if b.get("kind") == "groep" and b.get("enabled", True)}
-        if not bindings:
-            add("toegang", "afwijking", "Geen bindingen: iedere Authentik-gebruiker kan deze client gebruiken.")
-        elif wanted and not wanted <= bound:
+        # Alleen ingeschakelde, niet-omgekeerde bindingen beperken de toegang. Zonder zulke bindingen laat Authentik
+        # iedere gebruiker toe; een 'negate'-binding op een groep betekent juist "iedereen behalve die groep".
+        active = [b for b in bindings if b.get("enabled", True) is True and not b.get("negate")]
+        groups = {g["name"]: str(g.get("pk")) for g in groups_read}
+        mapped = sorted({n for n, _r in hub_role_groups})
+        missing_groups = [n for n in mapped if n not in groups]
+        wanted = {groups[n] for n in mapped if n in groups}
+        bound = {str(b.get("group")) for b in active if b.get("kind") == "groep"}
+        if not active:
+            add(
+                "toegang",
+                "afwijking",
+                "Geen actieve bindingen: iedere Authentik-gebruiker kan deze client gebruiken.",
+                bindings=len(bindings),
+            )
+        elif not mapped:
+            add(
+                "toegang",
+                "onbekend",
+                "Er is nog geen groep → Hub-rol gekoppeld (B13-003); niet te beoordelen of de bindingen kloppen.",
+                bindings=len(active),
+            )
+        elif missing_groups:
+            add(
+                "toegang",
+                "afwijking",
+                "Aan Hub-rollen gekoppelde groepen bestaan niet in Authentik.",
+                missing_groups=missing_groups,
+            )
+        elif not wanted <= bound:
             add("toegang", "afwijking", "Niet alle aan Hub-rollen gekoppelde groepen zijn gebonden.")
         else:
-            add("toegang", "ok", "Toegang beperkt via bindingen.", bindings=len(bindings))
+            add("toegang", "ok", "Toegang beperkt via bindingen.", bindings=len(active))
     if discovery is None:
         add("discovery", "onbekend", "OpenID-configuratie niet opgehaald.", reason=discovery_error)
     else:
@@ -554,10 +579,13 @@ def check_hub_client(
             "Authorization Code aangeboden." if "code" in rtypes else "Authorization Code niet aangeboden.",
         )
         issuer = discovery.get("issuer")
+        issuer_ok = isinstance(issuer, str) and issuer.rstrip("/").endswith(f"/application/o/{slug}")
         add(
             "issuer",
-            "ok" if isinstance(issuer, str) and issuer.rstrip("/").endswith(f"/application/o/{slug}") else "afwijking",
-            "Issuer volgt het per-provider-patroon.",
+            "ok" if issuer_ok else "afwijking",
+            "Issuer volgt het per-provider-patroon."
+            if issuer_ok
+            else f"Issuer wijkt af van het verwachte patroon …/application/o/{slug}/.",
             issuer=issuer,
         )
     statuses = {c["status"] for c in checks}

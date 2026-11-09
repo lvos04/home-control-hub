@@ -198,6 +198,55 @@ def redact_flow_export(text: str) -> str:
 
 
 # ------------------------------------------------------------------ detectie
+def token_privileges(user: dict[str, Any]) -> dict[str, Any]:
+    """Wat ``/core/users/me/`` over de rechten van het API-token zegt — en wat niet.
+
+    Automatisch te controleren: superuser en de systeemrechten (``system_permissions``; in Authentik alleen de
+    rechten van ``authentik_rbac``, zoals ``edit_system_settings``; authentik/core/api/users.py, tag version/2026.8.5).
+    Alles behalve ``view_*`` telt als te ruim. **Niet** te controleren via dit endpoint: model-/objectrechten via rollen
+    (bv. ``authentik_core.change_user``). Daarom is de uitkomst zonder bevinding ``deels_gecontroleerd`` en nooit
+    ``ok``: dat de rollen van het serviceaccount alleen leesrechten geven, moet een beheerder op de echte installatie
+    nagaan (B13-004, NIET GEVALIDEERD (account)).
+    """
+    superuser = bool(user.get("is_superuser"))
+    raw = user.get("system_permissions")
+    perms = sorted(_s(p) for p in raw if isinstance(p, str)) if isinstance(raw, list) else None
+    too_wide = [p for p in perms or [] if not p.startswith("view_")]
+    if superuser:
+        verdict, msg = (
+            "te_ruim",
+            "Het API-token hoort bij een superuser. Gebruik een serviceaccount met alleen leesrechten "
+            "(least privilege, B13-004).",
+        )
+    elif too_wide:
+        verdict, msg = (
+            "te_ruim",
+            "Het API-token heeft systeemrechten die meer dan lezen toestaan ("
+            + ", ".join(too_wide[:10])
+            + "). Gebruik een serviceaccount met alleen leesrechten (least privilege, B13-004).",
+        )
+    elif perms is None:
+        verdict, msg = (
+            "onbekend",
+            "Authentik gaf geen systeemrechten terug; de rechten van het token zijn niet vast te stellen.",
+        )
+    else:
+        verdict, msg = (
+            "deels_gecontroleerd",
+            "Geen superuser en geen schrijvende systeemrechten. Rolrechten op objecten (RBAC) zijn via de API niet "
+            "volledig te controleren: ga in Authentik na dat de rollen van dit serviceaccount alleen 'view'-rechten "
+            "geven.",
+        )
+    return {
+        "username": _s(user.get("username")),
+        "is_superuser": superuser,
+        "system_permissions": perms,
+        "rbac_object_permissions": "niet_gecontroleerd",
+        "least_privilege": verdict,
+        "message_nl": msg,
+    }
+
+
 def detect(client: AuthentikClient) -> dict[str, Any]:
     """Bereikbaarheid, versie (``/admin/version/``), API-capabilities en de rechten van het token."""
     result: dict[str, Any] = {
@@ -235,20 +284,15 @@ def detect(client: AuthentikClient) -> dict[str, Any]:
         me = client.get_json("/core/users/me/")
         user = me.get("user") if isinstance(me, dict) else None
         if isinstance(user, dict):
-            superuser = bool(user.get("is_superuser"))
-            result["token"] = {
-                "username": _s(user.get("username")),
-                "is_superuser": superuser,
-                "least_privilege": "te_ruim" if superuser else "ok",
-            }
-            if superuser:
-                findings.append(
-                    {
-                        "code": "token_te_ruim",
-                        "message_nl": "Het API-token hoort bij een superuser. Gebruik een serviceaccount met alleen "
-                        "leesrechten (least privilege, B13-004).",
-                    }
-                )
+            result["token"] = token_privileges(user)
+            verdict = result["token"]["least_privilege"]
+            if verdict in ("te_ruim", "onbekend"):
+                code = "token_te_ruim" if verdict == "te_ruim" else "token_rechten_onbekend"
+                findings.append({"code": code, "message_nl": result["token"]["message_nl"]})
+        else:
+            findings.append(
+                {"code": "token_rechten_onbekend", "message_nl": "Authentik gaf geen tokengebruiker terug."}
+            )
     except AuthentikError as exc:
         findings.append({"code": f"token_rechten_{exc.reason}", "message_nl": exc.message_nl})
     if ready != 200:

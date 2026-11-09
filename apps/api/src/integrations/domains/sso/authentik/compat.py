@@ -265,10 +265,10 @@ USED_API: tuple[ApiUse, ...] = (
     ApiUse(
         "get",
         "/core/users/me/",
-        "rechten van het API-token (least privilege)",
+        "rechten van het API-token (least privilege: superuser en systeemrechten)",
         ("B13-004",),
         schema="UserSelf",
-        fields=("username", "is_superuser"),
+        fields=("username", "is_superuser", "system_permissions"),
     ),
     ApiUse(
         "get",

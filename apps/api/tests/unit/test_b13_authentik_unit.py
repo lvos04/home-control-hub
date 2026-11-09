@@ -178,16 +178,50 @@ def test_state_missing_part_is_incomplete_not_empty() -> None:
 def test_detect_version_and_least_privilege() -> None:
     fake = AuthentikFake()
     d = detect(client(fake))
-    assert d["version"] == "2026.8.5" and d["status"] == "healthy" and d["token"]["least_privilege"] == "ok"
-    fake.token_user = {"pk": 1, "username": "akadmin", "is_superuser": True}
+    assert d["version"] == "2026.8.5" and d["status"] == "healthy"
+    # nooit 'ok': rolrechten op objecten zijn via /core/users/me/ niet te controleren (eerlijk 'deels')
+    assert d["token"]["least_privilege"] == "deels_gecontroleerd"
+    assert d["token"]["rbac_object_permissions"] == "niet_gecontroleerd"
+    assert d["token"]["system_permissions"] == ["view_system_info"]
+    fake.token_user = {"pk": 1, "username": "akadmin", "is_superuser": True, "system_permissions": []}
     d = detect(client(fake))
     assert d["status"] == "degraded" and d["reason_code"] == "token_te_ruim"
+    assert d["token"]["least_privilege"] == "te_ruim"
     fake.version = "2027.2.1"
     assert detect(client(fake))["compat"]["support"] == "nieuwer_dan_geverifieerd"
     d = detect(client(fake, token="fout"))
     assert d["status"] == "degraded" and d["reason_code"] == "token_ongeldig" and d["version"] is None
     fake.up = False
     assert detect(client(fake))["status"] == "down"
+
+
+@pytest.mark.parametrize(
+    ("user", "verdict"),
+    [
+        ({"is_superuser": False, "system_permissions": []}, "deels_gecontroleerd"),
+        (
+            {"is_superuser": False, "system_permissions": ["view_system_info", "view_system_settings"]},
+            "deels_gecontroleerd",
+        ),
+        ({"is_superuser": False, "system_permissions": ["view_system_info", "edit_system_settings"]}, "te_ruim"),
+        ({"is_superuser": False, "system_permissions": ["manage_media_files"]}, "te_ruim"),
+        ({"is_superuser": False, "system_permissions": ["access_admin_interface"]}, "te_ruim"),
+        ({"is_superuser": True, "system_permissions": []}, "te_ruim"),
+        ({"is_superuser": False}, "onbekend"),
+        ({"is_superuser": False, "system_permissions": "alles"}, "onbekend"),
+    ],
+)
+def test_token_privileges_never_claims_full_least_privilege(user: dict[str, Any], verdict: str) -> None:
+    fake = AuthentikFake()
+    fake.token_user = {"pk": 90, "username": "hch-lezer", **user}
+    d = detect(client(fake))
+    assert d["token"]["least_privilege"] == verdict
+    assert d["token"]["least_privilege"] != "ok"
+    if verdict == "deels_gecontroleerd":
+        assert d["status"] == "healthy" and "rollen" in d["token"]["message_nl"]
+    else:
+        assert d["status"] == "degraded"
+        assert d["reason_code"] == ("token_te_ruim" if verdict == "te_ruim" else "token_rechten_onbekend")
 
 
 # ------------------------------------------------------------------ B13-002: voorstel en controle
@@ -287,6 +321,37 @@ def test_check_existing_hub_client_flags_open_access() -> None:
     assert status["redirect_uris"] == "ok" and status["scopes"] == "ok" and res["outcome"] == "afwijking"
     res = check_hub_client(state, "hub", None, None, None, "onbereikbaar", HUB_GROUPS)
     assert res["outcome"] == "onbekend"
+
+
+def test_check_hub_client_access_is_never_ok_on_weak_bindings() -> None:
+    """Review P1: uitgeschakelde of omgekeerde bindingen beperken niets; ontbrekende groepen zijn geen 'ok'."""
+    fake = AuthentikFake()
+    fake.add_hub_app()
+    c = client(fake)
+    state = read_state(c, ("applications", "providers", "scope_mappings", "groups"))
+    gpk = {g["name"]: g["pk"] for g in state.parts["groups"]}
+    app_pk = next(a["pk"] for a in state.parts["applications"] if a["slug"] == "hub")
+
+    def binding(group: str, **kw: Any) -> dict[str, Any]:
+        return {"pk": f"b-{group}", "target": app_pk, "group": gpk[group], "kind": "groep", "enabled": True, **kw}
+
+    def access(bindings: list[dict[str, Any]] | None, groups: list[tuple[str, str]] = HUB_GROUPS) -> tuple[str, Any]:
+        res = check_hub_client(state, "hub", None, bindings, None, "niet_opgehaald", groups)
+        check = next(x for x in res["checks"] if x["name"] == "toegang")
+        return check["status"], check["detail"]
+
+    every = [binding(g) for g, _r in HUB_GROUPS]
+    assert access(every)[0] == "ok"
+    assert access([{**b, "enabled": False} for b in every])[0] == "afwijking"  # alles uit = open voor iedereen
+    assert access([{**b, "negate": True} for b in every])[0] == "afwijking"  # 'iedereen behalve' = open
+    assert access(every[:2])[0] == "afwijking"  # een gekoppelde groep is niet gebonden
+    status, detail = access(every, [*HUB_GROUPS, ("bestaat-niet", "admin")])
+    assert status == "afwijking" and detail["missing_groups"] == ["bestaat-niet"]
+    assert access(every, [])[0] == "onbekend"  # zonder groep→rol-koppeling niet te beoordelen
+    assert access(None)[0] == "onbekend"
+    no_groups = read_state(c, ("applications", "providers", "scope_mappings"))
+    res = check_hub_client(no_groups, "hub", None, every, None, "niet_opgehaald", HUB_GROUPS)
+    assert next(x for x in res["checks"] if x["name"] == "toegang")["status"] == "onbekend"
 
 
 # ------------------------------------------------------------------ B13-004: rechtenkaart en events

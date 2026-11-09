@@ -90,7 +90,8 @@ def test_detect_needs_configuration_and_reports_least_privilege(
     r = c.post(f"{BASE}/authentik/detect", headers=idem(h))
     d = r.json()
     assert r.status_code == 200 and d["version"] == "2026.8.5" and d["status"] == "healthy"
-    assert d["compat"]["support"] == "geverifieerd" and d["token"]["least_privilege"] == "ok" and d["evidence_id"]
+    assert d["compat"]["support"] == "geverifieerd" and d["evidence_id"]
+    assert d["token"]["least_privilege"] == "deels_gecontroleerd"  # rolrechten niet via de API te controleren
     status = c.get(f"{BASE}/authentik", headers=h).json()
     assert status["detection"]["version"] == "2026.8.5" and status["source"]["runtime"]["credential_last4"]
     authentik_fake.token_user = {"pk": 1, "username": "akadmin", "is_superuser": True}

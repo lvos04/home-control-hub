@@ -23,7 +23,7 @@
     {
       "method": "GET",
       "path": "/core/users/me/",
-      "purpose_nl": "rechten van het API-token (least privilege)",
+      "purpose_nl": "rechten van het API-token (least privilege: superuser en systeemrechten)",
       "tasks": [
         "B13-004"
       ],
@@ -31,7 +31,8 @@
       "schema": "UserSelf",
       "fields": [
         "username",
-        "is_superuser"
+        "is_superuser",
+        "system_permissions"
       ],
       "since": null,
       "executed_in_this_version": true

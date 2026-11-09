@@ -57,7 +57,15 @@ class AuthentikFake:
         self.redirect: set[str] = set()
         self.calls: list[tuple[str, str, bool]] = []
         self.writes: list[tuple[str, str]] = []
-        self.token_user: dict[str, Any] = {"pk": 90, "username": "hch-lezer", "is_superuser": False}
+        self.token_user: dict[str, Any] = {
+            "pk": 90,
+            "username": "hch-lezer",
+            "is_superuser": False,
+            "system_permissions": ["view_system_info"],
+        }
+        # Misdragende Authentik/proxy: kaatst het Authorization-header terug in foutantwoorden (test: token lekt
+        # nooit via een foutpad naar logs, API-antwoorden of de database).
+        self.echo_auth_in_errors = False
         self.now = datetime.now(UTC).replace(microsecond=0)  # events liggen altijd rond 'nu'
         self._seed()
 
@@ -382,10 +390,11 @@ class AuthentikFake:
         if method != "GET":
             self.writes.append((method, path))
             return httpx.Response(403, json={"detail": "nep-Authentik: schrijven is in deze test niet toegestaan"})
+        echo = {"echo": auth} if self.echo_auth_in_errors else {}
         if auth != f"Bearer {self.token}":
-            return httpx.Response(403, json={"detail": "Token invalid/expired"})
+            return httpx.Response(403, json={"detail": "Token invalid/expired", **echo})
         if path in self.fail:
-            return httpx.Response(self.fail[path], json={"detail": "nep-fout"})
+            return httpx.Response(self.fail[path], json={"detail": "nep-fout", **echo})
         if path in self.forbidden:
             return httpx.Response(403, json={"detail": "You do not have permission to perform this action."})
         q = request.url.params
