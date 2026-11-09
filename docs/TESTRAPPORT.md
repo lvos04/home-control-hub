@@ -194,6 +194,7 @@ Alle stappen groen — maar de review vond inhoudelijke fouten die de tests niet
 | OpenAPI-export + `git diff --exit-code docs/openapi/` | alleen de bijgewerkte omschrijving van `/sso/rights` (gecommit), daarna geen drift |
 | `python tools/authentik_schema_check.py --out docs/b13/authentik-api-verificatie.json` (download) | 11/11 release-lijnen ok |
 | `flock … docker buildx build … -t home-control-hub:qa-p1b .` + `deploy/allinone/smoke-test.sh home-control-hub:qa-p1b` | gebouwd; **24 geslaagd, 0 mislukt** (lege /appdata, healthy, herstart en harde kill zonder dataverlies, start als 568, nette fout bij verkeerde rechten) |
+| GitHub Actions ci run 42617780925 (commit c3d021f) | **geslaagd**: job `python` (ruff, mypy, pytest, migraties, OpenAPI-drift, E2E, pip-audit) en job `image` (bouwen + rooktest); alleen waarschuwingen dat de gepinde acties nog Node.js 20 gebruiken |
 | Upgradetest (named volume): image van vóór de review (9b6ec5d) → gerepareerde image | healthy, markeerrij behouden, `vault.key` ongewijzigd, revisie 0002, `/readyz` ready, geen fout in de log |
 
 ### Nog steeds NIET GEVALIDEERD
