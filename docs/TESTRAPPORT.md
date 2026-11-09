@@ -328,6 +328,16 @@ Er waren geen echte NAS, Hub, telefoon of schermlezer: de Hub is `tests/e2e/sim_
 | `python3 tools/peil_kopie.py controleer` en `vergelijk --bron ../ai-server-manager` | in orde (sjabloon niet gewijzigd) |
 | `python -m integrations openapi` en vergelijken met `docs/openapi/` | geen drift |
 | `actionlint .github/workflows/*.yml` | geen bevindingen |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load -f deploy/allinone/Dockerfile -t home-control-hub:dev .` | gebouwd |
+| `deploy/allinone/smoke-test.sh home-control-hub:dev` | **30 geslaagd, 0 mislukt** |
+
+GitHub Actions, run `42671473510` (commit `603f8a1`):
+- Pogingen 1 en 2: job `python` **geslaagd** en job `statuspagina-ui` **geslaagd**. Die laatste bevat de nieuwe stap
+  "Ontwerpreview tegen de draaiende dienst" (ruim 3 minuten, 0 overtredingen).
+- In beide pogingen maakte GitHub de job `image` niet aan, en poging 3 startte niet ("workflow file issue").
+- Op dat moment meldde githubstatus.com een **major outage van GitHub Actions** ("Incident with Actions", 18:23 UTC).
+  Ook andere repos van het programma hadden toen runs zonder jobs.
+- Het image en de rooktest zijn daarom lokaal gedraaid (zie hierboven). CI opnieuw draaien als Actions hersteld is.
 
 ### Wat de review aantoont (Sim-getest)
 - In geen enkele toestand, breedte of thema is onbekend of verouderd groen. Een meting ouder dan 15 minuten telt als
