@@ -29,7 +29,7 @@ def cmd_init(settings: Settings) -> int:
 
 def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) -> int:
     from .db import Database
-    from .migrations import BackupError, downgrade, pre_upgrade_backup, upgrade
+    from .migrations import BackupError, downgrade, pre_upgrade_backup, revision_known, upgrade
 
     if down:
         downgrade(settings, down)
@@ -37,6 +37,15 @@ def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) ->
         return 0
     db = Database(settings.database_url)
     try:
+        current = db.current_revision()
+        if current is not None and not revision_known(settings, current):
+            print(
+                f"FOUT: de database staat op revisie {current}, die deze versie van de app niet kent: de database is "
+                "nieuwer dan deze image. Alleen de image-tag terugzetten kan niet; herstel de back-up uit "
+                "/appdata/backups of de dataset-snapshot van vóór de update. Er is niets gewijzigd.",
+                file=sys.stderr,
+            )
+            return 4
         if backup_dir:
             try:
                 dump = pre_upgrade_backup(settings, db, Path(backup_dir))

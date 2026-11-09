@@ -345,6 +345,7 @@ def test_backup_before_migration_with_real_pg_dump(two_step_migrations: Settings
     assert cmd_migrate(settings, str(backups), None) == 0
     dumps = list(backups.glob(f"voor-upgrade-{head_revision(Settings())}-*.dump"))
     assert len(dumps) == 1 and dumps[0].stat().st_size > 0
+    assert dumps[0].stat().st_mode & 0o777 == 0o600 and backups.stat().st_mode & 0o777 == 0o700
     assert _revision(settings.database_url) == "9999"
     # de dump is een geldig pg_dump-archief met het schema van vóór de migratie
     pg_restore = _newest_pg_restore()
@@ -356,3 +357,18 @@ def test_backup_before_migration_with_real_pg_dump(two_step_migrations: Settings
     # al op de nieuwste revisie: geen nieuwe back-up
     assert cmd_migrate(settings, str(backups), None) == 0
     assert len(list(backups.glob("*.dump"))) == 1
+
+
+def test_older_app_refuses_newer_database(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Tag-only rollback (EX15-achtig): een oudere app op een nieuwere database migreert niets en zegt wat te doen."""
+    url = recreate_database("hch_test_newer_db")
+    upgrade(Settings(database_url=url))  # database op de nieuwste revisie
+    old = tmp_path / "alembic"
+    shutil.copytree(alembic_dir(Settings()), old, ignore=shutil.ignore_patterns("__pycache__"))
+    head = head_revision(Settings())
+    for f in (old / "versions").glob(f"{head}_*.py"):
+        f.unlink()  # "oudere image": kent de nieuwste revisie niet
+    settings = Settings(database_url=url, alembic_dir=old, data_dir=tmp_path / "appdata")
+    assert cmd_migrate(settings, str(tmp_path / "backups"), None) == 4
+    assert "nieuwer dan deze image" in capsys.readouterr().err
+    assert _revision(url) == head and not (tmp_path / "backups").exists()

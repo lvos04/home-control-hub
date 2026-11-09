@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -36,6 +37,14 @@ def head_revision(settings: Settings) -> str | None:
     return ScriptDirectory.from_config(alembic_config(settings)).get_current_head()
 
 
+def revision_known(settings: Settings, revision: str) -> bool:
+    """Kent deze versie van de app de revisie in de database? Zo niet, dan is de database nieuwer (tag-only rollback)."""
+    try:
+        return ScriptDirectory.from_config(alembic_config(settings)).get_revision(revision) is not None
+    except Exception:
+        return False
+
+
 def upgrade(settings: Settings, revision: str = "head") -> None:
     command.upgrade(alembic_config(settings), revision)
 
@@ -65,7 +74,8 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     if shutil.which("pg_dump") is None:
         raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
     try:
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
     except OSError as exc:
         raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -87,6 +97,7 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     if result.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
         target.unlink(missing_ok=True)
         raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
+    os.chmod(target, 0o600)
     dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
     for old in dumps[:-keep]:
         if old != target:
