@@ -96,7 +96,7 @@ time.sleep(0.3)' >/dev/null
   sleep 5
   [ -z "$(docker exec -u 568:568 "$1" sh -c 'for s in /proc/[0-9]*/stat; do awk "\$3==\"Z\"" "$s" 2>/dev/null; done')" ]
 }
-healthcheck_drops_root() { # de healthcheck-exec (als root gestart door Docker) wisselt eerst naar 568 + no-new-privs
+healthcheck_drops_root() { # de healthcheck-exec (als root of 568 gestart door Docker) is daarna 568 + no-new-privs
   [ "$(docker exec "$1" python -c 'exec(open("/usr/local/lib/hch/healthcheck.py").read().split("port = ")[0])
 import os
 st = dict(l.split(":", 1) for l in open("/proc/self/status").read().splitlines() if ":" in l)
@@ -177,6 +177,7 @@ docker run --rm -v "$WORK:/w" --entrypoint sh "$IMAGE" -c 'chown 568:568 /w/u568
 run "$NAME-568" "$WORK/u568" --user 568:568
 check "als 568 gestart en healthy" "wait_healthy $NAME-568"
 check "als 568: elk proces Uid 568, CapEff 0, NoNewPrivs 1" "procs_ok $NAME-568"
+check "als 568: healthcheck-exec zet ook no-new-privileges" "healthcheck_drops_root $NAME-568"
 docker rm -f "$NAME-568" >/dev/null
 
 echo "== 5. verkeerde rechten geven een duidelijke Nederlandse fout"

@@ -11,18 +11,20 @@ import sys
 import urllib.request
 
 UID = GID = 568
-if os.getuid() == 0:
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
+try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if os.getuid() == 0:
         for cap in range(64):
             if libc.prctl(24, cap, 0, 0, 0) != 0:  # PR_CAPBSET_DROP
                 break
         os.setgroups([])
         os.setgid(GID)
         os.setuid(UID)
-        libc.prctl(38, 1, 0, 0, 0)  # PR_SET_NO_NEW_PRIVS
-    except OSError:
+    # ook als de container al als 568 start ("Custom User"): no-new-privileges voor dit proces (§2.2)
+    if libc.prctl(38, 1, 0, 0, 0) != 0 or 0 in (os.getuid(), os.geteuid()):  # PR_SET_NO_NEW_PRIVS
         sys.exit(1)
+except OSError:
+    sys.exit(1)
 
 port = os.environ.get("HCH_PORT", "30420")
 try:
