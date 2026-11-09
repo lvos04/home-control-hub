@@ -11,21 +11,21 @@
  },
  {
   "id": "B13-002",
-  "status": "Niet gestart",
-  "validatie": "Unit-getest (alleen de JWT-validatie van Hub-tokens in deze dienst: verkeerde issuer/audience, verlopen, toekomstige iat/nbf, ander algoritme geweigerd); replay niet afgedekt; NIET GEVALIDEERD (account)",
-  "bewijs": "commit 3816636; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/unit/test_security.py::test_jwt_rejections; apps/api/tests/unit/test_security.py::test_jwt_missing_or_future_claims_rejected; apps/api/tests/unit/test_security.py::test_jwt_algorithm_confusion_rejected",
-  "blokkade": "OIDC (Authorization Code + PKCE, redirect-URI, sessiecookie) hoort bij de Hub-login in ai-server-manager en vereist Authentik (I09, D17 onbekend) — NIET GEVALIDEERD (account).",
-  "opmerking": "Niet gebouwd in deze dienst. Replay-bescherming (OIDC-nonce/jti) bestaat hier niet: Hub-JWT's zijn bearer-tokens van max. 120 s en mogen binnen die tijd hergebruikt worden.",
+  "status": "Geblokkeerd",
+  "validatie": "Sim-getest (nep-Authentik met de vorm van de officiële API; API-oppervlak gecontroleerd tegen de officiële schema.yml 2024.10–2026.8); NIET GEVALIDEERD (account); NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "commit e0d0d88, 006123d, 772f9b9, 0f38e1d; apps/api/tests/unit/test_b13_authentik_unit.py::test_hub_oidc_plan_creates_provider_app_and_group_bindings; apps/api/tests/unit/test_b13_authentik_unit.py::test_hub_oidc_plan_blockers_never_overwrite; apps/api/tests/unit/test_b13_authentik_unit.py::test_hub_oidc_plan_updates_existing_client_and_is_unchanged_when_equal; apps/api/tests/unit/test_b13_authentik_unit.py::test_version_support; apps/api/tests/unit/test_b13_authentik_unit.py::test_check_existing_hub_client_flags_open_access; apps/api/tests/integration/test_b13_p1_authentik.py::test_hub_oidc_proposal_is_preview_only; apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_drift_version_and_outage; apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_roles; apps/api/tests/integration/test_b13_p1_authentik.py::test_hub_client_check_is_read_only; apps/api/tests/integration/test_b13_p1_authentik.py::test_jwt_replay_rejected_for_mutations; apps/api/tests/unit/test_security.py::test_jwt_rejections; tests/e2e/test_service_e2e.py::test_05b_b13_authentik_over_http; docs/b13/authentik-api-verificatie.json; ADR-0007, ADR-0008",
+  "blokkade": "Echte Authentik (TrueNAS-catalogusapp, I09) en domeinnaam/HTTPS (D17) ontbreken; toepassen vereist een door de Hub ondertekend ExecutionRequest (contract §8, fase P2); de OIDC-login zelf (Authorization Code + PKCE, ID-token-validatie, sessiecookie) hoort in de Hub (ai-server-manager) — NIET GEVALIDEERD (account).",
+  "opmerking": "Gebouwd: Authentik-client via de officiële API (alleen lezen, versiedetectie, least-privilege-controle), R2-voorstel OIDC-provider + applicatie + groepsbindingen met diff/preview_hash/resource_etag/rollbackrecept (POST /connector/v1/propose, actie sso.oidc.hub.register), drift → 409, risk_claim genegeerd, toepassen eerlijk 501 'nog_niet_toepasbaar' (in de database afgedwongen), alleen-lezen controle van een bestaande Hub-client, JWT-replay (één jti per wijziging; verkeerde issuer/aud was al geweigerd). Er wordt nooit naar Authentik geschreven (getest).",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
  {
   "id": "B13-003",
-  "status": "Bezig",
-  "validatie": "Sim-getest (alleen deze dienst: geen toegang via X-Forwarded-User/X-Authentik-*/Remote-User); SSO-dekking per app niet onderzocht; NIET GEVALIDEERD (echte NAS)",
-  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/unit/test_catalog_and_contracts.py::test_no_unverified_claims_about_external_apps; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_b13_003_no_access_via_forwarded_user_headers; tests/e2e/test_service_e2e.py::test_07_no_header_sso_and_body_limit_over_http",
-  "blokkade": "Capability-onderzoek per app vereist officiële docs van de gepinde versies en echte installaties (Authentik I09, D17 onbekend).",
-  "opmerking": "Structuur van de SSO-dekkingsmatrix (GET /integrations/v1/sso/app-coverage), alle apps 'te verifiëren'. Deze dienst zelf negeert vertrouwde-header-SSO volledig (getest). De matrix per app (MediaGuard/MSO/my_house/derden) is nog niet onderzocht.",
+  "status": "Geblokkeerd",
+  "validatie": "Sim-getest (geen toegang via X-Forwarded-User/X-Authentik-*/Remote-User; regels loginroute en groep→rol); bronnen per app gelezen (docs/broncode, 2026-11-09), niet op echte installaties getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "commit e0d0d88, 006123d, 772f9b9, 0f38e1d; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_003_mapping_rules; apps/api/tests/unit/test_catalog_and_contracts.py::test_no_unverified_claims_about_external_apps; apps/api/tests/integration/test_review_p0.py::test_b13_003_no_access_via_forwarded_user_headers; tests/e2e/test_service_e2e.py::test_07_no_header_sso_and_body_limit_over_http; apps/api/src/integrations/domains/sso/catalog.py (APP_COVERAGE met bron-URL, ref en verificatiestatus)",
+  "blokkade": "Een echte testlogin per app (Immich, Node-RED, Hub) vereist echte installaties en Authentik met D17 — NIET GEVALIDEERD (echte NAS).",
+  "opmerking": "Per app: OIDC ondersteund volgens officiële docs: Immich (rolclaim immich_role); met voorwaarden: Node-RED (Passport-strategie in settings.js); gepland: Hub (B13-002). Geen OIDC: MediaGuard, MSO, my_house (in de broncode gecontroleerd, commits 8cd3175/4558ee4/210614b), Jelly Leon/Jellyfin, AdGuard Home, NetAlertX (docs), TrueNAS (middleware-broncode) → eigen login blijft. Loginroute oidc alleen waar ondersteund; mislukte testlogin → terug naar eigen login (database weigert oidc+mislukt). Groep → rol per app alleen met rollen uit de catalogus; alleen admin wijzigt. Header-SSO nooit toegestaan.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
@@ -183,9 +183,59 @@
   "id": "EX16",
   "status": "Bezig",
   "validatie": "Sim-geslaagd",
-  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_jwks_fail_closed_when_hub_down; apps/api/tests/integration/test_enrollment_and_worker.py::test_unpair_requires_local_code; tests/e2e/test_service_e2e.py::test_06_fail_closed_when_hub_disappears; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_every_route_requires_auth_and_a_role; apps/api/tests/unit/test_security.py::test_jwt_rejected_when_jwks_cache_is_empty_or_unreachable; apps/api/tests/integration/test_review_p0.py::test_env_token_is_single_use_across_unpair_and_restart",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_jwks_fail_closed_when_hub_down; apps/api/tests/integration/test_enrollment_and_worker.py::test_unpair_requires_local_code; tests/e2e/test_service_e2e.py::test_06_fail_closed_when_hub_disappears; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_every_route_requires_auth_and_a_role; apps/api/tests/unit/test_security.py::test_jwt_rejected_when_jwks_cache_is_empty_or_unreachable; apps/api/tests/integration/test_review_p0.py::test_env_token_is_single_use_across_unpair_and_restart; P1: apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_drift_version_and_outage (ingetrokken Authentik-token → 502, nooit doorgaan); apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_004_partial_read_never_revokes (Authentik weg → sync 'fout' + event sso.authentik.sync.failed, één keer); apps/api/tests/unit/test_b13_authentik_unit.py::test_detect_version_and_least_privilege",
   "blokkade": "Integrale run op de echte NAS ontbreekt.",
-  "opmerking": "Alleen het deel van home-control-hub: ongeldige/ingetrokken credentials of onbereikbare JWKS → 401, nooit open toegang; connector-health 'degraded'. Hub-kant (connector unknown + incident) hoort bij ai-server-manager.",
+  "opmerking": "Alleen het deel van home-control-hub: ongeldige/ingetrokken credentials of onbereikbare JWKS → 401, nooit open toegang; connector-health 'degraded'. Hub-kant (connector unknown + incident) hoort bij ai-server-manager. P1: ook voor het Authentik-token: geweigerd/onbereikbaar → status degraded/fout + event, nooit gesimuleerd succes.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B13-004",
+  "status": "Geblokkeerd",
+  "validatie": "Sim-getest (acceptatie 'viewer kan geen apps stoppen of credentials ophalen' in deze dienst: sweep over alle mutaties uit de OpenAPI-export + gevoelige leesroutes); NIET GEVALIDEERD (account)",
+  "bewijs": "commit e0d0d88, 006123d, 772f9b9, 0f38e1d; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_004_viewer_cannot_change_anything_or_get_credentials; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_004_events_rights_and_anomalies; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_004_partial_read_never_revokes; apps/api/tests/integration/test_b13_p1_authentik.py::test_worker_syncs_authentik_and_pushes_events; apps/api/tests/integration/test_b13_p1_authentik.py::test_retention_of_events_and_snapshots; apps/api/tests/unit/test_b13_authentik_unit.py::test_rights_diff_detects_gain_loss_and_deactivation; apps/api/tests/unit/test_b13_authentik_unit.py::test_old_versions_filter_events_per_action; apps/api/tests/unit/test_b13_authentik_unit.py::test_login_failed_uses_attempted_username_from_context; apps/api/tests/unit/test_b13_authentik_unit.py::test_detect_version_and_least_privilege; tests/e2e/test_service_e2e.py::test_05b_b13_authentik_over_http",
+  "blokkade": "Echte Authentik (TrueNAS-catalogusapp, I09) en domeinnaam/HTTPS (D17) ontbreken; de afwijkingsregels (5 mislukte logins/10 min e.d.) zijn niet geijkt op echte data; schermen 'accountrechtenkaart' horen in de Hub-UI — NIET GEVALIDEERD (account).",
+  "opmerking": "Gebouwd: Authentik-events met watermerk (oude versies per actie gefilterd), minimale kopie 30 dagen, afwijkingen (mislukte-loginreeks, impersonatie, ingezien geheim, verdacht verzoek, noodaccount-login, gekoppelde groep gewijzigd, beheerrecht toegekend) als sso.anomaly.detected (sensitive) naar de Hub, rechtenkaart met verschillen en sso.access.revoked (alleen bij volledig gelezen toestand), least-privilege-controle van het token, rechten per rol (viewer geen wijzigingen, geen rechtenkaart/events/exports).",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B13-005",
+  "status": "Geblokkeerd",
+  "validatie": "Sim-getest (export, gate, herstelcheck tegen de nep-Authentik); eigen image: upgrade P0→P1 met back-up vóór migratie en weigering van een oudere image op een nieuwere database lokaal in Docker getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "commit e0d0d88, 006123d, 772f9b9, 0f38e1d; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_005_export_gate_and_restore_check; apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_005_incomplete_export_is_not_a_baseline; apps/api/tests/integration/test_b13_p1_authentik.py::test_sessions_revoke_proposal; apps/api/tests/unit/test_b13_authentik_unit.py::test_upgrade_path_follows_official_rules; apps/api/tests/unit/test_b13_authentik_unit.py::test_state_is_sanitized_whitelist_only; apps/api/tests/integration/test_review_p0.py::test_older_app_refuses_newer_database; tests/e2e/test_service_e2e.py::test_05b_b13_authentik_over_http; docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md",
+  "blokkade": "Echte Authentik (TrueNAS-catalogusapp, I09) en domeinnaam/HTTPS (D17) ontbreken; de echte back-up/restore van de Authentik-database (datasets van de catalogusapp) en herstel in een sandbox horen bij de Hub/executor (P2); sessies intrekken uitvoeren vereist een ondertekend ExecutionRequest (P2) — NIET GEVALIDEERD (echte NAS).",
+  "opmerking": "Gebouwd: geschoonde configuratie-export (API + geredigeerde flow-blueprints + MFA-apparaten van beheerders), pre-upgrade-gate volgens de officiële upgraderegels (geen downgrade, geen lijn overslaan, eerst nieuwste patch; back-up alleen door de Hub bevestigd; catalogusversie onbekend → nooit 'groen'), herstelcheck (providers, applicaties, groepen + leden, gebruikers, sleutels, flows, brands, 2FA van beheerders), voorstel sso.sessions.revoke (R2, niet toepasbaar). Authentik zelf via de TrueNAS-catalogusapp (community, op 2026-11-09 1.3.63 / 2026.8.5; 'Mount Docker Socket' uit).",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "EX15",
+  "status": "Bezig",
+  "validatie": "Sim-geslaagd (alleen home-control-hub: echte images lokaal in Docker, geen NAS)",
+  "bewijs": "commit 0f38e1d; apps/api/tests/integration/test_review_p0.py::test_older_app_refuses_newer_database; handmatige imagetest P0-image (0001) → P1-image (0002, back-up voor-upgrade-0001-*.dump 0600) → P0-image weigert te starten zonder wijziging (zie docs/TESTRAPPORT.md)",
+  "blokkade": "Integrale run op de echte NAS ontbreekt.",
+  "opmerking": "Alleen het deel van home-control-hub: tag-only rollback over een schemawijziging wordt geweigerd met een duidelijke melding; herstel = back-up of dataset-snapshot.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "EX18",
+  "status": "Bezig",
+  "validatie": "Sim-geslaagd (alleen home-control-hub)",
+  "bewijs": "commit 006123d; apps/api/tests/integration/test_b13_p1_authentik.py::test_hub_oidc_proposal_is_preview_only (risk_claim 'R0' → voorstel R2); database weigert R0/R1 voor SSO-voorstellen",
+  "blokkade": "De beslissende policy-engine zit in de Hub (ai-server-manager); integrale run ontbreekt.",
+  "opmerking": "Alleen het connectordeel: een meegegeven risk_claim wordt genegeerd; SSO-wijzigingen zijn minimaal R2.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "EX19",
+  "status": "Bezig",
+  "validatie": "Sim-geslaagd (alleen home-control-hub)",
+  "bewijs": "commit 006123d; apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_drift_version_and_outage (expected_version ≠ resource_etag → 409 resource_gewijzigd); apps/api/tests/unit/test_b13_authentik_unit.py::test_hub_oidc_plan_creates_provider_app_and_group_bindings (andere toestand → andere preview_hash/resource_etag)",
+  "blokkade": "Goedkeuring en het vervallen ervan horen bij de Hub; toepassen komt in P2; integrale run ontbreekt.",
+  "opmerking": "Alleen het connectordeel: een voorstel is gebonden aan resource_etag en preview_hash; verandert Authentik, dan een nieuwe diff.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  }
