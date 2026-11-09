@@ -140,3 +140,40 @@ def test_default_timeouts_match_contract() -> None:
     s = Settings()
     assert (s.http_connect_timeout_s, s.http_read_timeout_s, s.http_max_attempts) == (5.0, 15.0, 3)
     assert s.port == 30420 and s.jwt_max_lifetime_s == 120 and s.jwt_issuer == "hub"
+
+
+def test_every_event_type_follows_contract_7() -> None:
+    """Contract §7: precies <domein>.<object>.<gebeurtenis> (zoals de inbox van de Hub controleert). Gecontroleerd
+    in de broncode én in ``events.emit`` zelf, zodat een nieuw eventtype met vier segmenten meteen faalt."""
+    import re
+    import uuid as _uuid
+
+    from integrations import events
+
+    src = REPO_ROOT / "apps/api/src/integrations"
+    names = set()
+    for f in src.rglob("*.py"):
+        names |= set(re.findall(r'event_type="([^"]+)"', f.read_text(encoding="utf-8")))
+    assert len(names) >= 20
+    bad = sorted(n for n in names if not events.EVENT_TYPE_RE.match(n))
+    assert bad == []
+    for wrong in ("sso.authentik.sync.failed", "sso.failed", "SSO.access.revoked", "sso.access-x.revoked"):
+        with pytest.raises(ValueError):
+            events.emit(
+                None,  # type: ignore[arg-type]
+                event_type=wrong,
+                entity_type="x",
+                entity_id="1",
+                actor_type="system",
+                actor_id="t",
+                trace_id=str(_uuid.uuid4()),
+            )
+
+
+def test_event_payload_and_ids_fit_the_hub_limits() -> None:
+    from integrations import events
+
+    big = {"status": "x", "lijst": ["a" * 100] * 400}
+    fitted = events._fit_payload(big)
+    assert fitted["_ingekort"] is True and fitted["status"] == "x" and "lijst" not in fitted
+    assert events._fit_payload({"a": 1}) == {"a": 1}

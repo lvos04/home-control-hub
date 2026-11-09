@@ -705,7 +705,7 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
     if result["status"] == "fout" and previous.get("status") != "fout":
         events.emit(
             session,
-            event_type="sso.authentik.sync.failed",
+            event_type="sso.authentik_sync.failed",
             entity_type="integration_source",
             entity_id="authentik",
             actor_type=actor[0],

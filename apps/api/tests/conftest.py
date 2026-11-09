@@ -50,6 +50,54 @@ def recreate_database(name: str) -> str:
     return _db_url(name)
 
 
+# Zelfde envelope-regels als de inbox van de echte Hub (ai-server-manager apps/api/src/hub/events/envelope.py,
+# contract §7). Zo valt een event dat de Hub zou weigeren (en dat dan als dead-letter eindigt) al in de tests op.
+ENVELOPE_KEYS = {
+    "schema_version",
+    "event_id",
+    "source_app",
+    "source_event_id",
+    "event_type",
+    "entity",
+    "timestamp_utc",
+    "trace_id",
+    "correlation_id",
+    "actor",
+    "classification",
+    "payload",
+    "payload_ref",
+}
+
+
+def envelope_problems(ev: Any) -> list[str]:
+    import json as _json
+    import re as _re
+
+    if not isinstance(ev, dict):
+        return ["geen object"]
+    problems = []
+    if set(ev) - ENVELOPE_KEYS:
+        problems.append(f"onbekende velden: {sorted(set(ev) - ENVELOPE_KEYS)}")
+    if ev.get("schema_version") != "1.0":
+        problems.append("schema_version")
+    et = ev.get("event_type")
+    if not isinstance(et, str) or len(et) > 128 or not _re.match(r"^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$", et):
+        problems.append(f"event_type {et!r}")
+    ent = ev.get("entity") or {}
+    if not _re.match(r"^[a-z0-9_.-]{1,64}$", str(ent.get("type", ""))) or not 1 <= len(str(ent.get("id", ""))) <= 200:
+        problems.append("entity")
+    actor = ev.get("actor") or {}
+    if actor.get("type") not in ("system", "user", "ai", "flow") or not 1 <= len(str(actor.get("id", ""))) <= 128:
+        problems.append("actor")
+    if ev.get("classification") not in ("public", "internal", "sensitive"):
+        problems.append("classification")
+    if not str(ev.get("timestamp_utc", "")).endswith("Z"):
+        problems.append("timestamp_utc")
+    if len(_json.dumps(ev.get("payload") or {}, default=str).encode()) > 16 * 1024:
+        problems.append("payload te groot")
+    return problems
+
+
 @dataclass
 class HubKeys:
     private: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
@@ -102,6 +150,7 @@ class FakeHub:
     used: set[str] = field(default_factory=set)
     enroll_requests: list[dict[str, Any]] = field(default_factory=list)
     inbox: list[dict[str, Any]] = field(default_factory=list)
+    rejected: list[dict[str, Any]] = field(default_factory=list)
     inbox_status: int = 202
     jwks_calls: int = 0
     include_jwks_in_enroll: bool = True
@@ -138,7 +187,12 @@ class FakeHub:
                 return httpx.Response(401)
             import json
 
-            self.inbox.append(json.loads(request.content))
+            event = json.loads(request.content)
+            problems = envelope_problems(event)
+            if problems:  # zoals de Hub: 422 bij een ongeldige envelope
+                self.rejected.append({"event_type": event.get("event_type"), "problems": problems})
+                return httpx.Response(422, json={"code": "validation_error", "details": problems})
+            self.inbox.append(event)
             return httpx.Response(self.inbox_status)
         return httpx.Response(404)
 

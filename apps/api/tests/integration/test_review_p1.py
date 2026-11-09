@@ -365,3 +365,64 @@ def test_b13_003_no_header_sso_on_p1_routes(paired_client: Any, auth: Any) -> No
         assert src["url"] and src["ref"] and src["checked_on"] and src["verification"], a["app_id"]
         if a["oidc_support"] in ("ondersteund", "ondersteund_met_voorwaarden"):
             assert src["kind"] in ("officiele_docs", "broncode") and src["verification"].startswith("geverifieerd")
+
+
+# ------------------------------------------------------------------ contract §7: elk event komt door de Hub-inbox
+def test_every_p1_event_is_accepted_by_the_hub_inbox(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, fake_hub: FakeHub, make_settings: Any
+) -> None:
+    """Review P1: drie eventtypen hadden vier segmenten (sso.authentik.sync.failed e.d.); de echte Hub-inbox weigert
+    die (patroon <domein>.<object>.<gebeurtenis>) en ze zouden na 10 pogingen als dead-letter eindigen. De nep-Hub
+    valideert nu net als de Hub; hier ontstaan alle soorten P1-events en ze moeten allemaal aankomen."""
+    from integrations.worker import Worker
+
+    c, h = paired_client, auth("admin")
+    _source(c, h, authentik_fake.token)
+    _hub_mappings(c, h)
+    for i in range(5):
+        authentik_fake.add_event("login_failed", "bram", minutes_ago=5 - i)
+    assert c.post(f"{BASE}/authentik/detect", headers=idem(h)).status_code == 200
+    assert c.post(f"{BASE}/authentik/sync", headers=idem(h)).status_code == 200
+    r = c.post(
+        "/connector/v1/propose",
+        json={"action_id": "sso.oidc.hub.register", "parameters": {"redirect_uris": [REDIRECT]}},
+        headers=idem(h),
+    )
+    assert r.status_code == 201
+    exp = c.post(f"{BASE}/authentik/config-exports", headers=idem(h)).json()
+    c.post(f"{BASE}/authentik/upgrade-gate", json={"target_version": "2026.8.5"}, headers=idem(h))
+    authentik_fake.set_members("hub-operators", [])
+    assert c.post(f"{BASE}/authentik/sync", headers=idem(h)).json()["rights"]["status"] == "vergeleken"
+    c.post(f"{BASE}/authentik/restore-check", json={"export_id": exp["id"]}, headers=idem(h))
+    r = c.put(f"{BASE}/apps/immich/setting", json={"login_mode": "oidc"}, headers=idem(h))
+    assert r.status_code == 201
+    c.post(f"{BASE}/apps/immich/installation-check", json={"outcome": "mislukt"}, headers=idem(h))
+    authentik_fake.up = False
+    assert c.post(f"{BASE}/authentik/sync", headers=idem(h)).json()["status"] == "fout"
+    worker = Worker(make_settings(authentik_sync_interval_s=0), transport=fake_hub.transport)
+    for _ in range(20):
+        worker.push_step()
+        with c.app.state.db.sessions() as s:
+            pending = s.execute(text("SELECT count(*) FROM outbox_event WHERE delivery_status <> 'delivered'"))
+            if pending.scalar() == 0:
+                break
+    assert fake_hub.rejected == []
+    with c.app.state.db.sessions() as s:
+        statuses = dict(
+            s.execute(text("SELECT delivery_status, count(*) FROM outbox_event GROUP BY delivery_status")).all()
+        )
+    assert set(statuses) == {"delivered"}, statuses
+    delivered = {e["event_type"] for e in fake_hub.inbox}
+    assert {
+        "sso.authentik.detected",
+        "sso.authentik_sync.failed",
+        "sso.authentik_upgrade_gate.evaluated",
+        "sso.authentik_restore_check.completed",
+        "sso.authentik.config_exported",
+        "sso.anomaly.detected",
+        "sso.access.revoked",
+        "sso.proposal.created",
+        "sso.role_mapping.changed",
+        "sso.app_setting.changed",
+        "sso.app_setting.checked",
+    } <= delivered

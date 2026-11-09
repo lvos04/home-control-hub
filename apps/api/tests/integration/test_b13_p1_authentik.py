@@ -329,9 +329,9 @@ def test_b13_004_partial_read_never_revokes(paired_client: Any, auth: Any, authe
     authentik_fake.up = False
     r = c.post(f"{BASE}/authentik/sync", headers=idem(h)).json()
     assert r["status"] == "fout" and r["reason"] == "onbereikbaar"
-    assert [t for t, _p, _c in _outbox(c)].count("sso.authentik.sync.failed") == 1
+    assert [t for t, _p, _c in _outbox(c)].count("sso.authentik_sync.failed") == 1
     r = c.post(f"{BASE}/authentik/sync", headers=idem(h)).json()
-    assert [t for t, _p, _c in _outbox(c)].count("sso.authentik.sync.failed") == 1  # alleen bij overgang
+    assert [t for t, _p, _c in _outbox(c)].count("sso.authentik_sync.failed") == 1  # alleen bij overgang
 
 
 def test_b13_004_viewer_cannot_change_anything_or_get_credentials(paired_client: Any, auth: Any) -> None:
@@ -449,7 +449,7 @@ def test_b13_005_export_gate_and_restore_check(
     ]
     assert checks["groepen"]["status"] == "afwijking" and checks["providers"]["detail"]["missing"] == ["Immich"]
     assert "herstel_afwijking" in {a["rule_id"] for a in c.get(f"{BASE}/anomalies", headers=h).json()["items"]}
-    assert "sso.authentik.restore_check.completed" in [e[0] for e in _outbox(c)]
+    assert "sso.authentik_restore_check.completed" in [e[0] for e in _outbox(c)]
     assert authentik_fake.writes == []
 
 

@@ -163,6 +163,13 @@ def test_05b_b13_authentik_over_http(stack: Stack) -> None:
     assert second.status_code == 401 and second.json()["details"]["reason"] == "token_hergebruikt", second.text
 
 
+def test_05c_hub_accepted_every_event(stack: Stack) -> None:
+    """Contract §7: de Hub-simulator valideert de envelope net als de echte Hub; niets mag geweigerd zijn."""
+    rejected = httpx.get(f"{stack.hub}/sim/rejected").json()
+    assert rejected == [], rejected
+    assert len(httpx.get(f"{stack.hub}/sim/inbox").json()) >= 5
+
+
 def test_06_fail_closed_when_hub_disappears(stack: Stack) -> None:
     token = stack.token("admin")
     ok = httpx.get(f"{stack.hch}/connector/v1/discover", headers=token)

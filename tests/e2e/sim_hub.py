@@ -64,11 +64,63 @@ async def enroll(request: Request) -> dict[str, Any]:
     return {"service_id": str(uuid.uuid4()), "service_token": STATE["service_token"], "jwks": JWKS}
 
 
+# Zelfde envelope-regels als de inbox van de echte Hub (ai-server-manager apps/api/src/hub/events/envelope.py,
+# contract §7). Zo valt een event dat de Hub zou weigeren (en dat dan als dead-letter eindigt) al in de tests op.
+ENVELOPE_KEYS = {
+    "schema_version",
+    "event_id",
+    "source_app",
+    "source_event_id",
+    "event_type",
+    "entity",
+    "timestamp_utc",
+    "trace_id",
+    "correlation_id",
+    "actor",
+    "classification",
+    "payload",
+    "payload_ref",
+}
+
+
+def envelope_problems(ev: Any) -> list[str]:
+    import json as _json
+    import re as _re
+
+    if not isinstance(ev, dict):
+        return ["geen object"]
+    problems = []
+    if set(ev) - ENVELOPE_KEYS:
+        problems.append(f"onbekende velden: {sorted(set(ev) - ENVELOPE_KEYS)}")
+    if ev.get("schema_version") != "1.0":
+        problems.append("schema_version")
+    et = ev.get("event_type")
+    if not isinstance(et, str) or len(et) > 128 or not _re.match(r"^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$", et):
+        problems.append(f"event_type {et!r}")
+    ent = ev.get("entity") or {}
+    if not _re.match(r"^[a-z0-9_.-]{1,64}$", str(ent.get("type", ""))) or not 1 <= len(str(ent.get("id", ""))) <= 200:
+        problems.append("entity")
+    actor = ev.get("actor") or {}
+    if actor.get("type") not in ("system", "user", "ai", "flow") or not 1 <= len(str(actor.get("id", ""))) <= 128:
+        problems.append("actor")
+    if ev.get("classification") not in ("public", "internal", "sensitive"):
+        problems.append("classification")
+    if not str(ev.get("timestamp_utc", "")).endswith("Z"):
+        problems.append("timestamp_utc")
+    if len(_json.dumps(ev.get("payload") or {}, default=str).encode()) > 16 * 1024:
+        problems.append("payload te groot")
+    return problems
+
+
 @app.post("/api/v1/events/inbox", status_code=202)
 async def inbox(request: Request, authorization: str = Header(default="")) -> dict[str, str]:
     if authorization != f"Bearer {STATE['service_token']}":
         raise HTTPException(401)
     event = await request.json()
+    problems = envelope_problems(event)
+    if problems:  # zoals de echte Hub: 422 bij een ongeldige envelope
+        STATE.setdefault("rejected", []).append({"event_type": event.get("event_type"), "problems": problems})
+        raise HTTPException(422, problems)
     if any(e["event_id"] == event["event_id"] for e in STATE["inbox"]):
         return {"status": "duplicaat"}
     STATE["inbox"].append(event)
@@ -89,6 +141,11 @@ async def token(request: Request) -> dict[str, str]:
         "jti": str(uuid.uuid4()),
     }
     return {"token": jwt.encode(claims, KEY, algorithm="EdDSA", headers={"kid": KID})}
+
+
+@app.get("/sim/rejected")
+async def rejected() -> list[dict[str, Any]]:
+    return list(STATE.get("rejected", []))
 
 
 @app.get("/sim/inbox")

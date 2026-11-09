@@ -825,7 +825,7 @@ def upgrade_gate(
             entity_type="integration_source",
             entity_id="authentik",
             message_nl=f"Pre-upgrade-gate naar {body.target_version}: {result['outcome']}.",
-            event_type="sso.authentik.upgrade_gate.evaluated",
+            event_type="sso.authentik_upgrade_gate.evaluated",
             payload={
                 "target_version": body.target_version,
                 "outcome": result["outcome"],
@@ -865,7 +865,7 @@ def restore_check(
             entity_type="sso_authentik_snapshot",
             entity_id=str(snap.id),
             message_nl=f"Herstelcheck tegen export {snap.id}: {result['outcome']}.",
-            event_type="sso.authentik.restore_check.completed",
+            event_type="sso.authentik_restore_check.completed",
             payload={"export_id": str(snap.id), "outcome": result["outcome"], "failed": failed},
         )
         if result["outcome"] == "afwijking":
