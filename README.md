@@ -28,6 +28,8 @@ compose, geen terminal. Normaal installeert het platform deze app via de TrueNAS
 | API (`/integrations/v1`), connectorcontract (`/connector/v1`), `/healthz`, `/readyz`, statuspagina `GET /` | `apps/api/src/integrations/` |
 | Auth (§4): alleen Hub-JWT's (gebruiker of dienst-JWT) tegen de gepinde sleutels, vaste `reason`-waarden, `jti` + replaycache | `security/auth.py`, `security/replay.py`, `security/hubkeys.py` |
 | Koppelen (§3): env-token (worker) of koppelcode + vingerafdruk op de statuspagina (alleen vóór de eerste koppeling); `/appdata/secrets/hub-link.json`; bevestigen, intrekken, token- en sleutelrotatie; `GET /connector/v1/hub-link` en `POST …/unlink` | `enrollment.py`, `hublink_store.py`, `status_page.py`, `connector.py` |
+| Statuspagina `GET /` in de ontwerptaal Peil (versie-gepinde kopie van het sjabloon, geen JavaScript; ADR-0011) | `status_page.py`, `peil.py`, `design/ontwerptaal/`, `tools/peil_kopie.py` |
+| UI-tests van de statuspagina (Playwright + axe-core, 320–1440 px, licht/donker) en schermafdrukken | `tests/ui/`, `docs/screenshots/peil/statuspagina/` |
 | Hub-simulator volgens §3.3 (ook de nep-Hub van de integratietests) | `tests/e2e/sim_hub.py` |
 | B13-001: herstelregister, noodtoegang LAN/VPN, zelftest met Authentik offline, versleutelde herstelkit | `domains/sso/` |
 | B13-002…005: Authentik-client (alleen lezen, gecontroleerd tegen de officiële schema's), voorstellen, SSO-mapping, audit, export/gate/herstelcheck | `domains/sso/authentik/`, `oidc_hub.py`, `proposals.py`, `mapping.py`, `authaudit.py`, `backup.py` |
@@ -46,6 +48,10 @@ python3.12 -m venv .venv && .venv/bin/pip install -e 'apps/api[dev]'
 make lint test e2e          # ruff, mypy, unit + integratie (PostgreSQL), dienst-E2E met simulator
 make image smoke            # image bouwen en rooktest zoals het formulier (elk proces 568, CapEff 0, NoNewPrivs 1)
 make openapi                # OpenAPI opnieuw exporteren (CI faalt bij drift)
+make test-ui                # statuspagina in Chromium: axe-core, overloop, CSP, focus (Node 22; eenmalig
+                            # 'cd tests/ui && npx playwright install chromium')
+make schermafdrukken        # idem + afdrukken naar docs/screenshots/peil/statuspagina/
+make peil-drift             # Peil-kopie offline en tegen ai-server-manager op GitHub
 ```
 
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met

@@ -95,8 +95,14 @@ Network*, geen *Privileged*. Er is geen enkele reden voor in deze app.
   Zonder `HUB_KEY_FINGERPRINT` vertrouwt de app de Hub bij de eerste koppeling (*trust on first use*); vergelijk dan
   de vingerafdruk op de statuspagina met die in de Hub-UI.
 - **Handmatig via de statuspagina:** open `http://<NAS-adres>:30420`. Zolang de dienst **nog nooit** gekoppeld is,
-  staat daar een formulier: Hub-adres, koppelcode en de **Hub-vingerafdruk** (de Hub-UI toont koppelcode en
-  vingerafdruk samen met een kopieerknop). Maximaal 5 pogingen per kwartier per apparaat.
+  staat daar een formulier: adres van de Hub, koppelcode en de **vingerafdruk van de Hub** (de Hub-UI toont
+  koppelcode en vingerafdruk samen met een kopieerknop). Maximaal 5 pogingen per kwartier per apparaat. Lukt het
+  niet, dan toont de pagina een vaste melding met een **code** en een **trace-ID**; geef die door als je hulp vraagt
+  (de trace-ID staat ook in de logs van de app).
+
+De statuspagina (ontwerptaal Peil, zonder JavaScript) toont bovenaan altijd de totaalstand. Die is **nooit groen**
+zolang de dienst niet gereed is: niet gekoppeld, koppeling nog niet door de Hub bevestigd, ingetrokken of een
+probleem met de eigen database. "Gekoppeld" is een neutrale grijze pil, geen groen vinkje.
 
 Na de eerste koppeling verdwijnt het formulier: **ontkoppelen, opnieuw koppelen en intrekken gaan alleen via de Hub**.
 Opnieuw koppelen = de Hub zet een nieuw `HUB_ENROLLMENT_TOKEN` (en `HUB_KEY_FINGERPRINT`) in het formulier, of jij doet

@@ -265,3 +265,45 @@ container meldt de procescontrole precies dat proces (`uid=['0','0','0','0'] cap
 Koppelen met de echte Hub op een echte NAS; het TrueNAS-formulier (o.a. of het tagveld `versie@sha256:…` accepteert);
 het bron-IP dat de container achter de Docker-portpublicatie van TrueNAS ziet (rate-limit per bron-IP); echte
 Authentik.
+
+## Statuspagina in Peil — HC11 (2026-11-09, Ubuntu 26.04-bouwmachine)
+
+Uitgevoerd: `CONTRACT_1.2_CONFORMITEIT.md` §2 HC11 + ONTWERPTAAL §13.2/§14 (O-14); keuzes, ontwerpstap en
+ontwerpreview in ADR-0011. Sjabloon: Peil 1.1.0, versie-gepinde kopie van `lvos04/ai-server-manager@172ee87`.
+Geen echte NAS, Hub of telefoon: de Hub is `tests/e2e/sim_hub.py`; de browser is Chromium (Playwright).
+
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && ruff check . && ruff format --check . && mypy` | geen bevindingen (63 bronbestanden) |
+| `ruff check tests/e2e tests/interop tests/ui deploy/allinone tools && ruff format --check …` | geen bevindingen |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q` (unit + integratie, PostgreSQL) | **544 geslaagd** (was 484; nieuw: 45 unit in `test_statuspagina_peil.py`, 15 integratie in `test_statuspagina_http.py`) |
+| `pytest -q tests/e2e -p no:cacheprovider` | **14 geslaagd** |
+| `python3 tools/peil_kopie.py controleer` en `vergelijk --bron ../ai-server-manager --online` | in orde (geen drift; bron op de gepinde commit en op de bronbranch gelijk) |
+| `python tests/ui/genereer_toestanden.py` (echte app + Hub-simulator) | 9 toestanden: niet gekoppeld (200), koppelen mislukt (400), ongeldige invoer (422), te veel pogingen (429), gekoppeld (303 → 200), ingetrokken, ontkoppeld, niet gereed, onleesbaar (200) |
+| `cd tests/ui && SCHERMAFDRUKKEN=1 npx playwright test` (Playwright 1.65, axe-core 4.14, Chromium) | **18 geslaagd** (9 toestanden × licht/donker, elk op 320/360/390/768/1024/1440 px); 30 afdrukken |
+| negatieve controle UI-tests (gemanipuleerde kopie van de toestanden: groene totaalpil, overloop, veld zonder label) | alle drie gevangen (`pil-gezond`, horizontale overloop, axe `label`) |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load -f deploy/allinone/Dockerfile -t home-control-hub:dev .` | gebouwd; de build controleert de sha256 van het sjabloon |
+| controle in de image met een gewijzigde kopie (`integrations.peil.lees`) | geweigerd: "Peil-sjabloon wijkt af van de herkomstkop" (exit 1) |
+| `deploy/allinone/smoke-test.sh home-control-hub:dev` | **30 geslaagd, 0 mislukt** (nieuw: Peil-sjabloon met "Niet gekoppeld" en vingerafdrukveld; eerste signaal niet groen) |
+| `actionlint .github/workflows/*.yml` | geen bevindingen |
+
+GitHub Actions: run `42664729776` (commit `b3b9bed`): **geslaagd** — job `python` (543 geslaagd + 1 overgeslagen: de
+lokale vergelijking met `../ai-server-manager` bestaat in CI niet; Peil-drift online in orde; E2E 14 geslaagd), job
+`statuspagina-ui` (18 geslaagd; afdrukken als artefact `statuspagina-peil`) en job `image` (rooktest 30 geslaagd).
+
+### Wat de tests aantonen (Sim-getest)
+- Precies één koppeltoestand per pagina; het formulier alleen zolang de dienst nog nooit gekoppeld is, met verplicht
+  vingerafdrukveld; nergens ontkoppelen of een ontkoppelcode.
+- Eerste signaal nooit groen als de dienst niet gereed is (ook in een invariantentest over alle combinaties van
+  koppeltoestand, database, schema en fout); "Gekoppeld" is een neutrale pil.
+- Een mislukte poging: passende HTTP-status, vaste melding, code en de trace-ID van het verzoek (gelijk aan
+  `X-Trace-Id`, in de log en in de auditregel), veldfout met `aria-invalid` en een skiplink naar het veld; ingevulde
+  waarden worden nooit teruggetoond.
+- Geen JavaScript, geen event-attributen, CSP `default-src 'none'` zonder overtredingen of externe verzoeken; axe-core
+  (WCAG 2.0/2.1/2.2 A+AA + best practices) 0 overtredingen; geen overloop op 320 px; doelen ≥ 44 px; tekst ≥ 14 px;
+  focusring ≥ 3 px en in beeld; stippelranden bij forced colors.
+
+### Nog steeds NIET GEVALIDEERD
+De pagina op een echte NAS achter de Docker-portpublicatie van TrueNAS; koppelen met de echte Hub via deze pagina;
+echte schermlezer (NVDA/TalkBack) en echte telefoon in fel licht; de ontwerpreview is een zelfreview van de bouwer,
+geen onafhankelijke review door de ontwerpagent.

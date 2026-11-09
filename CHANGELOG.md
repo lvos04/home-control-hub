@@ -1,5 +1,27 @@
 # Wijzigingen
 
+## 0.1.0 — statuspagina in Peil (HC11, nog niet uitgebracht)
+
+**Gewijzigd (ADR-0011)**
+- `GET /` gebruikt het framework-vrije sjabloon van de ontwerptaal **Peil 1.1.0** (versie-gepinde kopie met
+  herkomstkop in `design/ontwerptaal/`, O-14): geen JavaScript, CSP `default-src 'none'`, licht en donker volgens het
+  systeem, Peil-woorden (Gezond · Beperkt · Storing · Onbekend · Niet gereed), "Gekoppeld" als neutrale pil.
+- Het eerste signaal is nooit groen als de dienst niet gereed is; gereed = database, schema, sleutels **en** een door
+  de Hub bevestigde koppeling.
+- Koppelformulier-velden heten nu `hub_adres`, `koppelcode` en `hub_vingerafdruk` (zoals het sjabloon). Een mislukte
+  poging geeft direct de pagina terug met een passende HTTP-status (400/403/409/422/429/502/503), vaste melding,
+  code en de trace-ID van het verzoek (selecteerbaar; ook in log en audit); geen `?melding=<fout>`-redirects meer.
+- Niet meer op de statuspagina: dienst-ID, "gekoppeld via" en de laatste 4 tekens van het service-token (staan in
+  `GET /connector/v1/hub-link`).
+- Het formulier blijft zichtbaar tijdens een lopende koppelpoging; verzenden geeft dan 409 `koppelen_bezig` zonder
+  verzoek naar de Hub.
+
+**Nieuw**
+- `tools/peil_kopie.py` (controleer / vergelijk --online / bijwerken) en een CI-stap die drift met ai-server-manager
+  laat falen; `HCH_PEIL_DIR` in de image (sha256 gecontroleerd bij het bouwen).
+- UI-tests (`tests/ui`, Playwright + axe-core) over negen toestanden uit de echte app × licht/donker × 320–1440 px, en
+  schermafdrukken in `docs/screenshots/peil/statuspagina/`.
+
 ## 0.1.0 — platformcontract 1.2 (nog niet uitgebracht)
 
 **Breaking (contract 1.2, ADR-0010)**
