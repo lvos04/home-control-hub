@@ -210,6 +210,10 @@ def test_expired(authn: Authenticator, hub_keys: HubKeys) -> None:
         {"iss": "nep-hub"},
         {"aud": "andere-dienst"},
         {"aud": "ai-server-manager"},
+        # §4.2/§4.3: aud is precies de string <app_id>; een lijst (ook met deze dienst erin) is ongeldig, anders is
+        # dezelfde JWT ook bij een andere dienst bruikbaar (review contract 1.2)
+        {"aud": ["home-control-hub", "zoeken-en-persoonlijke-ai"]},
+        {"aud": ["home-control-hub"]},
         {"exp": int(time.time()) + 3600},  # exp - iat > 120 s
         {"nbf": int(time.time()) + 600},
         {"iat": int(time.time()) + 600, "nbf": int(time.time()) + 600, "exp": int(time.time()) + 660},

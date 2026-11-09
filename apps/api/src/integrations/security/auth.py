@@ -192,7 +192,9 @@ class Authenticator:
                 audience=p.audience,
                 issuer=p.issuer,
                 leeway=p.leeway_s,
-                options={"require": ["exp", "iat", "nbf", "iss", "aud", "sub"]},
+                # strict_aud: ``aud`` moet precies de string ``<app_id>`` zijn (§4.2/§4.3); een lijst met meerdere
+                # diensten zou dezelfde JWT ook bij een andere dienst bruikbaar maken (review contract 1.2, ADR-0013)
+                options={"require": ["exp", "iat", "nbf", "iss", "aud", "sub"], "strict_aud": True},
             )
         except jwt.ExpiredSignatureError as exc:
             raise auth_error("token_expired") from exc
@@ -202,6 +204,8 @@ class Authenticator:
         if not isinstance(exp, int | float) or not isinstance(iat, int | float) or isinstance(exp, bool):
             raise auth_error("invalid_token")
         if float(exp) - float(iat) > p.max_lifetime_s:
+            raise auth_error("invalid_token")
+        if claims.get("aud") != p.audience or claims.get("iss") != p.issuer:  # ook zonder strict_aud: alleen een string
             raise auth_error("invalid_token")
         if not isinstance(claims.get("sub"), str) or not claims["sub"]:
             raise auth_error("invalid_token")
