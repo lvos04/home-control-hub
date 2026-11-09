@@ -150,7 +150,10 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
     db = Database(settings.database_url)
     hub = HubClient(settings, transport=transport)
     enrollment = EnrollmentService(settings, vault, identity, hub)
-    jwks = JwksCache(None, settings.jwks_ttl_s, settings.jwks_max_stale_s, settings.jwks_min_refresh_interval_s)
+    # De ophaalbegrenzing mag nooit langer zijn dan de verse periode: anders is er na TTL + max. oud een gat waarin
+    # geen enkele JWT geldig is, terwijl de Hub gewoon bereikbaar is (gevonden in de CI-E2E met TTL 2 s).
+    min_refresh = min(settings.jwks_min_refresh_interval_s, settings.jwks_ttl_s)
+    jwks = JwksCache(None, settings.jwks_ttl_s, settings.jwks_max_stale_s, min_refresh)
     link = HubLinkCache(db, enrollment, hub, jwks, settings.link_cache_ttl_s)
     policy = JwtPolicy(settings.jwt_issuer, settings.jwt_audience, settings.jwt_max_lifetime_s, settings.jwt_leeway_s)
     unpair_code = new_unpair_code()

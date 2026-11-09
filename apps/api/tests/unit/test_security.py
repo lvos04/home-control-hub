@@ -259,3 +259,28 @@ def test_redact_masks_secret_keys_and_tokens() -> None:
 )
 def test_looks_like_secret(text: str, secret: bool) -> None:
     assert looks_like_secret(text) is secret
+
+
+def test_jwks_refresh_limit_never_exceeds_ttl(tmp_path: Path) -> None:
+    """Met een korte TTL (2 s) en de standaard ophaalbegrenzing (30 s) zat er een gat van ~27 s zonder geldige
+    sleutels terwijl de Hub bereikbaar was. De begrenzing wordt daarom nooit groter dan de TTL."""
+    from integrations.app import create_app
+    from integrations.config import Settings
+
+    app = create_app(Settings(data_dir=tmp_path, jwks_ttl_s=2, jwks_max_stale_s=1))
+    assert app.state.jwks.min_refresh_interval_s == 2
+    assert create_app(Settings(data_dir=tmp_path / "b")).state.jwks.min_refresh_interval_s == 30
+
+
+def test_jwks_short_ttl_refreshes_after_expiry(hub_keys: HubKeys) -> None:
+    now = [0.0]
+    calls = []
+
+    def fetch() -> dict:
+        calls.append(now[0])
+        return hub_keys.jwks()
+
+    cache = JwksCache(fetch, ttl_s=2, max_stale_s=1, min_refresh_interval_s=2, clock=lambda: now[0])
+    cache.get_key(hub_keys.kid)
+    now[0] = 3.5  # voorbij TTL + max. oud: mag én kan opnieuw ophalen
+    assert cache.get_key(hub_keys.kid) is not None and calls == [0.0, 3.5]

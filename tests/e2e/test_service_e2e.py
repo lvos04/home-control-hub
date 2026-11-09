@@ -159,12 +159,14 @@ def test_05b_b13_authentik_over_http(stack: Stack) -> None:
     reused = {**h, "Idempotency-Key": str(uuid.uuid4())}
     first = httpx.post(f"{base}/authentik/sync", headers=reused)
     second = httpx.post(f"{base}/authentik/sync", headers={**h, "Idempotency-Key": str(uuid.uuid4())})
-    assert first.status_code == 200 and second.status_code == 401  # zelfde JWT voor een tweede wijziging: replay
+    assert first.status_code == 200, first.text
+    assert second.status_code == 401 and second.json()["details"]["reason"] == "token_hergebruikt", second.text
 
 
 def test_06_fail_closed_when_hub_disappears(stack: Stack) -> None:
     token = stack.token("admin")
-    assert httpx.get(f"{stack.hch}/connector/v1/discover", headers=token).status_code == 200
+    ok = httpx.get(f"{stack.hch}/connector/v1/discover", headers=token)
+    assert ok.status_code == 200, ok.text
     stack.hub_proc.terminate()
     stack.hub_proc.wait(10)
     time.sleep(4)  # JWKS-ttl (2 s) + max. oud (1 s) voorbij
