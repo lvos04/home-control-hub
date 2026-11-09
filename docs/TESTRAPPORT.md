@@ -337,7 +337,10 @@ GitHub Actions, run `42671473510` (commit `603f8a1`):
 - In beide pogingen maakte GitHub de job `image` niet aan, en poging 3 startte niet ("workflow file issue").
 - Op dat moment meldde githubstatus.com een **major outage van GitHub Actions** ("Incident with Actions", 18:23 UTC).
   Ook andere repos van het programma hadden toen runs zonder jobs.
-- Het image en de rooktest zijn daarom lokaal gedraaid (zie hierboven). CI opnieuw draaien als Actions hersteld is.
+- Het image en de rooktest zijn daarom lokaal gedraaid (zie hierboven).
+
+GitHub Actions, run `42673722426` (commit `b62abeb`, dezelfde code): **geslaagd**, met de jobs `python`,
+`statuspagina-ui` (UI-tests en de ontwerpreview tegen de draaiende dienst) en `image` (rooktest).
 
 ### Wat de review aantoont (Sim-getest)
 - In geen enkele toestand, breedte of thema is onbekend of verouderd groen. Een meting ouder dan 15 minuten telt als
