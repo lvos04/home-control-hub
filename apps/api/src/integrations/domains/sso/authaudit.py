@@ -567,10 +567,51 @@ def refresh_rights(
     }
 
 
-def rights_view(session: Session) -> dict[str, Any]:
+RIGHTS_MIN_MAX_AGE = timedelta(minutes=15)
+RIGHTS_CONFIRMED = ("ongewijzigd", "vergeleken", "basislijn")  # Authentik volledig gelezen en vergeleken
+
+
+def rights_max_age(sync_interval_s: int) -> timedelta:
+    """Hoe oud de laatst bevestigde rechtenkaart mag zijn voor ze als verouderd geldt (≥ 15 min, ≥ 3 intervallen)."""
+    return max(RIGHTS_MIN_MAX_AGE, timedelta(seconds=3 * max(0, sync_interval_s)))
+
+
+def rights_verified_at(session: Session, latest: SsoAuthentikSnapshot) -> datetime:
+    """Laatste moment waarop Authentik volledig gelezen is en de kaart bevestigde.
+
+    Bij 'ongewijzigd' maakt ``refresh_rights`` geen nieuwe momentopname; dan telt het einde van die synchronisatie.
+    """
+    verified = (_state_get(session, SYNC_KEY) or {}).get("rights_verified") or {}
+    at = _parse_dt(verified.get("at"))
+    if at is not None and verified.get("snapshot_id") == str(latest.id):
+        return max(at, ensure_aware(latest.taken_at))
+    return ensure_aware(latest.taken_at)
+
+
+def rights_view(session: Session, max_age: timedelta = RIGHTS_MIN_MAX_AGE) -> dict[str, Any]:
+    """Rechtenkaart met verschillen. Nooit 'ok' op oude gegevens: is de laatste volledige lezing ouder dan
+    ``max_age`` (Authentik weg, token ingetrokken, worker uit), dan ``status: verouderd`` met de reden."""
     latest = latest_snapshot(session, "rechten")
     if latest is None:
         return {"status": "onbekend", "message_nl": "Nog geen volledige rechtenkaart gelezen.", "rights": None}
+    verified_at = rights_verified_at(session, latest)
+    sync_row = _state_get(session, SYNC_KEY) or {}
+    age = utcnow() - verified_at
+    stale = age > max_age
+    freshness: dict[str, Any] = {
+        "status": "verouderd" if stale else "ok",
+        "verified_at": iso(verified_at),
+        "max_age_s": int(max_age.total_seconds()),
+        "last_sync_status": sync_row.get("status"),
+        "last_sync_reason": sync_row.get("reason"),
+        "last_sync_at": sync_row.get("finished_at"),
+    }
+    if stale:
+        freshness["message_nl"] = (
+            f"Verouderd: de rechtenkaart is voor het laatst volledig gelezen op {iso(verified_at)}"
+            + (f" (laatste synchronisatie: {sync_row.get('status')}, {sync_row.get('reason')})" if sync_row else "")
+            + ". Huidige rechten in Authentik zijn onbekend."
+        )
     prev = session.scalar(
         select(SsoAuthentikSnapshot)
         .where(
@@ -583,8 +624,10 @@ def rights_view(session: Session) -> dict[str, Any]:
     )
     rights = latest.content.get("rights", {})
     return {
-        "status": "ok",
-        "observed_at": iso(latest.taken_at),
+        "status": freshness["status"],
+        "observed_at": iso(verified_at),
+        "snapshot_taken_at": iso(latest.taken_at),
+        "freshness": freshness,
         "authentik_version": latest.authentik_version,
         "snapshot_id": str(latest.id),
         "rights": rights,
@@ -619,6 +662,26 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
         if not complete:
             result["status"] = "onvolledig"
             result["reason"] = "events_niet_volledig_gelezen"
+            # Het watermerk schuift door naar het nieuwste event (anders blijft elke volgende run steken); de
+            # oudere events in dit venster ontbreken dus blijvend in de audit. Dat mag nooit stil gebeuren.
+            since = (wm or {}).get("created")
+            gap = _record_anomaly(
+                session,
+                rule_id="events_onvolledig",
+                dedupe_key=f"events_gat:{since or 'start'}",
+                severity="middel",
+                subject=None,
+                message_nl="Niet alle Authentik-events sinds de vorige synchronisatie konden gelezen worden (te veel "
+                f"in één keer, max. {MAX_PAGES * 100} per soort); oudere events in dit venster ontbreken in de audit.",
+                details={"since": since, "until": new_wm.get("created"), "max_per_query": MAX_PAGES * 100},
+                first_seen=_parse_dt(since) or started,
+                last_seen=_parse_dt(new_wm.get("created")) or started,
+                count=1,
+                actor=actor,
+                tid=tid,
+            )
+            if gap is not None:
+                anomalies.append(gap)
         rights = refresh_rights(session, client, caps, actor, tid)
         result["rights"] = {k: v for k, v in rights.items() if k != "changes"} | {
             "changes": len(rights.get("changes", []))
@@ -633,6 +696,11 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
         result["status"] = "fout"
         result["reason"] = exc.reason
     result["finished_at"] = iso(utcnow())
+    rights_read = result.get("rights") or {}
+    if rights_read.get("status") in RIGHTS_CONFIRMED and rights_read.get("snapshot_id"):
+        result["rights_verified"] = {"snapshot_id": rights_read["snapshot_id"], "at": result["finished_at"]}
+    elif previous.get("rights_verified"):  # mislukt of half gelezen: de vorige bevestiging blijft (en veroudert)
+        result["rights_verified"] = previous["rights_verified"]
     _state_put(session, SYNC_KEY, result)
     if result["status"] == "fout" and previous.get("status") != "fout":
         events.emit(

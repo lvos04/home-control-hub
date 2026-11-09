@@ -4005,7 +4005,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Rechtenkaart (gebruiker → groepen → rol per app) met verschillen t.o.v. de vorige",
+        "summary": "Rechtenkaart (gebruiker → groepen → rol per app) met verschillen; 'verouderd' als de lezing te oud is",
         "tags": [
           "sso"
         ]

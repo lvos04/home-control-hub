@@ -714,9 +714,15 @@ def list_anomalies(
     return {"items": [anomaly_dict(a) for a in rows[:limit]], "next_cursor": nxt}
 
 
-@router.get("/rights", summary="Rechtenkaart (gebruiker → groepen → rol per app) met verschillen t.o.v. de vorige")
-def rights(session: Session = Depends(get_session), _p: Principal = Depends(require_admin)) -> dict[str, Any]:
-    return authaudit.rights_view(session)
+@router.get(
+    "/rights",
+    summary="Rechtenkaart (gebruiker → groepen → rol per app) met verschillen; 'verouderd' als de lezing te oud is",
+)
+def rights(
+    request: Request, session: Session = Depends(get_session), _p: Principal = Depends(require_admin)
+) -> dict[str, Any]:
+    max_age = authaudit.rights_max_age(request.app.state.settings.authentik_sync_interval_s)
+    return authaudit.rights_view(session, max_age)
 
 
 # ------------------------------------------------------------------ B13-005: export, gate, herstelcheck
