@@ -64,6 +64,7 @@ class Stack:
     hub_proc: subprocess.Popen[bytes]
     procs: list[subprocess.Popen[bytes]]
     authentik: str = ""
+    logs: Path | None = None  # stdout/stderr van API, worker en simulators (voor de lekcontrole)
 
     def mint(self, roles: tuple[str, ...]) -> dict[str, str]:
         r = httpx.post(f"{self.hub}/sim/token", json={"roles": list(roles)}, timeout=5)
@@ -160,7 +161,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         ),
     ]
     wait_http(f"{hch_url}/healthz")
-    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url)
+    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url, logs)
     yield st
     for p in [*procs, hub_proc, ak_proc]:
         if p.poll() is None:

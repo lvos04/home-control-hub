@@ -188,3 +188,20 @@ def test_07_no_header_sso_and_body_limit_over_http(stack: Stack) -> None:
     )
     assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
     assert httpx.get(f"{stack.hch}/healthz").status_code == 200
+
+
+def test_08_no_tokens_in_process_logs(stack: Stack) -> None:
+    """Review P1: het Authentik-API-token en het eenmalige koppeltoken staan nooit in de logs van API of worker
+    (de worker heeft dan al vele keren met het token gesynchroniseerd, ook terwijl de Hub weg was)."""
+    from tests.e2e.conftest import ENROLL_TOKEN
+
+    assert stack.logs is not None
+    ak_token = httpx.get(f"{stack.authentik}/sim/token").json()["token"]
+    assert len(ak_token) >= 20
+    for name in ("api.log", "worker.log"):
+        for p in stack.procs:  # logs volledig wegschrijven
+            assert p.poll() is None, f"{name}: proces is onverwacht gestopt"
+        text = (stack.logs / name).read_text(encoding="utf-8", errors="replace")
+        assert text.strip(), f"{name} is leeg; de controle zou niets bewijzen"
+        assert ak_token not in text, f"Authentik-token in {name}"
+        assert ENROLL_TOKEN not in text, f"koppeltoken in {name}"
