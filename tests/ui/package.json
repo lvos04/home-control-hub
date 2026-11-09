@@ -1,0 +1,14 @@
+{
+  "name": "home-control-hub-statuspagina-ui",
+  "private": true,
+  "description": "Statuspagina in Peil (HC11): axe-core, overloop op 320 px, CSP zonder JS, aanraakdoelen, focus en schermafdrukken over de echte uitvoer van de app. Eerst: python tests/ui/genereer_toestanden.py",
+  "scripts": {
+    "test": "playwright test",
+    "schermafdrukken": "SCHERMAFDRUKKEN=1 playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.0",
+    "axe-core": "4.14.0"
+  }
+}

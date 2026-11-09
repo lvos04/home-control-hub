@@ -17,3 +17,8 @@ obj/
 release/
 .lockvenv/
 .appdata/
+
+# statuspagina-UI-tests (tests/ui): gegenereerde toestanden en Playwright-uitvoer
+tests/ui/uit/
+tests/ui/test-results/
+tests/ui/playwright-report/

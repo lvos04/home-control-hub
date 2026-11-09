@@ -3,7 +3,7 @@ PY ?= .venv/bin/python
 API := apps/api
 IMAGE ?= home-control-hub:dev
 
-.PHONY: lint test e2e interop openapi lock image smoke clean
+.PHONY: lint test e2e interop openapi lock image smoke clean toestanden test-ui schermafdrukken peil-drift
 
 lint:
 	cd $(API) && ../../$(PY) -m ruff check . && ../../$(PY) -m ruff format --check . && ../../$(PY) -m mypy
@@ -13,6 +13,21 @@ test:
 
 e2e:
 	$(PY) -m pytest -q tests/e2e -p no:cacheprovider
+
+# Statuspagina in Peil (HC11): toestanden uit de echte app (PostgreSQL + Hub-simulator) → Playwright (axe-core,
+# overloop 320–1440 px, CSP, focus) → schermafdrukken in docs/screenshots/peil/statuspagina/.
+toestanden:
+	$(PY) tests/ui/genereer_toestanden.py
+
+test-ui: toestanden
+	cd tests/ui && { test -d node_modules || npm ci --no-audit --no-fund; } && npx playwright test
+
+schermafdrukken: toestanden
+	cd tests/ui && { test -d node_modules || npm ci --no-audit --no-fund; } && SCHERMAFDRUKKEN=1 npx playwright test
+
+# Versie-gepinde kopie van het Peil-sjabloon (O-14): offline en tegen ai-server-manager op GitHub.
+peil-drift:
+	python3 tools/peil_kopie.py controleer && python3 tools/peil_kopie.py vergelijk --online
 
 # Interop met de ECHTE Hub (alleen lokaal): HUB_PY = Python van een venv met het pakket 'hub' van ai-server-manager.
 interop:
