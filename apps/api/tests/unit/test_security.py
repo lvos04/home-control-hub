@@ -32,9 +32,14 @@ def _reason(exc: pytest.ExceptionInfo[ApiError]) -> str:
 
 # ------------------------------------------------------------------ JWKS
 def test_parse_jwks_only_ed25519(hub_keys: HubKeys) -> None:
-    doc = {"keys": [hub_keys.jwk, {"kty": "RSA", "kid": "rsa", "n": "x", "e": "AQAB"},
-                    {"kty": "OKP", "crv": "X25519", "x": hub_keys.jwk["x"], "kid": "x"},
-                    {"kty": "OKP", "crv": "Ed25519", "x": "kort", "kid": "kapot"}]}
+    doc = {
+        "keys": [
+            hub_keys.jwk,
+            {"kty": "RSA", "kid": "rsa", "n": "x", "e": "AQAB"},
+            {"kty": "OKP", "crv": "X25519", "x": hub_keys.jwk["x"], "kid": "x"},
+            {"kty": "OKP", "crv": "Ed25519", "x": "kort", "kid": "kapot"},
+        ]
+    }
     keys = parse_jwks(doc)
     assert list(keys) == [hub_keys.kid]
     with pytest.raises(ValueError):
@@ -185,8 +190,12 @@ def test_public_jwk_shape(tmp_path: Path) -> None:
 
 # ------------------------------------------------------------------ redactie
 def test_redact_masks_secret_keys_and_tokens() -> None:
-    data = {"service_token": "abc", "password": "geheim", "nested": [{"api_key": "x", "credential_last4": "1234"}],
-            "msg": "Authorization: Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"}
+    data = {
+        "service_token": "abc",
+        "password": "geheim",
+        "nested": [{"api_key": "x", "credential_last4": "1234"}],
+        "msg": "Authorization: Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl",
+    }
     out = redact(data)
     assert out["service_token"] == "***" and out["password"] == "***"
     assert out["nested"][0]["api_key"] == "***" and out["nested"][0]["credential_last4"] == "1234"

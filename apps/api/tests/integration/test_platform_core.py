@@ -149,8 +149,11 @@ def test_idempotency_required_replay_and_conflict(paired_client: Any, auth: Any)
 
 def test_etag_if_match(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
-    created = c.post("/integrations/v1/sso/recovery/accounts",
-                     json={"system": "authentik", "username": "akadmin", "login_kind": "beide"}, headers=idem(h))
+    created = c.post(
+        "/integrations/v1/sso/recovery/accounts",
+        json={"system": "authentik", "username": "akadmin", "login_kind": "beide"},
+        headers=idem(h),
+    )
     acc_id, etag = created.json()["id"], created.headers["ETag"]
     url = f"/integrations/v1/sso/recovery/accounts/{acc_id}"
     r = c.patch(url, json={"display_name": "Authentik-beheer"}, headers=idem(h))
@@ -178,8 +181,9 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     assert names["herstelregister"]["status"] == "unknown"
     items = c.get("/connector/v1/items", params={"type": "source", "limit": 3}, headers=h).json()
     assert len(items["items"]) == 3 and items["next_cursor"]
-    rest = c.get("/connector/v1/items", params={"type": "source", "cursor": items["next_cursor"], "limit": 200},
-                 headers=h).json()
+    rest = c.get(
+        "/connector/v1/items", params={"type": "source", "cursor": items["next_cursor"], "limit": 200}, headers=h
+    ).json()
     assert len(items["items"]) + len(rest["items"]) == 10 and rest["next_cursor"] is None
     assert all(i["runtime"]["health"]["status"] == "unknown" for i in items["items"] + rest["items"])
     assert c.get("/connector/v1/items", params={"type": "bestaat-niet"}, headers=h).json()["code"] == "invalid_type"
@@ -198,9 +202,16 @@ def test_connector_mutations_honestly_unavailable(paired_client: Any, auth: Any,
 
 @pytest.mark.parametrize(
     "path",
-    ["/integrations/v1/network/devices", "/integrations/v1/network/dns/summary", "/integrations/v1/network/tunnels",
-     "/integrations/v1/automation/flows", "/integrations/v1/automation/event-types", "/integrations/v1/energy/meters",
-     "/integrations/v1/energy/usage", "/integrations/v1/energy/advice"],
+    [
+        "/integrations/v1/network/devices",
+        "/integrations/v1/network/dns/summary",
+        "/integrations/v1/network/tunnels",
+        "/integrations/v1/automation/flows",
+        "/integrations/v1/automation/event-types",
+        "/integrations/v1/energy/meters",
+        "/integrations/v1/energy/usage",
+        "/integrations/v1/energy/advice",
+    ],
 )
 def test_unbuilt_domain_data_is_501_not_empty(paired_client: Any, auth: Any, path: str) -> None:
     r = paired_client.get(path, headers=auth("viewer"))
@@ -214,25 +225,36 @@ def test_domain_structures(paired_client: Any, auth: Any) -> None:
     cov = c.get("/integrations/v1/energy/coverage", headers=h).json()
     roles = {i["role"]: i for i in cov["items"]}
     assert set(roles) == {"p1_net", "boiler_socket", "airco_outdoor", "nas_host"}
-    assert all(i["measurement_status"] == "onbekend" and i["quality"] == "onbekend" and i["read_only"]
-               for i in cov["items"])
+    assert all(
+        i["measurement_status"] == "onbekend" and i["quality"] == "onbekend" and i["read_only"] for i in cov["items"]
+    )
     pol = c.get("/integrations/v1/automation/policy", headers=h).json()
     assert "exec" in pol["forbidden_node_types"] and pol["forbidden_node_types_verification"] == "te_verifieren"
     caps = c.get("/integrations/v1/network/capabilities", headers=h).json()
-    assert {s["source_id"] for s in caps["sources"]} == {"netalertx", "adguard_home", "tailscale", "cloudflared",
-                                                         "router"}
+    assert {s["source_id"] for s in caps["sources"]} == {
+        "netalertx",
+        "adguard_home",
+        "tailscale",
+        "cloudflared",
+        "router",
+    }
     apps = c.get("/integrations/v1/sso/app-coverage", headers=h).json()["items"]
     assert all(a["oidc_support"] in ("te_verifieren", "gepland") for a in apps)
 
 
 def test_source_config_vault_and_probe(paired_client: Any, auth: Any, fake_hub: FakeHub) -> None:
     c, h = paired_client, auth("admin")
-    r = c.put("/integrations/v1/sources/authentik",
-              json={"base_url": "http://127.0.0.1:9000", "enabled": True}, headers=idem(h))
+    r = c.put(
+        "/integrations/v1/sources/authentik",
+        json={"base_url": "http://127.0.0.1:9000", "enabled": True},
+        headers=idem(h),
+    )
     assert r.status_code == 422  # loopback wijst naar de container zelf
-    r = c.put("/integrations/v1/sources/authentik",
-              json={"base_url": AUTHENTIK_URL, "enabled": True, "credential": "ak-api-token-abcdefgh1234"},
-              headers=idem(h))
+    r = c.put(
+        "/integrations/v1/sources/authentik",
+        json={"base_url": AUTHENTIK_URL, "enabled": True, "credential": "ak-api-token-abcdefgh1234"},
+        headers=idem(h),
+    )
     assert r.status_code == 201
     view = r.json()["runtime"]
     assert view["credential_present"] and view["credential_last4"] == "1234" and "ak-api-token" not in r.text

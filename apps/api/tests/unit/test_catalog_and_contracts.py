@@ -51,8 +51,16 @@ def test_safety_rules_in_catalog() -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["ftp://nas:30400", "http://", "http://user:pw@nas:30400", "http://nas:30400/?x=1", "http://localhost:30400",
-     "http://127.0.0.1:30400", "http://[::1]:30400", "nas:30400"],
+    [
+        "ftp://nas:30400",
+        "http://",
+        "http://user:pw@nas:30400",
+        "http://nas:30400/?x=1",
+        "http://localhost:30400",
+        "http://127.0.0.1:30400",
+        "http://[::1]:30400",
+        "nas:30400",
+    ],
 )
 def test_hub_url_rejected(url: str) -> None:
     with pytest.raises(HubUrlError):

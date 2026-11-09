@@ -23,8 +23,20 @@ def test_private_scopes_accepted(cidr: str) -> None:
     assert recovery.validate_scopes([{"cidr": cidr, "kind": "lan"}])[0]["cidr"]
 
 
-@pytest.mark.parametrize("cidr", ["0.0.0.0/0", "8.8.8.0/24", "203.0.113.0/24", "::/0", "2001:db8::/32", "127.0.0.1/32",
-                                  "169.254.0.0/16", "192.168.0.0/15", "geen-cidr"])
+@pytest.mark.parametrize(
+    "cidr",
+    [
+        "0.0.0.0/0",
+        "8.8.8.0/24",
+        "203.0.113.0/24",
+        "::/0",
+        "2001:db8::/32",
+        "127.0.0.1/32",
+        "169.254.0.0/16",
+        "192.168.0.0/15",
+        "geen-cidr",
+    ],
+)
 def test_public_or_invalid_scopes_rejected(cidr: str) -> None:
     with pytest.raises(recovery.ScopeError):
         recovery.validate_scopes([{"cidr": cidr, "kind": "vpn"}])
@@ -41,9 +53,14 @@ def test_scope_kind_and_limits() -> None:
 
 # ------------------------------------------------------------------ beoordelen
 def _eval(ip: str, **kw: object) -> recovery.Evaluation:
-    base: dict = {"account_status": "actief", "is_break_glass": True, "login_kind": "lokaal", "policy_status": "actief",
-                  "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}, {"cidr": "100.64.0.0/10", "kind": "vpn"}],
-                  "session_max_minutes": 60}
+    base: dict = {
+        "account_status": "actief",
+        "is_break_glass": True,
+        "login_kind": "lokaal",
+        "policy_status": "actief",
+        "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}, {"cidr": "100.64.0.0/10", "kind": "vpn"}],
+        "session_max_minutes": 60,
+    }
     base.update(kw)
     return recovery.evaluate_access(**base, client_ip=ip)
 
@@ -82,12 +99,23 @@ def test_probe_addresses() -> None:
 # ------------------------------------------------------------------ herstelstatus
 def _account(**kw: object) -> recovery.AccountView:
     base: dict = {
-        "id": "a1", "system": "hub_local", "username": "nood", "status": "actief", "is_break_glass": True,
-        "login_kind": "lokaal", "mfa_status": "bevestigd",
-        "methods": [{"method_type": "lokaal_wachtwoord_lan", "status": "actief"},
-                    {"method_type": "verzegelde_envelop", "status": "actief"}],
-        "emergency": {"status": "actief", "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}],
-                      "last_reviewed_at": NOW - timedelta(days=10), "review_interval_days": 90},
+        "id": "a1",
+        "system": "hub_local",
+        "username": "nood",
+        "status": "actief",
+        "is_break_glass": True,
+        "login_kind": "lokaal",
+        "mfa_status": "bevestigd",
+        "methods": [
+            {"method_type": "lokaal_wachtwoord_lan", "status": "actief"},
+            {"method_type": "verzegelde_envelop", "status": "actief"},
+        ],
+        "emergency": {
+            "status": "actief",
+            "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}],
+            "last_reviewed_at": NOW - timedelta(days=10),
+            "review_interval_days": 90,
+        },
         "drills": [{"mode": "handmatig", "outcome": "ok", "performed_at": NOW - timedelta(days=5)}],
     }
     base.update(kw)
@@ -105,20 +133,47 @@ def test_fully_prepared_account_is_ok() -> None:
 @pytest.mark.parametrize(
     ("kw", "code"),
     [
-        ({"methods": [{"method_type": "lokaal_wachtwoord_lan", "status": "actief"}]}, "minder_dan_twee_herstelmethodes"),
-        ({"methods": [{"method_type": "authentik_herstelsleutel", "status": "actief"},
-                      {"method_type": "lokaal_wachtwoord_lan", "status": "ingetrokken"}]}, "alleen_sso_afhankelijk"),
+        (
+            {"methods": [{"method_type": "lokaal_wachtwoord_lan", "status": "actief"}]},
+            "minder_dan_twee_herstelmethodes",
+        ),
+        (
+            {
+                "methods": [
+                    {"method_type": "authentik_herstelsleutel", "status": "actief"},
+                    {"method_type": "lokaal_wachtwoord_lan", "status": "ingetrokken"},
+                ]
+            },
+            "alleen_sso_afhankelijk",
+        ),
         ({"mfa_status": "niet_ingesteld"}, "mfa_niet_ingesteld"),
         ({"emergency": None}, "geen_noodtoegang"),
-        ({"emergency": {"status": "actief", "scopes": [], "last_reviewed_at": NOW - timedelta(days=200),
-                        "review_interval_days": 90}}, "herbevestiging_verlopen"),
+        (
+            {
+                "emergency": {
+                    "status": "actief",
+                    "scopes": [],
+                    "last_reviewed_at": NOW - timedelta(days=200),
+                    "review_interval_days": 90,
+                }
+            },
+            "herbevestiging_verlopen",
+        ),
         ({"drills": []}, "nooit_handmatig_geoefend"),
         ({"drills": [{"mode": "zelftest", "outcome": "ok", "performed_at": NOW}]}, "nooit_handmatig_geoefend"),
-        ({"drills": [{"mode": "handmatig", "outcome": "ok", "performed_at": NOW - timedelta(days=120)}]},
-         "oefening_verouderd"),
-        ({"drills": [{"mode": "handmatig", "outcome": "ok", "performed_at": NOW - timedelta(days=9)},
-                     {"mode": "handmatig", "outcome": "mislukt", "performed_at": NOW - timedelta(days=1)}]},
-         "laatste_oefening_mislukt"),
+        (
+            {"drills": [{"mode": "handmatig", "outcome": "ok", "performed_at": NOW - timedelta(days=120)}]},
+            "oefening_verouderd",
+        ),
+        (
+            {
+                "drills": [
+                    {"mode": "handmatig", "outcome": "ok", "performed_at": NOW - timedelta(days=9)},
+                    {"mode": "handmatig", "outcome": "mislukt", "performed_at": NOW - timedelta(days=1)},
+                ]
+            },
+            "laatste_oefening_mislukt",
+        ),
         ({"open_rotations": 1}, "rotatie_na_gebruik_vereist"),
     ],
 )
@@ -134,8 +189,14 @@ def test_unknown_mfa_is_unknown_not_green() -> None:
 
 
 def test_review_soon_is_warning_only() -> None:
-    acc = _account(emergency={"status": "actief", "scopes": [], "last_reviewed_at": NOW - timedelta(days=85),
-                              "review_interval_days": 90})
+    acc = _account(
+        emergency={
+            "status": "actief",
+            "scopes": [],
+            "last_reviewed_at": NOW - timedelta(days=85),
+            "review_interval_days": 90,
+        }
+    )
     res = recovery.evaluate_account(acc, NOW, 90)
     assert res.level == "ok" and "herbevestiging_binnenkort" in [r["code"] for r in res.reasons]
 
@@ -143,7 +204,9 @@ def test_review_soon_is_warning_only() -> None:
 def test_overall_levels() -> None:
     empty = recovery.evaluate_overall([], NOW, 90)
     assert empty["level"] == "onbekend" and empty["reasons"][0]["code"] == "geen_beheeraccounts"
-    only_sso = recovery.evaluate_overall([_account(is_break_glass=False, login_kind="sso", system="authentik")], NOW, 90)
+    only_sso = recovery.evaluate_overall(
+        [_account(is_break_glass=False, login_kind="sso", system="authentik")], NOW, 90
+    )
     codes = [r["code"] for r in only_sso["reasons"]]
     assert only_sso["level"] == "risico" and "geen_noodaccount" in codes and "geen_lokale_hub_admin" in codes
     good = recovery.evaluate_overall([_account()], NOW, 90)

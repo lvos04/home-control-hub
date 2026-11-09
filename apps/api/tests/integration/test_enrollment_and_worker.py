@@ -46,7 +46,9 @@ def test_env_token_enrollment_via_worker(make_settings: Any, fake_hub: FakeHub, 
 
 
 def test_env_token_rejected_is_final_and_hub_down_is_retryable(make_settings: Any, fake_hub: FakeHub) -> None:
-    worker = Worker(make_settings(hub_url=HUB_URL, enrollment_token="verlopen-token-123456"), transport=fake_hub.transport)
+    worker = Worker(
+        make_settings(hub_url=HUB_URL, enrollment_token="verlopen-token-123456"), transport=fake_hub.transport
+    )
     worker.run_once()
     st = worker.enrollment.public_state
     with worker.db.sessions() as s:
@@ -80,13 +82,20 @@ def test_pairing_code_via_status_page(client: Any, fake_hub: FakeHub) -> None:
     r = c.post("/koppelen", data={"csrf": "fout", "hub_url": HUB_URL, "code": PAIR_CODE}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("ongeldig_formulier")
     token = _form_token(c)
-    r = c.post("/koppelen", data={"csrf": token, "hub_url": "http://localhost:30400", "code": PAIR_CODE},
-               follow_redirects=False)
+    r = c.post(
+        "/koppelen",
+        data={"csrf": token, "hub_url": "http://localhost:30400", "code": PAIR_CODE},
+        follow_redirects=False,
+    )
     assert r.headers["location"].endswith("ongeldig_hub_adres")
     r = c.post("/koppelen", data={"csrf": token, "hub_url": HUB_URL, "code": "FOUT-CODE"}, follow_redirects=False)
     assert r.headers["location"].endswith("hub_weigerde_code")
-    r = c.post("/koppelen", data={"csrf": token, "hub_url": HUB_URL, "code": PAIR_CODE},
-               headers={"Origin": "http://kwaadaardig.example"}, follow_redirects=False)
+    r = c.post(
+        "/koppelen",
+        data={"csrf": token, "hub_url": HUB_URL, "code": PAIR_CODE},
+        headers={"Origin": "http://kwaadaardig.example"},
+        follow_redirects=False,
+    )
     assert r.headers["location"].endswith("ongeldig_formulier")  # cross-site formulier geweigerd
     r = c.post("/koppelen", data={"csrf": token, "hub_url": HUB_URL, "code": PAIR_CODE}, follow_redirects=False)
     assert r.headers["location"].endswith("melding=gekoppeld")
@@ -116,8 +125,12 @@ def test_unpair_requires_local_code(paired_client: Any, auth: Any) -> None:
 
 def test_pair_throttle(client: Any) -> None:
     token = _form_token(client)
-    locs = [client.post("/koppelen", data={"csrf": token, "hub_url": HUB_URL, "code": "FOUT"},
-                        follow_redirects=False).headers["location"] for _ in range(12)]
+    locs = [
+        client.post(
+            "/koppelen", data={"csrf": token, "hub_url": HUB_URL, "code": "FOUT"}, follow_redirects=False
+        ).headers["location"]
+        for _ in range(12)
+    ]
     assert locs[-1].endswith("te_veel_pogingen")
 
 
@@ -129,11 +142,15 @@ def test_admin_unpair_api(paired_client: Any, auth: Any) -> None:
     assert r.status_code == 200 and r.json()["status"] == "niet_gekoppeld"
 
 
-def test_outbox_push_delivery_dead_letter_and_not_paired(paired_client: Any, make_settings: Any, fake_hub: FakeHub,
-                                                         auth: Any) -> None:
+def test_outbox_push_delivery_dead_letter_and_not_paired(
+    paired_client: Any, make_settings: Any, fake_hub: FakeHub, auth: Any
+) -> None:
     c, h = paired_client, auth("admin")
-    c.post("/integrations/v1/sso/recovery/accounts",
-           json={"system": "hub_local", "username": "a", "login_kind": "lokaal"}, headers=idem(h))
+    c.post(
+        "/integrations/v1/sso/recovery/accounts",
+        json={"system": "hub_local", "username": "a", "login_kind": "lokaal"},
+        headers=idem(h),
+    )
     worker = Worker(make_settings(), transport=fake_hub.transport)
     worker.run_once()
     assert fake_hub.inbox and fake_hub.inbox[0]["source_app"] == "home-control-hub"
@@ -142,8 +159,11 @@ def test_outbox_push_delivery_dead_letter_and_not_paired(paired_client: Any, mak
     assert pending == 0
     # Hub weigert → backoff, na MAX_ATTEMPTS dead letter (zichtbaar in health)
     fake_hub.inbox_status = 500
-    c.post("/integrations/v1/sso/recovery/accounts",
-           json={"system": "hub_local", "username": "b", "login_kind": "lokaal"}, headers=idem(h))
+    c.post(
+        "/integrations/v1/sso/recovery/accounts",
+        json={"system": "hub_local", "username": "b", "login_kind": "lokaal"},
+        headers=idem(h),
+    )
     for _ in range(MAX_ATTEMPTS):
         with worker.db.sessions() as s:
             s.execute(text("UPDATE outbox_event SET next_attempt_at = now() WHERE delivery_status='pending'"))
@@ -155,22 +175,37 @@ def test_outbox_push_delivery_dead_letter_and_not_paired(paired_client: Any, mak
     assert c.get("/connector/v1/events", headers=h).json()["dead_letter_count"] >= 1
 
 
-def test_worker_closes_expired_activations(paired_client: Any, make_settings: Any, fake_hub: FakeHub, auth: Any) -> None:
+def test_worker_closes_expired_activations(
+    paired_client: Any, make_settings: Any, fake_hub: FakeHub, auth: Any
+) -> None:
     c, h = paired_client, auth("admin")
-    acc = c.post("/integrations/v1/sso/recovery/accounts",
-                 json={"system": "hub_local", "username": "nood", "login_kind": "lokaal", "is_break_glass": True},
-                 headers=idem(h)).json()
-    c.put(f"/integrations/v1/sso/recovery/accounts/{acc['id']}/emergency-access",
-          json={"network_scopes": [{"cidr": "10.20.0.0/16", "kind": "lan"}]}, headers=idem(h))
-    act = c.post("/integrations/v1/sso/break-glass/activations",
-                 json={"account_id": acc["id"], "client_ip": "10.20.1.1", "mode": "oefening"}, headers=idem(h)).json()
+    acc = c.post(
+        "/integrations/v1/sso/recovery/accounts",
+        json={"system": "hub_local", "username": "nood", "login_kind": "lokaal", "is_break_glass": True},
+        headers=idem(h),
+    ).json()
+    c.put(
+        f"/integrations/v1/sso/recovery/accounts/{acc['id']}/emergency-access",
+        json={"network_scopes": [{"cidr": "10.20.0.0/16", "kind": "lan"}]},
+        headers=idem(h),
+    )
+    act = c.post(
+        "/integrations/v1/sso/break-glass/activations",
+        json={"account_id": acc["id"], "client_ip": "10.20.1.1", "mode": "oefening"},
+        headers=idem(h),
+    ).json()
     worker = Worker(make_settings(), transport=fake_hub.transport)
     with worker.db.sessions() as s:
-        s.execute(text("UPDATE sso_break_glass_activation SET activated_at=:a, expires_at=:e WHERE id=:i"),
-                  {"a": utcnow() - timedelta(hours=2), "e": utcnow() - timedelta(hours=1), "i": act["id"]})
+        s.execute(
+            text("UPDATE sso_break_glass_activation SET activated_at=:a, expires_at=:e WHERE id=:i"),
+            {"a": utcnow() - timedelta(hours=2), "e": utcnow() - timedelta(hours=1), "i": act["id"]},
+        )
         s.commit()
     worker.run_once()
     assert worker.state.stats["closed_activations"] == 1
     with worker.db.sessions() as s:
         assert s.execute(text("SELECT closed_at IS NOT NULL FROM sso_break_glass_activation")).scalar()
-        assert s.execute(text("SELECT count(*) FROM outbox_event WHERE event_type='sso.break_glass.expired'")).scalar() == 1
+        assert (
+            s.execute(text("SELECT count(*) FROM outbox_event WHERE event_type='sso.break_glass.expired'")).scalar()
+            == 1
+        )

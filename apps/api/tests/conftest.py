@@ -76,8 +76,16 @@ class HubKeys:
         extra: dict[str, Any] | None = None,
     ) -> str:
         now = int(time.time()) + iat_offset
-        claims = {"iss": iss, "aud": aud, "sub": sub, "roles": roles or [], "iat": now, "exp": now + lifetime,
-                  "jti": str(uuid.uuid4()), **(extra or {})}
+        claims = {
+            "iss": iss,
+            "aud": aud,
+            "sub": sub,
+            "roles": roles or [],
+            "iat": now,
+            "exp": now + lifetime,
+            "jti": str(uuid.uuid4()),
+            **(extra or {}),
+        }
         return jwt.encode(claims, self.private, algorithm="EdDSA", headers={"kid": kid or self.kid})
 
 
@@ -189,8 +197,14 @@ def clean_db(database_url: str) -> Iterator[str]:
 @pytest.fixture
 def make_settings(data_dir: Path, clean_db: str) -> Callable[..., Settings]:
     def _make(**overrides: Any) -> Settings:
-        base: dict[str, Any] = {"data_dir": data_dir, "database_url": clean_db, "hub_url": None,
-                                "enrollment_token": None, "jwks_min_refresh_interval_s": 0, "link_cache_ttl_s": 0}
+        base: dict[str, Any] = {
+            "data_dir": data_dir,
+            "database_url": clean_db,
+            "hub_url": None,
+            "enrollment_token": None,
+            "jwks_min_refresh_interval_s": 0,
+            "link_cache_ttl_s": 0,
+        }
         base.update(overrides)
         return Settings(**base)
 

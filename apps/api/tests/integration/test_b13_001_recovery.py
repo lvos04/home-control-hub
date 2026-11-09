@@ -30,19 +30,34 @@ def _create_account(c: Any, h: dict[str, str], **body: Any) -> dict[str, Any]:
 
 
 def _prepare_break_glass(c: Any, h: dict[str, str]) -> dict[str, Any]:
-    acc = _create_account(c, h, system="hub_local", username="noodbeheer", display_name="Noodaccount",
-                          is_break_glass=True, login_kind="lokaal")
+    acc = _create_account(
+        c,
+        h,
+        system="hub_local",
+        username="noodbeheer",
+        display_name="Noodaccount",
+        is_break_glass=True,
+        login_kind="lokaal",
+    )
     for method, hint in (("lokaal_wachtwoord_lan", "wachtwoordmanager"), ("verzegelde_envelop", "kluis")):
-        r = c.post(f"{BASE}/recovery/accounts/{acc['id']}/methods", json={"method_type": method, "storage_hint": hint},
-                   headers=idem(h))
+        r = c.post(
+            f"{BASE}/recovery/accounts/{acc['id']}/methods",
+            json={"method_type": method, "storage_hint": hint},
+            headers=idem(h),
+        )
         assert r.status_code == 201 and r.json()["sso_independent"] is True
-    r = c.put(f"{BASE}/recovery/accounts/{acc['id']}/emergency-access",
-              json={"network_scopes": [LAN, VPN], "session_max_minutes": 30, "reason": "Noodtoegang beheer"},
-              headers=idem(h))
+    r = c.put(
+        f"{BASE}/recovery/accounts/{acc['id']}/emergency-access",
+        json={"network_scopes": [LAN, VPN], "session_max_minutes": 30, "reason": "Noodtoegang beheer"},
+        headers=idem(h),
+    )
     assert r.status_code == 201, r.text
     etag = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).headers["ETag"]
-    r = c.post(f"{BASE}/recovery/accounts/{acc['id']}/mfa-attestation",
-               json={"mfa_status": "bevestigd", "mfa_methods": ["webauthn"]}, headers=idem(h, **{"If-Match": etag}))
+    r = c.post(
+        f"{BASE}/recovery/accounts/{acc['id']}/mfa-attestation",
+        json={"mfa_status": "bevestigd", "mfa_methods": ["webauthn"]},
+        headers=idem(h, **{"If-Match": etag}),
+    )
     assert r.status_code == 200
     return acc
 
@@ -61,8 +76,13 @@ def test_break_glass_testable_while_authenticator_offline(paired_client: Any, au
     assert d["outcome"] == "ok" and d["authenticator_state"] == "offline"
     checks = {x["name"]: x["status"] for x in d["checks"]}
     assert checks == {
-        "account_actief": "ok", "lokale_login": "ok", "herstelmethodes": "ok", "noodtoegang_geregistreerd": "ok",
-        "beleid_binnen_bereik": "ok", "beleid_buiten_bereik_geweigerd": "ok", "authenticator": "info",
+        "account_actief": "ok",
+        "lokale_login": "ok",
+        "herstelmethodes": "ok",
+        "noodtoegang_geregistreerd": "ok",
+        "beleid_binnen_bereik": "ok",
+        "beleid_buiten_bereik_geweigerd": "ok",
+        "authenticator": "info",
     }
     # beoordeling werkt zonder Authentik: LAN/VPN toegestaan, internet geweigerd
     ok = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.7"}, headers=h)
@@ -100,18 +120,30 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
 
     # handmatige oefening (attestatie) na echte login via LAN met Authentik uit
     methods = detail["recovery_methods"]
-    r = c.post(f"{BASE}/recovery/drills", json={"account_id": acc["id"], "method_id": methods[0]["id"],
-                                               "mode": "handmatig", "outcome": "ok", "client_scope": "lan",
-                                               "authenticator_state": "offline", "notes": "Geoefend met Authentik uit"},
-               headers=idem(h))
+    r = c.post(
+        f"{BASE}/recovery/drills",
+        json={
+            "account_id": acc["id"],
+            "method_id": methods[0]["id"],
+            "mode": "handmatig",
+            "outcome": "ok",
+            "client_scope": "lan",
+            "authenticator_state": "offline",
+            "notes": "Geoefend met Authentik uit",
+        },
+        headers=idem(h),
+    )
     assert r.status_code == 201 and r.json()["validation_nl"].startswith("Handmatig bevestigd")
     detail = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()
     assert detail["readiness"] == {"level": "ok", "reasons": []}
     assert detail["recovery_methods"][0]["last_verified_at"] is not None
 
     # echte activatie → rotatie vereist → risico tot rotatie bevestigd
-    act = c.post(f"{BASE}/break-glass/activations",
-                 json={"account_id": acc["id"], "client_ip": "192.168.50.9", "mode": "echt"}, headers=idem(h))
+    act = c.post(
+        f"{BASE}/break-glass/activations",
+        json={"account_id": acc["id"], "client_ip": "192.168.50.9", "mode": "echt"},
+        headers=idem(h),
+    )
     assert act.status_code == 201 and act.json()["rotation_required"] is True
     assert act.json()["matched_scope"] == "192.168.50.0/24"
     detail = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()
@@ -121,8 +153,11 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
     assert c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()["readiness"]["level"] == "ok"
 
     # activatie vanaf internet wordt geweigerd én geaudit
-    denied = c.post(f"{BASE}/break-glass/activations",
-                    json={"account_id": acc["id"], "client_ip": "203.0.113.50", "mode": "echt"}, headers=idem(h))
+    denied = c.post(
+        f"{BASE}/break-glass/activations",
+        json={"account_id": acc["id"], "client_ip": "203.0.113.50", "mode": "echt"},
+        headers=idem(h),
+    )
     assert denied.status_code == 403 and denied.json()["code"] == "noodtoegang_geweigerd"
 
     # totaal: Authentik-admin zonder herstelmethodes blijft een risico
@@ -134,8 +169,15 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
     with c.app.state.db.sessions() as s:
         actions = {r[0] for r in s.execute(text("SELECT action FROM audit_event WHERE domain='sso'"))}
         events = [r[0] for r in s.execute(text("SELECT event_type FROM outbox_event ORDER BY seq"))]
-    assert {"admin_account.registered", "recovery_method.added", "emergency_access.changed",
-            "recovery_drill.recorded", "break_glass.activated", "break_glass.denied", "break_glass.rotated"} <= actions
+    assert {
+        "admin_account.registered",
+        "recovery_method.added",
+        "emergency_access.changed",
+        "recovery_drill.recorded",
+        "break_glass.activated",
+        "break_glass.denied",
+        "break_glass.rotated",
+    } <= actions
     assert "sso.recovery.readiness_changed" in events and "sso.break_glass.denied" in events
     ev = c.get("/connector/v1/events", headers=h).json()
     env = ev["items"][0]
@@ -162,7 +204,13 @@ def test_recovery_kit_export_verify_without_secrets(paired_client: Any, auth: An
     with c.app.state.db.sessions() as s:
         dump = " ".join(
             str(row)
-            for table in ("idempotency_record", "audit_event", "outbox_event", "sso_recovery_kit_export", "service_state")
+            for table in (
+                "idempotency_record",
+                "audit_event",
+                "outbox_event",
+                "sso_recovery_kit_export",
+                "service_state",
+            )
             for row in s.execute(text(f"SELECT * FROM {table}"))  # noqa: S608 - vaste tabelnamen
         )
     assert PASSPHRASE not in dump and "paard batterij" not in dump
@@ -176,13 +224,22 @@ def test_recovery_kit_export_verify_without_secrets(paired_client: Any, auth: An
     [
         ({"system": "hub_local", "username": "x", "login_kind": "lokaal", "password": "geheim"}, "password"),
         ({"system": "hub_local", "username": "x", "login_kind": "sso", "is_break_glass": True}, "SSO"),
-        ({"system": "hub_local", "username": "x", "login_kind": "lokaal",
-          "notes": "wachtwoord is Zx81-qPw7-Lm22-Vb90-Kd33"}, "geheimen"),
+        (
+            {
+                "system": "hub_local",
+                "username": "x",
+                "login_kind": "lokaal",
+                "notes": "wachtwoord is Zx81-qPw7-Lm22-Vb90-Kd33",
+            },
+            "geheimen",
+        ),
         ({"system": "hub_local", "username": "x y", "login_kind": "lokaal"}, "username"),
         ({"system": "onbekend", "username": "x", "login_kind": "lokaal"}, "system"),
     ],
 )
-def test_register_refuses_secrets_and_sso_only_break_glass(paired_client: Any, auth: Any, body: dict, fragment: str) -> None:
+def test_register_refuses_secrets_and_sso_only_break_glass(
+    paired_client: Any, auth: Any, body: dict, fragment: str
+) -> None:
     r = paired_client.post(f"{BASE}/recovery/accounts", json=body, headers=idem(auth("admin")))
     assert r.status_code == 422 and r.json()["code"] == "validation_error"
     assert fragment.lower() in r.text.lower()
@@ -191,30 +248,39 @@ def test_register_refuses_secrets_and_sso_only_break_glass(paired_client: Any, a
 def test_emergency_access_rules(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
     normal = _create_account(c, h, system="truenas", username="truenas_admin", login_kind="lokaal")
-    r = c.put(f"{BASE}/recovery/accounts/{normal['id']}/emergency-access", json={"network_scopes": [LAN]},
-              headers=idem(h))
+    r = c.put(
+        f"{BASE}/recovery/accounts/{normal['id']}/emergency-access", json={"network_scopes": [LAN]}, headers=idem(h)
+    )
     assert r.status_code == 409 and r.json()["code"] == "geen_noodaccount"
     bg = _create_account(c, h, system="hub_local", username="nood2", login_kind="beide", is_break_glass=True)
     for scopes in ([{"cidr": "0.0.0.0/0", "kind": "lan"}], [{"cidr": "8.8.8.0/24", "kind": "vpn"}]):
-        r = c.put(f"{BASE}/recovery/accounts/{bg['id']}/emergency-access", json={"network_scopes": scopes},
-                  headers=idem(h))
+        r = c.put(
+            f"{BASE}/recovery/accounts/{bg['id']}/emergency-access", json={"network_scopes": scopes}, headers=idem(h)
+        )
         assert r.status_code == 422 and "internet" in r.json()["message"]
-    r = c.put(f"{BASE}/recovery/accounts/{bg['id']}/emergency-access",
-              json={"network_scopes": [LAN], "session_max_minutes": 600}, headers=idem(h))
+    r = c.put(
+        f"{BASE}/recovery/accounts/{bg['id']}/emergency-access",
+        json={"network_scopes": [LAN], "session_max_minutes": 600},
+        headers=idem(h),
+    )
     assert r.status_code == 422  # sessieduur max. 240 minuten
     r = c.put(f"{BASE}/recovery/accounts/{bg['id']}/emergency-access", json={"network_scopes": [LAN]}, headers=idem(h))
     assert r.status_code == 201
     etag = r.headers["ETag"]
     rv = c.post(f"{BASE}/recovery/accounts/{bg['id']}/emergency-access/review", headers=idem(h, **{"If-Match": etag}))
     assert rv.status_code == 200
-    rk = c.post(f"{BASE}/recovery/accounts/{bg['id']}/emergency-access/revoke",
-                headers=idem(h, **{"If-Match": rv.headers["ETag"]}))
+    rk = c.post(
+        f"{BASE}/recovery/accounts/{bg['id']}/emergency-access/revoke",
+        headers=idem(h, **{"If-Match": rv.headers["ETag"]}),
+    )
     assert rk.status_code == 200 and rk.json()["status"] == "ingetrokken"
     ev = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": bg["id"], "client_ip": "192.168.50.2"}, headers=h)
     assert ev.json()["allowed"] is False
     # een noodaccount kan niet naar SSO-only worden gezet
     etag = c.get(f"{BASE}/recovery/accounts/{bg['id']}", headers=h).headers["ETag"]
-    r = c.patch(f"{BASE}/recovery/accounts/{bg['id']}", json={"login_kind": "sso"}, headers=idem(h, **{"If-Match": etag}))
+    r = c.patch(
+        f"{BASE}/recovery/accounts/{bg['id']}", json={"login_kind": "sso"}, headers=idem(h, **{"If-Match": etag})
+    )
     assert r.status_code == 422
 
 
@@ -222,17 +288,26 @@ def test_hub_service_can_evaluate_and_report_but_not_manage(paired_client: Any, 
     c, h = paired_client, auth("admin")
     acc = _prepare_break_glass(c, h)
     svc = {"Authorization": f"Bearer {fake_hub.issued_token}"}
-    ev = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=svc)
+    ev = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=svc
+    )
     assert ev.status_code == 200 and ev.json()["allowed"]
-    act = c.post(f"{BASE}/break-glass/activations",
-                 json={"account_id": acc["id"], "client_ip": "192.168.50.3", "mode": "oefening"}, headers=idem(svc))
+    act = c.post(
+        f"{BASE}/break-glass/activations",
+        json={"account_id": acc["id"], "client_ip": "192.168.50.3", "mode": "oefening"},
+        headers=idem(svc),
+    )
     assert act.status_code == 201 and act.json()["rotation_required"] is False
     assert act.json()["reported_by"] == "service:hub"
     assert c.post(f"{BASE}/recovery/kit/export", json={"passphrase": PASSPHRASE}, headers=idem(svc)).status_code == 403
     assert c.get(f"{BASE}/recovery/accounts", headers=svc).status_code == 403
     viewer = auth("viewer")
-    assert c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"},
-                  headers=viewer).status_code == 403
+    assert (
+        c.post(
+            f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=viewer
+        ).status_code
+        == 403
+    )
 
 
 def test_pagination_of_accounts(paired_client: Any, auth: Any) -> None:
