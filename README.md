@@ -48,4 +48,4 @@ make openapi                # OpenAPI opnieuw exporteren (CI faalt bij drift)
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met
 databases `hch_test_*`. `deploy/dev/compose.yaml` is alleen voor ontwikkeling — **geen** installatiemethode.
 
-Geen licentie toegevoegd (keuze van de eigenaar).
+Licentie: **GPL-3.0** (zie [`LICENSE`](LICENSE); besluit van de eigenaar, 2026-11-09).
