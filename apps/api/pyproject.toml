@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "home-control-hub"
+version = "0.1.0"
+description = "Home Control Hub — integratiedienst (netwerk/privacy, Node-RED, Authentik/SSO, energie/resources) voor TrueNAS Home Platform V2"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.162.2",
+    "uvicorn==0.54.0",
+    "sqlalchemy==2.1.8",
+    "alembic==1.20.1",
+    "psycopg[binary]==3.3.8",
+    "pydantic==2.14.3",
+    "httpx==0.28.1",
+    "pyjwt[crypto]==2.15.1",
+    "cryptography==50.0.2",
+    "python-multipart==0.0.33",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+    "mypy==2.4.1",
+    "pyyaml==6.0.3",
+    "types-PyYAML==6.0.12.20261103",
+    "pip-audit==2.10.1",
+]
+
+[project.scripts]
+hch = "integrations.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+integrations = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003", "B008", "E501"]  # E501: de formatter bewaakt de regellengte; lange NL-teksten blijven heel
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108", "S311"]
+"alembic/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["integrations"]
+mypy_path = "src"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: vereist PostgreSQL (HCH_TEST_DATABASE_URL of de lokale ontwikkel-PostgreSQL)",
+]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
