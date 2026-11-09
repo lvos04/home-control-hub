@@ -287,7 +287,7 @@ def test_emergency_access_rules(paired_client: Any, auth: Any) -> None:
 def test_hub_service_can_evaluate_and_report_but_not_manage(paired_client: Any, auth: Any, fake_hub: FakeHub) -> None:
     c, h = paired_client, auth("admin")
     acc = _prepare_break_glass(c, h)
-    svc = {"Authorization": f"Bearer {fake_hub.issued_token}"}
+    svc = fake_hub.service_auth()
     ev = c.post(
         f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=svc
     )

@@ -95,6 +95,17 @@ def test_safety_rules_in_catalog() -> None:
         "http://127.0.0.1:30400",
         "http://[::1]:30400",
         "nas:30400",
+        # contract 1.2 §3.2: geen pad, geen link-local, geen 0.0.0.0/::, geen fragment, geldige poort
+        "http://nas:30400/api",
+        "http://nas:30400/#x",
+        "http://169.254.10.20:30400",
+        "http://[fe80::1]:30400",
+        "http://0.0.0.0:30400",
+        "http://[::]:30400",
+        "http://nas:0",
+        "http://nas:99999",
+        "http://nas .lan:30400",
+        "",
     ],
 )
 def test_hub_url_rejected(url: str) -> None:
@@ -107,33 +118,34 @@ def test_hub_url_ok_and_loopback_only_in_dev() -> None:
     assert validate_hub_url("http://127.0.0.1:30400", allow_loopback=True) == "http://127.0.0.1:30400"
 
 
-def test_hub_client_retries_then_succeeds() -> None:
-    calls: list[int] = []
+def test_hub_client_never_follows_redirects_and_ignores_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§3.2/§5: 3xx is een storing (nooit volgen) en proxy-omgevingsvariabelen worden genegeerd; één poging per
+    aanroep (herhalen met backoff regelt de koppellogica zelf)."""
+    calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(1)
-        if len(calls) == 1:
-            raise httpx.ConnectError("weg", request=request)
-        if len(calls) == 2:
-            return httpx.Response(503)
-        return httpx.Response(200, json={"ok": True})
+        calls.append(str(request.url))
+        if request.url.host == "hub.test":
+            return httpx.Response(302, headers={"Location": "http://evil.test/api/v1/services/enroll"})
+        return httpx.Response(200)
 
-    client = HubClient(Settings(), transport=httpx.MockTransport(handler), sleep=lambda _s: None)
-    assert client.get_json("http://hub.test", "/x") == {"ok": True}
-    assert len(calls) == 3
-
-
-def test_hub_client_max_three_attempts_and_no_retry_on_4xx() -> None:
-    calls: list[int] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(1)
-        return httpx.Response(503 if "retry" in request.url.path else 400)
-
-    client = HubClient(Settings(), transport=httpx.MockTransport(handler), sleep=lambda _s: None)
-    assert client.request("GET", "http://hub.test", "/retry").status_code == 503 and len(calls) == 3
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    client = HubClient(Settings(), transport=httpx.MockTransport(handler))
+    r = client.request("POST", "http://hub.test:30400", "/api/v1/services/enroll", json={})
+    assert r.status_code == 302 and calls == ["http://hub.test:30400/api/v1/services/enroll"]
+    with client.client() as c:
+        assert c.follow_redirects is False and c._trust_env is False
     calls.clear()
-    assert client.request("GET", "http://hub.test", "/fout").status_code == 400 and len(calls) == 1
+
+    def down(request: httpx.Request) -> httpx.Response:
+        calls.append("x")
+        raise httpx.ConnectError("weg", request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        HubClient(Settings(), transport=httpx.MockTransport(down)).request("GET", "http://hub.test", "/x")
+    assert calls == ["x"]
 
 
 def test_default_timeouts_match_contract() -> None:

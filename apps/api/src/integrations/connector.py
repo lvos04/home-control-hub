@@ -4,6 +4,9 @@
 - ``propose`` (P1, B13): voorstellen voor Authentik met preview/diff/``preview_hash`` (R2). Alleen lezen in Authentik.
 - ``apply``/``rollback`` geven eerlijk ``501 capability_unavailable``: toepassen vereist een door de Hub ondertekend
   ``ExecutionRequest`` (contract §8) en komt in P2. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
+- Nieuw in contract 1.2 (§6, §3.8): ``GET /connector/v1/hub-link`` (koppelstatus: witte lijst van §3.5 + gepinde
+  ``kid``'s en ``rotation_sequence``; dienst-JWT of gebruiker ``viewer``+) en ``POST /connector/v1/hub-link/unlink``
+  (ontkoppelen door de Hub met een dienst-JWT of door een beheerder; ``Idempotency-Key``).
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -102,6 +105,8 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
             "propose:sso.sessions.revoke (admin of Hub)",
             "read:events",
             "read:evidence",
+            "read:hub_link",
+            "unlink:hub_link (Hub of admin)",
         ],
         "item_types": {k: v["title_nl"] for k, v in ITEM_TYPES.items()},
         "unbuilt_item_types": UNBUILT_ITEM_TYPES,
@@ -298,3 +303,43 @@ def poll_events(
         "next_cursor": encode_cursor(rows[-1].seq) if rows else cursor,
         "dead_letter_count": dead,
     }
+
+
+def hub_link_view(request: Request) -> dict[str, Any]:
+    st = request.app.state.hublink.state()
+    view = st.public()
+    view["pinned_kids"] = {
+        "jwt": [p.kid for p in st.pins.jwt] if st.pins else [],
+        "policy": [p.kid for p in st.pins.policy] if st.pins else [],
+    }
+    view["rotation_sequence"] = st.pins.rotation_sequence if st.pins else None
+    view["observed_at"] = iso(utcnow())
+    return view
+
+
+@router.get("/hub-link", summary="Koppelstatus met de Hub (witte lijst §3.5, gepinde kid's, rotation_sequence)")
+def hub_link(request: Request, _p: Principal = Depends(require_connector_reader)) -> dict[str, Any]:
+    return hub_link_view(request)
+
+
+@router.post(
+    "/hub-link/unlink",
+    summary="Ontkoppelen (§3.8): door de Hub met een dienst-JWT of door een beheerder; Idempotency-Key verplicht",
+    responses={401: {"description": "o.a. not_linked als al ontkoppeld (telt voor de Hub als geslaagd)"}},
+)
+def hub_link_unlink(
+    request: Request,
+    _body: dict[str, Any] | None = Body(default=None),
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_admin_or_service),
+    key: uuid.UUID = Depends(idempotency_key),
+    tid: str = Depends(trace_id),
+) -> Any:
+    if _body:
+        raise ApiError(422, "validation_error", "Ontkoppelen heeft geen invoer; stuur een lege body of {}.")
+
+    def action() -> tuple[int, Any, dict[str, str]]:
+        request.app.state.hublink.unlink(trace_id=tid, actor=(principal.actor_type, principal.audit_id))
+        return 200, hub_link_view(request), {}
+
+    return run_idempotent(request, session, principal, key, {"unlink": True}, action)

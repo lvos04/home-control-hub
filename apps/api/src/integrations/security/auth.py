@@ -1,32 +1,63 @@
-"""Authenticatie en rollen (contract §4).
+"""Inkomende authenticatie en rollen (contract 1.2 §4): alleen Hub-JWT's, gecontroleerd tegen de **gepinde** sleutels.
 
-Twee soorten ``Authorization: Bearer``:
-
-1. **Hub-JWT** (gebruikerscontext): EdDSA, ``iss=hub``, ``aud=home-control-hub``, ``sub``, ``roles``,
-   ``exp - iat <= 120 s``; sleutel uit de Hub-JWKS (gecachet, fail-closed).
-2. **Service-token** (dienst-naar-dienst): het token dat deze dienst bij de enrollment van de Hub kreeg. Alleen de
-   Hub (uitgever) kent het; wij bewaren het versleuteld in de vault plus een SHA-256 voor vergelijking in constante tijd.
-   Zie ADR-0002 voor deze interpretatie.
-
-Zonder geldige auth → 401 ``unauthorized``; zonder koppeling of bruikbare JWKS ook 401 (fail-closed).
+- Gebruikers: JWT met ``token_use: "user"`` (§4.2), rollen ⊂ {admin, operator, viewer, kind}; rol ``kind`` wint altijd.
+- De Hub als dienst: dienst-JWT met ``token_use: "hub_service"``, ``sub: "hub"``, ``roles: ["service"]`` en de eigen
+  ``service_id`` (§4.3) → principal ``service:hub`` met rol ``service`` (nooit ``admin``; rechten in ADR-0010).
+- Een inkomend ``Bearer svc_…`` (een service-token) wordt **niet** geaccepteerd (``service_token_not_accepted``).
+- Vertrouwensset = ``pins.jwt`` uit ``hub-link.json`` (§4.5); een via HTTP opgehaalde JWKS voegt nooit iets toe.
+  Onbekende ``kid`` → direct 401 ``unknown_key`` en op de achtergrond een extra poll van de ondertekende
+  sleutelrotaties (hooguit 1× per 30 s).
+- ``jti`` verplicht op elke JWT; een mutatie (POST/PUT/PATCH/DELETE) met een al gebruikte ``jti`` → 401
+  ``token_replayed``, behalve een exacte herhaling (zelfde ``jti``, methode, pad en ``Idempotency-Key``), die de
+  idempotency-laag met het opgeslagen resultaat beantwoordt. Replaycontrole niet mogelijk → 503
+  ``replay_check_unavailable`` (fail-closed, §4.6).
+- Vaste ``reason``-waarden (Engels) en controlevolgorde: ``state`` → tokensoort → handtekening/``kid`` → claims →
+  ``token_use`` → ``jti`` (§4.7). Nooit "open access" (EX16).
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jwt
 from fastapi import Depends, Request
 
-from ..errors import forbidden, unauthorized
-from .jwks import JwksCache, JwksUnavailable, UnknownKey
+from ..errors import ApiError, forbidden
+from .hubkeys import InvalidKeyError, public_key_from_jwk
+
+if TYPE_CHECKING:
+    from ..hublink_store import HubLinkStore
+    from .replay import ReplayGuard
 
 KNOWN_ROLES = frozenset({"admin", "operator", "viewer", "kind"})
 SERVICE_ROLE = "service"
+MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: Vaste ``reason``-waarden van §4.7 (Engels, voor machines); de ``message`` is Nederlands.
+REASON_MESSAGES: dict[str, str] = {
+    "not_linked": "Niet geautoriseerd: deze dienst is (nog) niet met de Hub gekoppeld.",
+    "revoked": "Niet geautoriseerd: de Hub heeft de koppeling ingetrokken; opnieuw koppelen gaat via de Hub.",
+    "service_token_not_accepted": "Niet geautoriseerd: een service-token wordt hier niet geaccepteerd; de Hub meldt "
+    "zich met een dienst-JWT.",
+    "unknown_key": "Niet geautoriseerd: het token is ondertekend met een sleutel die deze dienst niet vertrouwt.",
+    "token_expired": "Niet geautoriseerd: het token is verlopen.",
+    "invalid_token": "Niet geautoriseerd: geen of een ongeldig token.",
+    "token_use_invalid": "Niet geautoriseerd: het token is niet bedoeld voor dit gebruik.",
+    "jti_missing": "Niet geautoriseerd: het token heeft geen 'jti'.",
+    "token_replayed": "Niet geautoriseerd: dit token is al voor een andere wijziging gebruikt; vraag een nieuw token "
+    "aan de Hub.",
+}
+REASONS = tuple(REASON_MESSAGES)
+
+
+def auth_error(reason: str) -> ApiError:
+    if reason not in REASON_MESSAGES:  # pragma: no cover - programmeerfout
+        raise ValueError(reason)
+    return ApiError(401, "unauthorized", REASON_MESSAGES[reason], {"reason": reason}, {"WWW-Authenticate": "Bearer"})
 
 
 @dataclass(frozen=True)
@@ -61,98 +92,148 @@ def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def validate_jwt(token: str, cache: JwksCache, policy: JwtPolicy) -> Principal:
+def _same_uuid(a: Any, b: str | None) -> bool:
+    if not isinstance(a, str) or not b:
+        return False
     try:
-        header = jwt.get_unverified_header(token)
-    except jwt.PyJWTError as exc:
-        raise unauthorized("token_onleesbaar") from exc
-    if header.get("alg") != "EdDSA":
-        raise unauthorized("algoritme_niet_toegestaan")
-    kid = header.get("kid")
-    try:
-        key = cache.get_key(kid if isinstance(kid, str) else None)
-    except JwksUnavailable as exc:
-        raise unauthorized(
-            "jwks_niet_beschikbaar", "Niet geautoriseerd: sleutels van de Hub zijn niet beschikbaar."
-        ) from exc
-    except UnknownKey as exc:
-        raise unauthorized("onbekende_sleutel") from exc
-    try:
-        claims: dict[str, Any] = jwt.decode(
-            token,
-            key=key,
-            algorithms=["EdDSA"],
-            audience=policy.audience,
-            issuer=policy.issuer,
-            leeway=policy.leeway_s,
-            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
-        )
-    except jwt.ExpiredSignatureError as exc:
-        raise unauthorized("token_verlopen") from exc
-    except jwt.InvalidAudienceError as exc:
-        raise unauthorized("verkeerde_audience") from exc
-    except jwt.InvalidIssuerError as exc:
-        raise unauthorized("verkeerde_issuer") from exc
-    except jwt.PyJWTError as exc:
-        raise unauthorized("token_ongeldig") from exc
-    exp, iat = claims.get("exp"), claims.get("iat")
-    if not isinstance(exp, int | float) or not isinstance(iat, int | float) or exp - iat > policy.max_lifetime_s:
-        raise unauthorized("levensduur_te_lang")
-    sub = claims.get("sub")
-    if not isinstance(sub, str) or not sub:
-        raise unauthorized("geen_subject")
-    raw_roles = claims.get("roles", [])
-    roles = (
-        frozenset(r for r in raw_roles if isinstance(r, str) and r in KNOWN_ROLES)
-        if isinstance(raw_roles, list)
-        else frozenset()
-    )
-    jti = claims.get("jti")
-    return Principal(
-        kind="user",
-        subject=sub,
-        roles=roles,
-        token_id=jti if isinstance(jti, str) and jti else None,
-        expires_at=float(exp),
-    )
+        return uuid.UUID(a) == uuid.UUID(b)
+    except ValueError:
+        return False
+
+
+def principal_from_claims(claims: dict[str, Any], own_service_id: str | None) -> Principal:
+    """De ``token_use``-controles van §4.3 (stap 5 van §4.7)."""
+    use = claims.get("token_use")
+    roles = claims.get("roles")
+    if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
+        raise auth_error("token_use_invalid")
+    exp = float(claims["exp"])
+    jti = claims.get("jti") if isinstance(claims.get("jti"), str) else None
+    if use == "user":
+        if SERVICE_ROLE in roles:
+            raise auth_error("token_use_invalid")
+        known = frozenset(r for r in roles if r in KNOWN_ROLES)
+        if "kind" in known:  # §4.2: rol 'kind' wint altijd van andere rollen in dezelfde JWT
+            known = frozenset({"kind"})
+        return Principal("user", str(claims["sub"])[:200], known, jti, exp)
+    if use == "hub_service":
+        if (
+            claims.get("sub") != "hub"
+            or roles != [SERVICE_ROLE]
+            or not _same_uuid(claims.get("service_id"), own_service_id)
+        ):
+            raise auth_error("token_use_invalid")
+        return Principal("service", "hub", frozenset({SERVICE_ROLE}), jti, exp)
+    raise auth_error("token_use_invalid")
 
 
 class Authenticator:
-    """Wordt in ``app.state.auth`` gezet; de service-token-hash komt uit de enrollment-status."""
+    """Wordt in ``app.state.auth`` gezet. Leest bij elk verzoek de actuele koppelstatus (``hub-link.json``)."""
 
-    def __init__(self, cache: JwksCache, policy: JwtPolicy, service_token_hash: Callable[[], str | None]) -> None:
-        self.cache = cache
+    def __init__(
+        self,
+        store: HubLinkStore,
+        policy: JwtPolicy,
+        replay: ReplayGuard | None = None,
+        on_unknown_kid: Callable[[], None] | None = None,
+    ) -> None:
+        self.store = store
         self.policy = policy
-        self._service_token_hash = service_token_hash
+        self.replay = replay
+        self.on_unknown_kid = on_unknown_kid
 
-    def authenticate(self, authorization: str | None) -> Principal:
-        if not authorization:
-            raise unauthorized("geen_token")
-        scheme, _, token = authorization.partition(" ")
+    def authenticate(
+        self,
+        authorization: str | None,
+        *,
+        method: str = "GET",
+        path: str = "/",
+        idempotency_key: str | None = None,
+    ) -> Principal:
+        # 1. state
+        link = self.store.read()
+        if link.state == "ingetrokken":
+            raise auth_error("revoked")
+        if not link.linked or link.pins is None:
+            raise auth_error("not_linked")
+        # 2. tokensoort
+        scheme, _, token = (authorization or "").partition(" ")
         token = token.strip()
         if scheme.lower() != "bearer" or not token:
-            raise unauthorized("geen_bearer_token")
-        # altijd eerst de koppelstatus verversen: die bepaalt ook welke Hub-JWKS geldig is
-        expected = self._service_token_hash()
-        if token.count(".") == 2:
-            return validate_jwt(token, self.cache, self.policy)
-        if not expected:
-            raise unauthorized("niet_gekoppeld", "Niet geautoriseerd: deze dienst is nog niet aan de Hub gekoppeld.")
-        if not hmac.compare_digest(sha256_hex(token), expected):
-            raise unauthorized("service_token_ongeldig")
-        return Principal(kind="service", subject="hub", roles=frozenset({SERVICE_ROLE}))
+            raise auth_error("invalid_token")
+        if token.startswith("svc_"):
+            raise auth_error("service_token_not_accepted")
+        if len(token) > 8192 or token.count(".") != 2:
+            raise auth_error("invalid_token")
+        # 3. handtekening en kid: alleen gepinde sleutels, vergeleken op de sleutel zelf (x)
+        try:
+            header = jwt.get_unverified_header(token)
+        except jwt.PyJWTError as exc:
+            raise auth_error("invalid_token") from exc
+        if header.get("alg") != "EdDSA":
+            raise auth_error("invalid_token")
+        kid = header.get("kid")
+        pin = next((p for p in link.pins.jwt if isinstance(kid, str) and p.kid == kid), None)
+        if pin is None:
+            if self.on_unknown_kid is not None:
+                self.on_unknown_kid()  # achtergrond-poll; dit verzoek wacht er niet op
+            raise auth_error("unknown_key")
+        try:
+            key = public_key_from_jwk({"kty": "OKP", "crv": "Ed25519", "x": pin.jwk.x})
+        except InvalidKeyError as exc:  # pragma: no cover - pins zijn bij het opslaan al gecontroleerd
+            raise auth_error("unknown_key") from exc
+        # 4. claims
+        p = self.policy
+        try:
+            claims: dict[str, Any] = jwt.decode(
+                token,
+                key,
+                algorithms=["EdDSA"],
+                audience=p.audience,
+                issuer=p.issuer,
+                leeway=p.leeway_s,
+                options={"require": ["exp", "iat", "nbf", "iss", "aud", "sub"]},
+            )
+        except jwt.ExpiredSignatureError as exc:
+            raise auth_error("token_expired") from exc
+        except jwt.PyJWTError as exc:
+            raise auth_error("invalid_token") from exc
+        exp, iat = claims.get("exp"), claims.get("iat")
+        if not isinstance(exp, int | float) or not isinstance(iat, int | float) or isinstance(exp, bool):
+            raise auth_error("invalid_token")
+        if float(exp) - float(iat) > p.max_lifetime_s:
+            raise auth_error("invalid_token")
+        if not isinstance(claims.get("sub"), str) or not claims["sub"]:
+            raise auth_error("invalid_token")
+        # 5. token_use
+        principal = principal_from_claims(claims, link.service_id)
+        # 6. jti (+ replaycache voor mutaties)
+        jti = claims.get("jti")
+        if not isinstance(jti, str) or not 1 <= len(jti) <= 128:
+            raise auth_error("jti_missing")
+        if method.upper() in MUTATING_METHODS:
+            if self.replay is None:  # pragma: no cover - de app zet altijd een replaycache
+                raise ApiError(503, "replay_check_unavailable", "De controle op hergebruik van tokens ontbreekt.")
+            self.replay.check(
+                iss=p.issuer,
+                jti=jti,
+                exp=float(exp),
+                subject=principal.audit_id,
+                method=method.upper(),
+                path=path,
+                idempotency_key=idempotency_key,
+            )
+        return principal
 
 
 def current_principal(request: Request) -> Principal:
     auth: Authenticator = request.app.state.auth
-    principal = auth.authenticate(request.headers.get("Authorization"))
-    guard = getattr(request.app.state, "replay_guard", None)
-    if guard is not None and principal.kind == "user" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        from .replay import valid_idempotency_key
-
-        key = valid_idempotency_key(request.headers.get("Idempotency-Key"))
-        if key is not None:  # alleen echte mutaties (zonder geldige key weigert de route zelf met 400)
-            guard.check(principal, request.method, request.url.path, key)
+    principal = auth.authenticate(
+        request.headers.get("Authorization"),
+        method=request.method,
+        path=request.url.path,
+        idempotency_key=request.headers.get("Idempotency-Key"),
+    )
     request.state.principal = principal
     return principal
 

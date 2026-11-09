@@ -76,7 +76,7 @@ def _outbox(c: Any) -> list[tuple[str, dict[str, Any], str]]:
 
 
 def _service(fake_hub: FakeHub) -> dict[str, str]:
-    return {"Authorization": f"Bearer {fake_hub.issued_token}"}
+    return fake_hub.service_auth()
 
 
 # ------------------------------------------------------------------ detectie
@@ -480,10 +480,19 @@ def test_jwt_replay_rejected_for_mutations(paired_client: Any, hub_keys: HubKeys
         json={**body, "username": "tweede"},
         headers={**token, "Idempotency-Key": str(uuid.uuid4())},
     )
-    assert other.status_code == 401 and other.json()["details"]["reason"] == "token_hergebruikt"
+    assert other.status_code == 401 and other.json()["details"]["reason"] == "token_replayed"
     assert c.get(f"{BASE}/recovery/accounts", headers=token).status_code == 200  # lezen mag binnen de levensduur
     now = int(time.time())
-    claims = {"iss": "hub", "aud": "home-control-hub", "sub": "user-1", "roles": ["admin"], "iat": now, "exp": now + 60}
+    claims = {
+        "iss": "hub",
+        "aud": "home-control-hub",
+        "sub": "user-1",
+        "token_use": "user",
+        "roles": ["admin"],
+        "iat": now,
+        "nbf": now,
+        "exp": now + 60,
+    }
     raw = jwt.encode(claims, hub_keys.private, algorithm="EdDSA", headers={"kid": hub_keys.kid})
     no_jti = {"Authorization": f"Bearer {raw}"}
     r = c.post(
@@ -491,7 +500,7 @@ def test_jwt_replay_rejected_for_mutations(paired_client: Any, hub_keys: HubKeys
         json={**body, "username": "derde"},
         headers={**no_jti, "Idempotency-Key": str(uuid.uuid4())},
     )
-    assert r.status_code == 401 and r.json()["details"]["reason"] == "jti_ontbreekt"
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "jti_missing"
 
 
 def test_worker_syncs_authentik_and_pushes_events(

@@ -91,15 +91,17 @@ def test_every_mutation_requires_idempotency_key(paired_client: Any, auth: Any, 
 
 
 def test_jwt_cannot_claim_service_role(paired_client: Any, hub_keys: Any) -> None:
-    """De rol 'service' komt alleen uit het service-token van de koppeling, nooit uit een JWT-claim."""
+    """De rol 'service' komt alleen uit een dienst-JWT (``token_use: hub_service``, ``sub: hub``, eigen
+    ``service_id``), nooit uit een gebruikers-JWT (contract 1.2 §4.3: ``token_use_invalid``)."""
     forged = {"Authorization": f"Bearer {hub_keys.token(['service'])}"}
-    assert paired_client.get("/connector/v1/events", headers=forged).status_code == 403
+    r = paired_client.get("/connector/v1/events", headers=forged)
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "token_use_invalid"
     r = paired_client.post(
         "/integrations/v1/sso/break-glass/evaluate",
         json={"account_id": str(uuid.uuid4()), "client_ip": "10.1.2.3"},
-        headers=forged,
+        headers={"Authorization": f"Bearer {hub_keys.token(['service', 'admin'])}"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "token_use_invalid"
 
 
 # ------------------------------------------------------------------ B13-003: geen header-SSO
@@ -117,7 +119,7 @@ TRUSTED_HEADER_ATTEMPT = {
 
 def test_b13_003_no_access_via_forwarded_user_headers(paired_client: Any, auth: Any) -> None:
     c = paired_client
-    for url in ("/integrations/v1/sso/recovery/overview", "/connector/v1/discover", "/integrations/v1/enrollment"):
+    for url in ("/integrations/v1/sso/recovery/overview", "/connector/v1/discover", "/connector/v1/hub-link"):
         r = c.get(url, headers=TRUSTED_HEADER_ATTEMPT)
         assert r.status_code == 401 and r.json()["code"] == "unauthorized", url
     # een viewer wordt geen admin door headers mee te sturen
@@ -192,7 +194,7 @@ def test_status_page_shows_only_recovery_level(paired_client: Any, auth: Any) ->
 
 
 # ------------------------------------------------------------------ eenmalig enrollment-token
-def test_env_token_is_single_use_across_unpair_and_restart(
+def test_env_token_is_single_use_across_unlink_and_restart(
     make_settings: Any, fake_hub: FakeHub, app_factory: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
@@ -201,18 +203,19 @@ def test_env_token_is_single_use_across_unpair_and_restart(
     w.run_once()
     assert len(fake_hub.enroll_requests) == 1
     c = app_factory(hub_url=HUB_URL, enrollment_token=ENV_TOKEN)
+    token = c.app.state.hublink.state().service_token
+    assert token
     h = {"Authorization": f"Bearer {fake_hub.keys.token(['admin'])}"}
-    assert c.post("/integrations/v1/enrollment/unpair", headers=idem(h)).status_code == 200
-    # na ontkoppelen én na een herstart (nieuwe worker) wordt het gebruikte token nooit opnieuw verstuurd
-    w.state.next_enroll_at = 0
+    assert c.post("/connector/v1/hub-link/unlink", headers=idem(fake_hub.service_auth())).status_code == 200
+    # na ontkoppelen én na een herstart (nieuwe worker) wordt het gebruikte token nooit opnieuw verstuurd (§3.5)
     w.run_once()
     Worker(settings, transport=fake_hub.transport).run_once()
     assert len(fake_hub.enroll_requests) == 1
-    with c.app.state.db.sessions() as s:
-        assert c.app.state.enrollment.public_state(s)["status"] == "niet_gekoppeld"
-    assert c.get("/connector/v1/discover", headers=h).status_code == 401  # fail-closed na ontkoppelen
+    assert c.app.state.hublink.state().state == "ontkoppeld"
+    r = c.get("/connector/v1/discover", headers=h)
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "not_linked"  # fail-closed na ontkoppelen
     logged = "\n".join(r.getMessage() for r in caplog.records)
-    assert ENV_TOKEN not in logged and fake_hub.issued_token not in logged
+    assert ENV_TOKEN not in logged and token not in logged
 
 
 # ------------------------------------------------------------------ B10-002 in het datamodel

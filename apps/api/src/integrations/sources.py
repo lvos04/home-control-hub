@@ -96,7 +96,8 @@ def probe_http(
     )
     started = time.monotonic()
     try:
-        with httpx.Client(timeout=timeout, transport=transport, follow_redirects=False) as client:
+        # contract §5: uitgaande calls negeren proxy-omgevingsvariabelen (trust_env=False)
+        with httpx.Client(timeout=timeout, transport=transport, follow_redirects=False, trust_env=False) as client:
             resp = client.get(base_url + path)
     except httpx.TimeoutException:
         return "down", "timeout", {"elapsed_ms": int((time.monotonic() - started) * 1000)}
@@ -180,7 +181,9 @@ def put_source(
     base_url: str | None = None
     if body.base_url:
         try:
-            base_url = validate_hub_url(body.base_url, settings.allow_loopback_hub, label="Het adres van de bron")
+            base_url = validate_hub_url(
+                body.base_url, settings.allow_loopback_hub, label="Het adres van de bron", allow_path=True
+            )
         except HubUrlError as exc:
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
     if body.enabled and not base_url:

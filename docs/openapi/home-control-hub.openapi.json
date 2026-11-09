@@ -797,7 +797,7 @@
     }
   },
   "info": {
-    "description": "Integraties B10 netwerk/privacy, B11 Node-RED, B13 Authentik/SSO (incl. beheerherstel B13-001) en B14 energie/resources voor TrueNAS Home Platform V2. Niet-gebouwde functies geven `501 capability_unavailable`; nooit gesimuleerd succes.",
+    "description": "Integraties B10 netwerk/privacy, B11 Node-RED, B13 Authentik/SSO (incl. beheerherstel B13-001) en B14 energie/resources voor TrueNAS Home Platform V2 (platformcontract 1.2). Niet-gebouwde functies geven `501 capability_unavailable`; nooit gesimuleerd succes.",
     "title": "Home Control Hub — integratiedienst",
     "version": "0.1.0"
   },
@@ -973,6 +973,99 @@
           }
         },
         "summary": "Gezondheid volgens het connectorcontract",
+        "tags": [
+          "connector"
+        ]
+      }
+    },
+    "/connector/v1/hub-link": {
+      "get": {
+        "operationId": "hub_link_connector_v1_hub_link_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Hub Link Connector V1 Hub Link Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Koppelstatus met de Hub (witte lijst §3.5, gepinde kid's, rotation_sequence)",
+        "tags": [
+          "connector"
+        ]
+      }
+    },
+    "/connector/v1/hub-link/unlink": {
+      "post": {
+        "operationId": "hub_link_unlink_connector_v1_hub_link_unlink_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": " Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Hub Link Unlink Connector V1 Hub Link Unlink Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "o.a. not_linked als al ontkoppeld (telt voor de Hub als geslaagd)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ontkoppelen (§3.8): door de Hub met een dienst-JWT of door een beheerder; Idempotency-Key verplicht",
         "tags": [
           "connector"
         ]
@@ -1429,78 +1522,6 @@
         "summary": "energy.workload.read (nog niet gebouwd → 501 capability_unavailable)",
         "tags": [
           "energy"
-        ]
-      }
-    },
-    "/integrations/v1/enrollment": {
-      "get": {
-        "operationId": "enrollment_state_integrations_v1_enrollment_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Enrollment State Integrations V1 Enrollment Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Koppelstatus met de Hub",
-        "tags": [
-          "koppeling"
-        ]
-      }
-    },
-    "/integrations/v1/enrollment/unpair": {
-      "post": {
-        "operationId": "unpair_integrations_v1_enrollment_unpair_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Unpair Integrations V1 Enrollment Unpair Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ontkoppelen van de Hub (admin)",
-        "tags": [
-          "koppeling"
         ]
       }
     },
@@ -4207,7 +4228,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Klaar voor verkeer: database, migraties, geheimen (zonder auth)",
+        "summary": "Klaar voor verkeer: database, migraties, geheimen (zonder auth, zonder geheimen)",
         "tags": [
           "gezondheid"
         ]

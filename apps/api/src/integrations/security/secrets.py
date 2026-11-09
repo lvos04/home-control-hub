@@ -7,14 +7,14 @@
 Bestanden:
 - ``vault.key``         32 willekeurige bytes (AES-256-GCM voor opgeslagen credentials van andere apps)
 - ``identity.ed25519``  eigen Ed25519-identiteit (PEM, PKCS#8); de publieke sleutel gaat bij het koppelen naar de Hub
+                        als ``{kty, crv, x, kid}`` met ``kid`` = RFC 7638-thumbprint (contract 1.2 §3.3)
+- ``hub-link.json``     koppelstatus met de Hub (§3.5); géén gegenereerd geheim: wordt door ``hublink_store`` atomair
+                        vervangen en hier nooit aangemaakt
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
-import hashlib
-import json
 import os
 import secrets
 import stat
@@ -22,6 +22,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from .hubkeys import enroll_jwk
 
 VAULT_KEY = "vault.key"
 IDENTITY_KEY = "identity.ed25519"
@@ -94,17 +96,9 @@ def load_identity(secrets_dir: Path) -> Ed25519PrivateKey:
     return key
 
 
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def public_jwk(private_key: Ed25519PrivateKey) -> dict[str, str]:
-    """Publieke JWK (RFC 8037) met RFC 7638-thumbprint als ``kid``."""
-    raw = private_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    x = b64url(raw)
-    thumb_input = json.dumps({"crv": "Ed25519", "kty": "OKP", "x": x}, separators=(",", ":"), sort_keys=True)
-    kid = b64url(hashlib.sha256(thumb_input.encode()).digest())
-    return {"kty": "OKP", "crv": "Ed25519", "x": x, "kid": kid, "use": "sig", "alg": "EdDSA"}
+def enroll_public_jwk(private_key: Ed25519PrivateKey) -> dict[str, str]:
+    """Publieke JWK voor het enroll-verzoek: precies ``kty, crv, x, kid`` (geen ``use``/``alg``; contract 1.2 §3.3)."""
+    return enroll_jwk(private_key.public_key())
 
 
 def secrets_present(secrets_dir: Path) -> dict[str, bool]:

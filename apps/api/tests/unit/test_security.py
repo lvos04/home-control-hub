@@ -1,214 +1,330 @@
-"""Unit: JWKS-cache (fail-closed), JWT-validatie (§4), service-token, geheimen-init, redactie."""
+"""Unit: inkomende authenticatie volgens contract 1.2 §4.3–§4.7 (gepinde sleutels, vaste ``reason``-waarden en hun
+controlevolgorde, ``token_use``, ``jti`` + replay), geheimen-init en redactie."""
 
 from __future__ import annotations
 
 import os
 import stat
 import time
+import uuid
 from pathlib import Path
+from typing import Any
 
 import jwt
 import pytest
 
+from integrations.enrollment import _pins_from
 from integrations.errors import ApiError
+from integrations.hublink_store import HubLinkStore, LinkState
 from integrations.redact import looks_like_secret, redact
-from integrations.security.auth import Authenticator, JwtPolicy, sha256_hex, validate_jwt
-from integrations.security.jwks import JwksCache, JwksUnavailable, UnknownKey, parse_jwks
-from integrations.security.secrets import ensure_secrets, load_identity, load_vault_key, public_jwk
-from tests.conftest import HubKeys
+from integrations.security.auth import REASONS, Authenticator, JwtPolicy
+from integrations.security.hubkeys import validate_hub_jwk
+from integrations.security.secrets import enroll_public_jwk, ensure_secrets, load_identity, load_vault_key
+from tests.conftest import HubKeys, SimKey
+
+SID = str(uuid.uuid4())
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.t = 1000.0
+class MemoryReplay:
+    """Zelfde regels als ``ReplayGuard`` (§4.6), in het geheugen."""
 
-    def __call__(self) -> float:
-        return self.t
+    def __init__(self, broken: bool = False) -> None:
+        self.seen: dict[tuple[str, str], tuple[str, str, str, str | None]] = {}
+        self.broken = broken
+
+    def check(
+        self, *, iss: str, jti: str, exp: float, subject: str, method: str, path: str, idempotency_key: Any
+    ) -> None:
+        from integrations.security.auth import auth_error
+
+        if self.broken:
+            raise ApiError(503, "replay_check_unavailable", "weg")
+        key = (iss, jti)
+        now = (subject, method, path, idempotency_key)
+        if key not in self.seen:
+            self.seen[key] = now
+            return
+        if idempotency_key is None or self.seen[key] != now:
+            raise auth_error("token_replayed")
+
+
+def _store(tmp_path: Path, keys: HubKeys, state: str = "gekoppeld") -> HubLinkStore:
+    store = HubLinkStore(tmp_path)
+    jwks = [validate_hub_jwk(k) for k in keys.jwks()["keys"]]
+    pins = _pins_from(jwks, [validate_hub_jwk(keys.sim.policy_jwk())], "enroll", "2026-11-09T12:00:00Z")
+    linked = state == "gekoppeld"
+    store.write_initial(
+        LinkState(
+            state=state,  # type: ignore[arg-type]
+            hub_url="http://hub.test:30400",
+            service_id=SID,
+            first_linked_at="2026-11-09T12:00:00Z",
+            service_token=("svc_" + "a" * 43) if linked else None,
+            pins=pins if linked else None,
+            previous_pins=None if linked else pins,
+        )
+    )
+    return store
+
+
+@pytest.fixture
+def replay() -> MemoryReplay:
+    return MemoryReplay()
+
+
+@pytest.fixture
+def unknown_polls() -> list[int]:
+    return []
+
+
+@pytest.fixture
+def authn(tmp_path: Path, hub_keys: HubKeys, replay: MemoryReplay, unknown_polls: list[int]) -> Authenticator:
+    return Authenticator(_store(tmp_path, hub_keys), JwtPolicy(), replay, lambda: unknown_polls.append(1))
 
 
 def _reason(exc: pytest.ExceptionInfo[ApiError]) -> str:
+    assert exc.value.status_code == 401 and exc.value.code == "unauthorized"
     return str(exc.value.details["reason"])
 
 
-# ------------------------------------------------------------------ JWKS
-def test_parse_jwks_only_ed25519(hub_keys: HubKeys) -> None:
-    doc = {
-        "keys": [
-            hub_keys.jwk,
-            {"kty": "RSA", "kid": "rsa", "n": "x", "e": "AQAB"},
-            {"kty": "OKP", "crv": "X25519", "x": hub_keys.jwk["x"], "kid": "x"},
-            {"kty": "OKP", "crv": "Ed25519", "x": "kort", "kid": "kapot"},
-        ]
+def _fail(a: Authenticator, token: str | None, method: str = "GET", idem: str | None = None) -> str:
+    header = None if token is None else f"Bearer {token}"
+    with pytest.raises(ApiError) as exc:
+        a.authenticate(header, method=method, path="/connector/v1/propose", idempotency_key=idem)
+    return _reason(exc)
+
+
+def _claims(**over: Any) -> dict[str, Any]:
+    now = int(time.time())
+    base = {
+        "iss": "hub",
+        "aud": "home-control-hub",
+        "sub": "u1",
+        "token_use": "user",
+        "roles": ["admin"],
+        "iat": now,
+        "nbf": now,
+        "exp": now + 60,
+        "jti": str(uuid.uuid4()),
     }
-    keys = parse_jwks(doc)
-    assert list(keys) == [hub_keys.kid]
-    with pytest.raises(ValueError):
-        parse_jwks({"geen": "keys"})
+    base.update(over)
+    return {k: v for k, v in base.items() if v is not None}
 
 
-def test_jwks_cache_fresh_stale_then_fail_closed(hub_keys: HubKeys) -> None:
-    clock = Clock()
-    calls = {"n": 0, "fail": False}
-
-    def fetch() -> dict:
-        calls["n"] += 1
-        if calls["fail"]:
-            raise ConnectionError("hub offline")
-        return hub_keys.jwks()
-
-    cache = JwksCache(fetch, ttl_s=300, max_stale_s=900, min_refresh_interval_s=30, clock=clock)
-    assert cache.get_key(hub_keys.kid) is not None and calls["n"] == 1
-    clock.t += 100
-    cache.get_key(hub_keys.kid)
-    assert calls["n"] == 1  # vers uit cache
-    calls["fail"] = True
-    clock.t += 400  # verouderd, verversen faalt → oude set nog bruikbaar
-    cache.get_key(hub_keys.kid)
-    assert cache.status().stale and cache.status().available
-    clock.t += 1000  # voorbij max_stale → fail-closed
-    with pytest.raises(JwksUnavailable):
-        cache.get_key(hub_keys.kid)
-    assert not cache.status().available
+def _sign(keys: HubKeys, claims: dict[str, Any], kid: str | None = None, key: Any = None) -> str:
+    return jwt.encode(claims, key or keys.private, algorithm="EdDSA", headers={"kid": kid or keys.kid})
 
 
-def test_jwks_unknown_kid_refresh_is_rate_limited(hub_keys: HubKeys) -> None:
-    clock = Clock()
-    calls = {"n": 0}
-
-    def fetch() -> dict:
-        calls["n"] += 1
-        return hub_keys.jwks()
-
-    cache = JwksCache(fetch, min_refresh_interval_s=30, clock=clock)
-    cache.get_key(hub_keys.kid)
-    for _ in range(20):
-        with pytest.raises(UnknownKey):
-            cache.get_key("onbekend")
-    assert calls["n"] == 1  # geen ophaalvloed bij onbekende kid's
-    clock.t += 31
-    with pytest.raises(UnknownKey):
-        cache.get_key("onbekend")
-    assert calls["n"] == 2
-
-
-def test_jwks_without_hub_is_unavailable() -> None:
-    with pytest.raises(JwksUnavailable):
-        JwksCache(None).get_key("x")
-
-
-# ------------------------------------------------------------------ JWT
-@pytest.fixture
-def cache(hub_keys: HubKeys) -> JwksCache:
-    c = JwksCache(lambda: hub_keys.jwks())
-    c.seed(hub_keys.jwks())
-    return c
-
-
-def test_valid_jwt(hub_keys: HubKeys, cache: JwksCache) -> None:
-    p = validate_jwt(hub_keys.token(["admin", "onbekende_rol"], sub="u1"), cache, JwtPolicy())
+# ------------------------------------------------------------------ geldige tokens
+def test_user_jwt_accepted_and_roles_filtered(authn: Authenticator, hub_keys: HubKeys) -> None:
+    p = authn.authenticate(f"Bearer {hub_keys.token(['admin', 'onbekende_rol'], sub='u1')}")
     assert p.kind == "user" and p.subject == "u1" and p.roles == frozenset({"admin"})
 
 
+def test_role_kind_always_wins(authn: Authenticator, hub_keys: HubKeys) -> None:
+    """§4.2: rol ``kind`` wint altijd van andere rollen in dezelfde JWT."""
+    assert authn.authenticate(f"Bearer {hub_keys.token(['admin', 'kind'])}").roles == frozenset({"kind"})
+
+
+def test_hub_service_jwt_gives_service_principal(authn: Authenticator, hub_keys: HubKeys) -> None:
+    p = authn.authenticate(f"Bearer {hub_keys.sim.service_jwt(SID.upper())}")  # UUID-vergelijking, niet als tekst
+    assert p.kind == "service" and p.audit_id == "service:hub" and p.roles == frozenset({"service"})
+    assert "admin" not in p.roles
+
+
+# ------------------------------------------------------------------ vaste reasons (§4.7)
+@pytest.mark.parametrize("state", ["nooit_gekoppeld", "ontkoppeld"])
+def test_not_linked(tmp_path: Path, hub_keys: HubKeys, state: str) -> None:
+    store = HubLinkStore(tmp_path) if state == "nooit_gekoppeld" else _store(tmp_path, hub_keys, state)
+    a = Authenticator(store, JwtPolicy(), MemoryReplay())
+    assert _fail(a, hub_keys.token(["admin"])) == "not_linked"
+    assert _fail(a, None) == "not_linked"  # eerst de toestand, dan pas het token
+
+
+def test_revoked(tmp_path: Path, hub_keys: HubKeys) -> None:
+    a = Authenticator(_store(tmp_path, hub_keys, "ingetrokken"), JwtPolicy(), MemoryReplay())
+    assert _fail(a, hub_keys.token(["admin"])) == "revoked"
+    assert _fail(a, "svc_" + "a" * 43) == "revoked"
+
+
+def test_corrupt_link_file_trusts_nothing(tmp_path: Path, hub_keys: HubKeys) -> None:
+    store = _store(tmp_path, hub_keys)
+    (tmp_path / "hub-link.json").write_text("{kapot", encoding="utf-8")
+    a = Authenticator(store, JwtPolicy(), MemoryReplay())
+    assert _fail(a, hub_keys.token(["admin"])) == "not_linked"
+
+
+def test_service_token_not_accepted_inbound(authn: Authenticator) -> None:
+    """§4.3: een inkomend ``Bearer svc_…`` (ook het eigen, geldige service-token) wordt nooit geaccepteerd."""
+    assert _fail(authn, "svc_" + "a" * 43) == "service_token_not_accepted"
+    assert _fail(authn, "svc_iets") == "service_token_not_accepted"
+
+
+@pytest.mark.parametrize("header", [None, "", "Basic abc", "Bearer ", "Bearer geen.jwt", "Bearer a.b.c.d"])
+def test_missing_or_malformed_token(authn: Authenticator, header: str | None) -> None:
+    with pytest.raises(ApiError) as exc:
+        authn.authenticate(header)
+    assert _reason(exc) == "invalid_token"
+
+
+def test_unknown_kid_is_rejected_and_triggers_background_poll(
+    authn: Authenticator, hub_keys: HubKeys, unknown_polls: list[int]
+) -> None:
+    other = SimKey()
+    assert _fail(authn, _sign(hub_keys, _claims(), kid=other.kid, key=other.private)) == "unknown_key"
+    assert unknown_polls == [1]
+    no_kid = jwt.encode(_claims(), hub_keys.private, algorithm="EdDSA")
+    assert _fail(authn, no_kid) == "unknown_key"
+
+
+def test_swapped_key_with_pinned_kid_is_rejected(authn: Authenticator, hub_keys: HubKeys) -> None:
+    """Vergelijking op de sleutel zelf (x), niet alleen op ``kid``: een andere sleutel met de gepinde kid faalt."""
+    other = SimKey()
+    assert _fail(authn, _sign(hub_keys, _claims(), kid=hub_keys.kid, key=other.private)) == "invalid_token"
+
+
+def test_http_jwks_adds_no_trust(tmp_path: Path, hub_keys: HubKeys) -> None:
+    """Een sleutel die de Hub (of een aanvaller) via HTTP in de JWKS zet, wordt niet vertrouwd zolang hij niet gepind
+    is: de Authenticator kijkt alleen naar ``hub-link.json``."""
+    a = Authenticator(_store(tmp_path, hub_keys), JwtPolicy(), MemoryReplay())
+    rogue = SimKey()
+    hub_keys.sim.jwt_keys.append(rogue)  # staat nu in de HTTP-JWKS van de nep-Hub
+    assert _fail(a, _sign(hub_keys, _claims(), kid=rogue.kid, key=rogue.private)) == "unknown_key"
+
+
+def test_algorithm_confusion_is_invalid_token(authn: Authenticator, hub_keys: HubKeys) -> None:
+    hs = jwt.encode(_claims(), "geheim-" + "x" * 32, algorithm="HS256", headers={"kid": hub_keys.kid})
+    unsigned = jwt.encode(_claims(), None, algorithm="none", headers={"kid": hub_keys.kid})  # type: ignore[arg-type]
+    assert _fail(authn, hs) == "invalid_token"
+    assert _fail(authn, unsigned) == "invalid_token"
+
+
+def test_expired(authn: Authenticator, hub_keys: HubKeys) -> None:
+    now = int(time.time())
+    assert _fail(authn, _sign(hub_keys, _claims(iat=now - 200, nbf=now - 200, exp=now - 100))) == "token_expired"
+
+
 @pytest.mark.parametrize(
-    ("kwargs", "reason"),
+    "over",
     [
-        ({"iss": "nep-hub"}, "verkeerde_issuer"),
-        ({"aud": "andere-dienst"}, "verkeerde_audience"),
-        ({"iat_offset": -400, "lifetime": 60}, "token_verlopen"),
-        ({"lifetime": 3600}, "levensduur_te_lang"),
-        ({"kid": "onbekend"}, "onbekende_sleutel"),
+        {"iss": "nep-hub"},
+        {"aud": "andere-dienst"},
+        {"aud": "ai-server-manager"},
+        {"exp": int(time.time()) + 3600},  # exp - iat > 120 s
+        {"nbf": int(time.time()) + 600},
+        {"iat": int(time.time()) + 600, "nbf": int(time.time()) + 600, "exp": int(time.time()) + 660},
+        {"exp": None},
+        {"iat": None},
+        {"nbf": None},
+        {"sub": None},
+        {"sub": ""},
+        {"iss": None},
+        {"aud": None},
+        {"iat": "nu"},
     ],
 )
-def test_jwt_rejections(hub_keys: HubKeys, cache: JwksCache, kwargs: dict, reason: str) -> None:
+def test_invalid_claims(authn: Authenticator, hub_keys: HubKeys, over: dict[str, Any]) -> None:
+    assert _fail(authn, _sign(hub_keys, _claims(**over))) == "invalid_token"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"token_use": None},
+        {"token_use": "admin"},
+        {"token_use": "user", "roles": ["service"]},
+        {"token_use": "user", "roles": ["admin", "service"]},
+        {"token_use": "user", "roles": "admin"},
+        {"token_use": "hub_service", "sub": "hub", "roles": ["service"]},  # geen service_id
+        {"token_use": "hub_service", "sub": "hub", "roles": ["service"], "service_id": str(uuid.uuid4())},
+        {"token_use": "hub_service", "sub": "nep", "roles": ["service"], "service_id": SID},
+        {"token_use": "hub_service", "sub": "hub", "roles": ["service", "admin"], "service_id": SID},
+        {"token_use": "hub_service", "sub": "hub", "roles": ["admin"], "service_id": SID},
+        {"token_use": "hub_service", "sub": "hub", "roles": ["service"], "service_id": "geen-uuid"},
+    ],
+)
+def test_token_use_invalid(authn: Authenticator, hub_keys: HubKeys, over: dict[str, Any]) -> None:
+    assert _fail(authn, _sign(hub_keys, _claims(**over))) == "token_use_invalid"
+
+
+def test_jti_missing_on_any_jwt(authn: Authenticator, hub_keys: HubKeys) -> None:
+    """§4.6: ``jti`` is op **elke** JWT verplicht, ook bij lezen."""
+    assert _fail(authn, _sign(hub_keys, _claims(jti=None))) == "jti_missing"
+    assert _fail(authn, hub_keys.sim.service_jwt(SID, jti=None)) == "jti_missing"
+    assert _fail(authn, _sign(hub_keys, _claims(jti=""))) == "jti_missing"
+
+
+def test_jti_replay_on_mutations(authn: Authenticator, hub_keys: HubKeys) -> None:
+    token = hub_keys.token(["admin"])
+    key = str(uuid.uuid4())
+    authn.authenticate(f"Bearer {token}", method="POST", path="/x", idempotency_key=key)
+    # exacte herhaling (netwerk-retry): toegestaan, de idempotency-laag geeft het opgeslagen resultaat
+    authn.authenticate(f"Bearer {token}", method="POST", path="/x", idempotency_key=key)
+    with pytest.raises(ApiError) as exc:  # andere wijziging met dezelfde jti
+        authn.authenticate(f"Bearer {token}", method="POST", path="/x", idempotency_key=str(uuid.uuid4()))
+    assert _reason(exc) == "token_replayed"
     with pytest.raises(ApiError) as exc:
-        validate_jwt(hub_keys.token(["admin"], **kwargs), cache, JwtPolicy(leeway_s=0))
-    assert exc.value.status_code == 401 and _reason(exc) == reason
+        authn.authenticate(f"Bearer {token}", method="DELETE", path="/x", idempotency_key=key)
+    assert _reason(exc) == "token_replayed"
+    # lezen mag binnen de levensduur vaker
+    for _ in range(3):
+        authn.authenticate(f"Bearer {token}", method="GET", path="/x")
+    # zonder Idempotency-Key is er geen exacte herhaling
+    other = hub_keys.token(["admin"])
+    authn.authenticate(f"Bearer {other}", method="POST", path="/y")
+    with pytest.raises(ApiError) as exc:
+        authn.authenticate(f"Bearer {other}", method="POST", path="/y")
+    assert _reason(exc) == "token_replayed"
 
 
-def _encode(hub_keys: HubKeys, claims: dict) -> str:
-    return jwt.encode(claims, hub_keys.private, algorithm="EdDSA", headers={"kid": hub_keys.kid})
+def test_service_jwt_replay_also_rejected(authn: Authenticator, hub_keys: HubKeys) -> None:
+    token = hub_keys.sim.service_jwt(SID)
+    authn.authenticate(f"Bearer {token}", method="POST", path="/connector/v1/hub-link/unlink", idempotency_key="k1")
+    with pytest.raises(ApiError) as exc:
+        authn.authenticate(f"Bearer {token}", method="POST", path="/connector/v1/propose", idempotency_key="k2")
+    assert _reason(exc) == "token_replayed"
 
 
-def test_jwt_missing_or_future_claims_rejected(hub_keys: HubKeys, cache: JwksCache) -> None:
-    """Fail-closed: ontbrekende verplichte claims of tijden in de toekomst worden geweigerd (ook met speling)."""
+def test_replay_check_unavailable_is_fail_closed(tmp_path: Path, hub_keys: HubKeys) -> None:
+    a = Authenticator(_store(tmp_path, hub_keys), JwtPolicy(), MemoryReplay(broken=True))
+    with pytest.raises(ApiError) as exc:
+        a.authenticate(f"Bearer {hub_keys.token(['admin'])}", method="POST", path="/x", idempotency_key="k")
+    assert exc.value.status_code == 503 and exc.value.code == "replay_check_unavailable"
+    assert a.authenticate(f"Bearer {hub_keys.token(['admin'])}", method="GET", path="/x").kind == "user"
+
+
+def test_check_order_follows_section_4_7(authn: Authenticator, hub_keys: HubKeys) -> None:
+    """``state`` → tokensoort → handtekening/``kid`` → claims → ``token_use`` → ``jti``: bij meerdere fouten wint de
+    eerste in die volgorde."""
+    other = SimKey()
     now = int(time.time())
-    base = {"iss": "hub", "aud": "home-control-hub", "sub": "u", "roles": ["admin"], "iat": now, "exp": now + 60}
-    cases = [
-        {k: v for k, v in base.items() if k != "exp"},
-        {k: v for k, v in base.items() if k != "iat"},
-        {k: v for k, v in base.items() if k != "sub"},
-        {k: v for k, v in base.items() if k != "aud"},
-        {k: v for k, v in base.items() if k != "iss"},
-        {**base, "sub": ""},
-        {**base, "iat": now + 600, "exp": now + 660},  # uitgegeven in de toekomst
-        {**base, "nbf": now + 600},  # nog niet geldig
-        {**base, "iat": "nu"},
-    ]
-    for claims in cases:
-        with pytest.raises(ApiError) as exc:
-            validate_jwt(_encode(hub_keys, claims), cache, JwtPolicy())
-        assert exc.value.status_code == 401, claims
+    # onbekende kid + verlopen + geen token_use + geen jti → unknown_key
+    t = _sign(
+        hub_keys, _claims(exp=now - 100, iat=now - 150, token_use=None, jti=None), kid=other.kid, key=other.private
+    )
+    assert _fail(authn, t) == "unknown_key"
+    # verlopen + geen token_use + geen jti → token_expired
+    assert _fail(authn, _sign(hub_keys, _claims(exp=now - 100, iat=now - 150, token_use=None, jti=None))) == (
+        "token_expired"
+    )
+    # verkeerde aud + geen token_use → invalid_token
+    assert _fail(authn, _sign(hub_keys, _claims(aud="x", token_use=None))) == "invalid_token"
+    # geen token_use + geen jti → token_use_invalid
+    assert _fail(authn, _sign(hub_keys, _claims(token_use=None, jti=None))) == "token_use_invalid"
 
 
-def test_jwt_roles_are_filtered(hub_keys: HubKeys, cache: JwksCache) -> None:
-    """Alleen bekende gebruikersrollen; 'service' (dienst-naar-dienst) kan nooit via een JWT worden geclaimd."""
-    p = validate_jwt(hub_keys.token(["service", "admin", "root"]), cache, JwtPolicy())
-    assert p.roles == frozenset({"admin"}) and p.kind == "user"
-    assert validate_jwt(hub_keys.token(["service"]), cache, JwtPolicy()).roles == frozenset()
-    now = int(time.time())
-    claims = {"iss": "hub", "aud": "home-control-hub", "sub": "u", "roles": "admin", "iat": now, "exp": now + 60}
-    assert validate_jwt(_encode(hub_keys, claims), cache, JwtPolicy()).roles == frozenset()
-
-
-def test_jwt_rejected_when_jwks_cache_is_empty_or_unreachable(hub_keys: HubKeys) -> None:
-    def down() -> dict:
-        raise OSError("hub onbereikbaar")
-
-    for cache in (JwksCache(None), JwksCache(down), JwksCache(lambda: {"keys": []})):
-        with pytest.raises(ApiError) as exc:
-            validate_jwt(hub_keys.token(["admin"]), cache, JwtPolicy())
-        assert exc.value.status_code == 401 and _reason(exc) == "jwks_niet_beschikbaar"
-
-
-def test_jwt_algorithm_confusion_rejected(hub_keys: HubKeys, cache: JwksCache) -> None:
-    now = int(time.time())
-    claims = {"iss": "hub", "aud": "home-control-hub", "sub": "x", "roles": ["admin"], "iat": now, "exp": now + 60}
-    hs = jwt.encode(claims, hub_keys.jwk["x"], algorithm="HS256", headers={"kid": hub_keys.kid})
-    unsigned = jwt.encode(claims, None, algorithm="none")  # type: ignore[arg-type]
-    for token in (hs, unsigned):
-        with pytest.raises(ApiError) as exc:
-            validate_jwt(token, cache, JwtPolicy())
-        assert _reason(exc) == "algoritme_niet_toegestaan"
-
-
-def test_jwt_signed_by_other_key_rejected(cache: JwksCache) -> None:
-    other = HubKeys()
-    forged = other.token(["admin"], kid=HubKeys().kid)
-    with pytest.raises(ApiError):
-        validate_jwt(forged, cache, JwtPolicy())
-    # zelfde kid, andere sleutel → handtekening ongeldig
-    real_kid = next(iter(parse_jwks(cache._fetch())))  # type: ignore[misc]
-    with pytest.raises(ApiError) as exc:
-        validate_jwt(other.token(["admin"], kid=real_kid), cache, JwtPolicy())
-    assert _reason(exc) == "token_ongeldig"
-
-
-def test_authenticator_service_token_and_not_paired(hub_keys: HubKeys, cache: JwksCache) -> None:
-    token = "svc-" + "a" * 40
-    state = {"hash": None}
-    auth = Authenticator(cache, JwtPolicy(), lambda: state["hash"])
-    with pytest.raises(ApiError) as exc:
-        auth.authenticate(f"Bearer {token}")
-    assert _reason(exc) == "niet_gekoppeld"
-    state["hash"] = sha256_hex(token)
-    p = auth.authenticate(f"Bearer {token}")
-    assert p.kind == "service" and p.roles == frozenset({"service"})
-    with pytest.raises(ApiError) as exc:
-        auth.authenticate("Bearer svc-verkeerd-token-00000000000000")
-    assert _reason(exc) == "service_token_ongeldig"
-    for header in (None, "", "Basic abc", "Bearer "):
-        with pytest.raises(ApiError):
-            auth.authenticate(header)
+def test_every_reason_is_from_the_fixed_list() -> None:
+    assert set(REASONS) == {
+        "not_linked",
+        "revoked",
+        "service_token_not_accepted",
+        "unknown_key",
+        "token_expired",
+        "invalid_token",
+        "token_use_invalid",
+        "jti_missing",
+        "token_replayed",
+    }
 
 
 # ------------------------------------------------------------------ geheimen
@@ -216,21 +332,15 @@ def test_ensure_secrets_creates_0600_and_never_overwrites(tmp_path: Path) -> Non
     d = tmp_path / "secrets"
     assert sorted(ensure_secrets(d)) == ["identity.ed25519", "vault.key"]
     key1 = load_vault_key(d)
-    ident1 = public_jwk(load_identity(d))
+    ident1 = enroll_public_jwk(load_identity(d))
     for name in ("vault.key", "identity.ed25519"):
         assert stat.S_IMODE((d / name).stat().st_mode) == 0o600
     assert stat.S_IMODE(d.stat().st_mode) == 0o700
     os.chmod(d / "vault.key", 0o644)
     assert ensure_secrets(d) == []
-    assert load_vault_key(d) == key1 and public_jwk(load_identity(d)) == ident1
+    assert load_vault_key(d) == key1 and enroll_public_jwk(load_identity(d)) == ident1
     assert stat.S_IMODE((d / "vault.key").stat().st_mode) == 0o600  # te ruime rechten worden strakker gezet
-
-
-def test_public_jwk_shape(tmp_path: Path) -> None:
-    ensure_secrets(tmp_path)
-    jwk = public_jwk(load_identity(tmp_path))
-    assert jwk["kty"] == "OKP" and jwk["crv"] == "Ed25519" and jwk["alg"] == "EdDSA"
-    assert "d" not in jwk  # nooit de privésleutel
+    assert not (d / "hub-link.json").exists()  # koppelstatus is geen gegenereerd geheim
 
 
 # ------------------------------------------------------------------ redactie
@@ -259,28 +369,3 @@ def test_redact_masks_secret_keys_and_tokens() -> None:
 )
 def test_looks_like_secret(text: str, secret: bool) -> None:
     assert looks_like_secret(text) is secret
-
-
-def test_jwks_refresh_limit_never_exceeds_ttl(tmp_path: Path) -> None:
-    """Met een korte TTL (2 s) en de standaard ophaalbegrenzing (30 s) zat er een gat van ~27 s zonder geldige
-    sleutels terwijl de Hub bereikbaar was. De begrenzing wordt daarom nooit groter dan de TTL."""
-    from integrations.app import create_app
-    from integrations.config import Settings
-
-    app = create_app(Settings(data_dir=tmp_path, jwks_ttl_s=2, jwks_max_stale_s=1))
-    assert app.state.jwks.min_refresh_interval_s == 2
-    assert create_app(Settings(data_dir=tmp_path / "b")).state.jwks.min_refresh_interval_s == 30
-
-
-def test_jwks_short_ttl_refreshes_after_expiry(hub_keys: HubKeys) -> None:
-    now = [0.0]
-    calls = []
-
-    def fetch() -> dict:
-        calls.append(now[0])
-        return hub_keys.jwks()
-
-    cache = JwksCache(fetch, ttl_s=2, max_stale_s=1, min_refresh_interval_s=2, clock=lambda: now[0])
-    cache.get_key(hub_keys.kid)
-    now[0] = 3.5  # voorbij TTL + max. oud: mag én kan opnieuw ophalen
-    assert cache.get_key(hub_keys.kid) is not None and calls == [0.0, 3.5]

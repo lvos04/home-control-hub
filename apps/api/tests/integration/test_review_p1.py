@@ -26,7 +26,7 @@ from sqlalchemy import text
 
 from integrations.domains.sso import authaudit
 from integrations.timeutil import iso, utcnow
-from tests.conftest import AUTHENTIK_URL, HUB_URL, PAIR_CODE, FakeHub, HubKeys, idem
+from tests.conftest import AUTHENTIK_URL, FakeHub, HubKeys, idem, pair
 from tests.fakes.authentik_fake import AuthentikFake
 from tests.integration.test_review_p0 import TRUSTED_HEADER_ATTEMPT
 
@@ -83,10 +83,7 @@ def test_authentik_token_never_in_logs_responses_or_database(
 
     caplog.set_level(logging.DEBUG)  # ook httpx/httpcore op DEBUG
     c = app_factory(http_max_attempts=1)  # geen herhaalpogingen met wachttijd: de test blijft snel
-    with c.app.state.db.sessions() as s:
-        assert c.app.state.enrollment.enroll_with_code(s, HUB_URL, PAIR_CODE).ok
-        s.commit()
-    c.app.state.link.invalidate()
+    assert pair(c, fake_hub).ok
     h = auth("admin")
     authentik_fake.token = LEAK_TOKEN
     authentik_fake.add_event("login", "anna", minutes_ago=3)
@@ -177,8 +174,10 @@ def _forged_tokens(hub_keys: HubKeys) -> dict[str, str]:
         "iss": "hub",
         "aud": "home-control-hub",
         "sub": "aanvaller",
+        "token_use": "user",
         "roles": ["admin"],
         "iat": now,
+        "nbf": now,
         "exp": now + 60,
         "jti": str(uuid.uuid4()),
     }
@@ -253,7 +252,7 @@ def test_apply_never_executes_even_with_a_signed_looking_request(
         "signature": "A" * 86,
     }
     before = _all_rows_text(c)
-    service = {"Authorization": f"Bearer {fake_hub.issued_token}"}
+    service = fake_hub.service_auth()
     for who in (h, service):
         for url in ("/connector/v1/apply", "/connector/v1/rollback"):
             r = c.post(url, json=request_like, headers=idem(who))  # per wijziging een nieuwe JWT (zoals de Hub)

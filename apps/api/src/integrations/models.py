@@ -29,7 +29,10 @@ from .db import Base, Timestamps, new_id, utcnow
 
 
 class ServiceState(Base):
-    """Klein key/value-register voor de eigen toestand (koppeling met de Hub e.d.). Nooit geheimen."""
+    """Klein key/value-register voor de eigen toestand (bv. de Authentik-synchronisatie). Nooit geheimen.
+
+    De koppeling met de Hub staat sinds contract 1.2 **niet** meer hier maar in ``/appdata/secrets/hub-link.json``
+    (§3.5); oude rijen worden bij de eerste start eenmalig overgezet en verwijderd (``enrollment.migrate_legacy``)."""
 
     __tablename__ = "service_state"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -147,14 +150,15 @@ class AuditEvent(Base):
 
 
 class JwtJtiUse(Base):
-    """Replaybescherming voor Hub-JWT's (B13-002, verenigbaar met contract 1.2 'jti + korte cache').
+    """Persistente replaycache voor Hub-JWT's (contract 1.2 §4.6) op ``(iss, jti)`` tot ``exp`` + 30 s.
 
-    Een JWT (``jti``) mag voor hooguit één mutatie gebruikt worden; een herhaling met dezelfde ``Idempotency-Key``
-    (netwerk-retry) blijft toegestaan en geeft het opgeslagen resultaat. Lezen mag binnen de levensduur vaker.
-    Rijen vervallen na ``expires_at`` (worker ruimt op).
+    Een JWT (``jti``) mag voor hooguit één mutatie gebruikt worden; een exacte herhaling (zelfde principal, methode,
+    pad en ``Idempotency-Key``) blijft toegestaan en krijgt het opgeslagen resultaat. Lezen mag binnen de levensduur
+    vaker. Rijen vervallen na ``expires_at`` (de worker ruimt op).
     """
 
     __tablename__ = "jwt_jti_use"
+    iss: Mapped[str] = mapped_column(String(40), primary_key=True, default="hub")
     jti: Mapped[str] = mapped_column(String(200), primary_key=True)
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     method: Mapped[str] = mapped_column(String(10), nullable=False)

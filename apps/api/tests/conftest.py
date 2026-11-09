@@ -6,7 +6,9 @@ database ``hch_test_api``). Er worden nooit echte apps, NAS'en of accounts aange
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -21,17 +23,35 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import create_engine, text
 
 from integrations.config import Settings
-from integrations.security.secrets import public_jwk
 from tests.fakes.authentik_fake import AuthentikFake
 
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 TEST_DB_NAME = os.environ.get("HCH_TEST_DB_NAME", "hch_test_api")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-ENV_TOKEN = "env-enroll-token-0123456789"  # testwaarde (nep-Hub)
-PAIR_CODE = "KOPP-ELCO-DE42"
+ENV_TOKEN = "enr_" + ("hchTestEnvToken_" * 3)[:43]  # testwaarde (alleen de nep-Hub kent hem)
+PAIR_CODE = "KOPP-ELCO-DE42"  # normaliseert naar 12 Crockford-tekens (O→0, L→1)
 HUB_URL = "http://hub.test:30400"
 AUTHENTIK_URL = "http://authentik.test:9000"
+SIM_CLIENT_IP = "192.0.2.10"  # RFC 5737-documentatieadres; alleen voor de rate-limit van de nep-Hub
+
+
+def _load_sim_hub() -> Any:
+    """De Hub-simulator van de dienst-E2E (``tests/e2e/sim_hub.py``) is ook de nep-Hub van deze tests (§3.3 exact)."""
+    name = "hch_sim_hub"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / "e2e" / "sim_hub.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+sim_hub = _load_sim_hub()
+HubSim = sim_hub.HubSim
+SimKey = sim_hub.SimKey
 
 
 def _db_url(name: str) -> str:
@@ -50,68 +70,33 @@ def recreate_database(name: str) -> str:
     return _db_url(name)
 
 
-# Zelfde envelope-regels als de inbox van de echte Hub (ai-server-manager apps/api/src/hub/events/envelope.py,
-# contract §7). Zo valt een event dat de Hub zou weigeren (en dat dan als dead-letter eindigt) al in de tests op.
-ENVELOPE_KEYS = {
-    "schema_version",
-    "event_id",
-    "source_app",
-    "source_event_id",
-    "event_type",
-    "entity",
-    "timestamp_utc",
-    "trace_id",
-    "correlation_id",
-    "actor",
-    "classification",
-    "payload",
-    "payload_ref",
-}
-
-
-def envelope_problems(ev: Any) -> list[str]:
-    import json as _json
-    import re as _re
-
-    if not isinstance(ev, dict):
-        return ["geen object"]
-    problems = []
-    if set(ev) - ENVELOPE_KEYS:
-        problems.append(f"onbekende velden: {sorted(set(ev) - ENVELOPE_KEYS)}")
-    if ev.get("schema_version") != "1.0":
-        problems.append("schema_version")
-    et = ev.get("event_type")
-    if not isinstance(et, str) or len(et) > 128 or not _re.match(r"^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$", et):
-        problems.append(f"event_type {et!r}")
-    ent = ev.get("entity") or {}
-    if not _re.match(r"^[a-z0-9_.-]{1,64}$", str(ent.get("type", ""))) or not 1 <= len(str(ent.get("id", ""))) <= 200:
-        problems.append("entity")
-    actor = ev.get("actor") or {}
-    if actor.get("type") not in ("system", "user", "ai", "flow") or not 1 <= len(str(actor.get("id", ""))) <= 128:
-        problems.append("actor")
-    if ev.get("classification") not in ("public", "internal", "sensitive"):
-        problems.append("classification")
-    if not str(ev.get("timestamp_utc", "")).endswith("Z"):
-        problems.append("timestamp_utc")
-    if len(_json.dumps(ev.get("payload") or {}, default=str).encode()) > 16 * 1024:
-        problems.append("payload te groot")
-    return problems
+envelope_problems = sim_hub.envelope_problems
 
 
 @dataclass
 class HubKeys:
-    private: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
+    """De ondertekensleutel van de nep-Hub (gepind bij het koppelen) en hulp om JWT's te maken."""
+
+    sim: Any = field(default_factory=lambda: HubSim())
+
+    @property
+    def key(self) -> Any:
+        return self.sim.signing
+
+    @property
+    def private(self) -> Ed25519PrivateKey:
+        return self.key.private  # type: ignore[no-any-return]
 
     @property
     def jwk(self) -> dict[str, str]:
-        return public_jwk(self.private)
+        return self.key.jwk()  # type: ignore[no-any-return]
 
     @property
     def kid(self) -> str:
-        return self.jwk["kid"]
+        return str(self.key.kid)
 
     def jwks(self) -> dict[str, Any]:
-        return {"keys": [self.jwk]}
+        return self.sim.jwks()  # type: ignore[no-any-return]
 
     def token(
         self,
@@ -124,38 +109,75 @@ class HubKeys:
         kid: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> str:
+        """Gebruikers-JWT zoals de Hub die maakt (§4.2): ``token_use: user``, ``nbf``, ``jti``."""
         now = int(time.time()) + iat_offset
         claims = {
             "iss": iss,
             "aud": aud,
             "sub": sub,
+            "token_use": "user",
             "roles": roles or [],
             "iat": now,
+            "nbf": now,
             "exp": now + lifetime,
             "jti": str(uuid.uuid4()),
             **(extra or {}),
         }
-        return jwt.encode(claims, self.private, algorithm="EdDSA", headers={"kid": kid or self.kid})
+        claims = {k: v for k, v in claims.items() if v is not None}
+        return jwt.encode(claims, self.private, algorithm="EdDSA", headers={"kid": kid or self.kid, "typ": "JWT"})
 
 
 @dataclass
 class FakeHub:
-    """Nep-Hub + nep-Authentik (``tests/fakes/authentik_fake.py``) voor httpx.MockTransport."""
+    """Nep-Hub (``HubSim`` uit ``tests/e2e/sim_hub.py``) + nep-Authentik voor ``httpx.MockTransport``."""
 
     keys: HubKeys
     up: bool = True
     authentik_up: bool = True
     authentik: AuthentikFake = field(default_factory=AuthentikFake)
-    issued_token: str = field(default_factory=lambda: "svc-" + uuid.uuid4().hex + uuid.uuid4().hex)
-    used: set[str] = field(default_factory=set)
-    enroll_requests: list[dict[str, Any]] = field(default_factory=list)
-    inbox: list[dict[str, Any]] = field(default_factory=list)
-    rejected: list[dict[str, Any]] = field(default_factory=list)
-    inbox_status: int = 202
-    jwks_calls: int = 0
-    include_jwks_in_enroll: bool = True
+    client_ip: str = SIM_CLIENT_IP
+    requests: list[httpx.Request] = field(default_factory=list)
+    # paden waarvan de Hub het verzoek wél verwerkt maar het antwoord verloren gaat (crash/time-out halverwege)
+    drop_response: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        from integrations.security.hubkeys import normalize_code, sha256_hex
+
+        now = time.time()
+        Grant = sim_hub.Grant
+        self.sim.grants[("token", sha256_hex(ENV_TOKEN))] = Grant(
+            "token", sha256_hex(ENV_TOKEN), "home-control-hub", now + 3600
+        )
+        code = normalize_code(PAIR_CODE)
+        self.sim.grants[("koppelcode", sha256_hex(code))] = Grant(
+            "koppelcode", sha256_hex(code), "home-control-hub", now + 3600
+        )
+
+    @property
+    def sim(self) -> Any:
+        return self.keys.sim
+
+    @property
+    def enroll_requests(self) -> list[dict[str, Any]]:
+        return self.sim.enroll_requests  # type: ignore[no-any-return]
+
+    @property
+    def inbox(self) -> list[dict[str, Any]]:
+        return self.sim.inbox  # type: ignore[no-any-return]
+
+    @property
+    def rejected(self) -> list[dict[str, Any]]:
+        return self.sim.rejected  # type: ignore[no-any-return]
+
+    def fingerprint(self) -> str:
+        return str(self.sim.fingerprint())
+
+    def service_auth(self) -> TokenHeaders:
+        """Dienst-JWT van de Hub (§4.3), per mutatie (via ``idem``) een nieuwe."""
+        return TokenHeaders(lambda: self.sim.service_jwt())
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
         url = request.url
         if url.host == "authentik.test":
             if not self.authentik_up:
@@ -165,36 +187,13 @@ class FakeHub:
             raise httpx.ConnectError("onbekende host", request=request)
         if not self.up:
             raise httpx.ConnectError("hub offline", request=request)
-        if url.path == "/api/v1/auth/jwks":
-            self.jwks_calls += 1
-            return httpx.Response(200, json=self.keys.jwks())
-        if url.path == "/api/v1/services/enroll" and request.method == "POST":
-            import json
-
-            body = json.loads(request.content)
-            self.enroll_requests.append(body)
-            secret = body.get("secret")
-            valid = {ENV_TOKEN, PAIR_CODE}
-            if secret not in valid or secret in self.used:
-                return httpx.Response(401, json={"code": "unauthorized"})
-            self.used.add(secret)
-            data: dict[str, Any] = {"service_id": str(uuid.uuid4()), "service_token": self.issued_token}
-            if self.include_jwks_in_enroll:
-                data["jwks"] = self.keys.jwks()
-            return httpx.Response(201, json=data)
-        if url.path == "/api/v1/events/inbox" and request.method == "POST":
-            if request.headers.get("Authorization") != f"Bearer {self.issued_token}":
-                return httpx.Response(401)
-            import json
-
-            event = json.loads(request.content)
-            problems = envelope_problems(event)
-            if problems:  # zoals de Hub: 422 bij een ongeldige envelope
-                self.rejected.append({"event_type": event.get("event_type"), "problems": problems})
-                return httpx.Response(422, json={"code": "validation_error", "details": problems})
-            self.inbox.append(event)
-            return httpx.Response(self.inbox_status)
-        return httpx.Response(404)
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        headers["x-sim-query"] = url.query.decode() if isinstance(url.query, bytes) else str(url.query)
+        reply = self.sim.handle(request.method, url.path, headers, request.content, self.client_ip)
+        if url.path in self.drop_response:
+            self.drop_response.remove(url.path)
+            raise httpx.ReadTimeout("antwoord verloren", request=request)
+        return httpx.Response(reply.status, json=reply.body, headers=reply.headers)
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -284,8 +283,7 @@ def make_settings(data_dir: Path, clean_db: str) -> Callable[..., Settings]:
             "database_url": clean_db,
             "hub_url": None,
             "enrollment_token": None,
-            "jwks_min_refresh_interval_s": 0,
-            "link_cache_ttl_s": 0,
+            "allow_loopback_hub": False,
         }
         base.update(overrides)
         return Settings(**base)
@@ -318,25 +316,32 @@ def client(app_factory: Callable[..., Any]) -> Any:
     return app_factory()
 
 
+def pair(client: Any, fake_hub: FakeHub, code: str = PAIR_CODE) -> Any:
+    """Koppelen via de koppelcode + vingerafdruk (zoals de statuspagina, §3.7); geeft de uitkomst."""
+    return client.app.state.hublink.pair_with_code(
+        hub_url=HUB_URL, pairing_code=code, fingerprint=fake_hub.fingerprint(), trace_id=str(uuid.uuid4())
+    )
+
+
 @pytest.fixture
-def paired_client(client: Any) -> Any:
+def paired_client(client: Any, fake_hub: FakeHub) -> Any:
     """App die via de koppelcode met de nep-Hub gekoppeld is."""
-    state = client.app.state
-    with state.db.sessions() as s:
-        outcome = state.enrollment.enroll_with_code(s, HUB_URL, PAIR_CODE)
-        s.commit()
-    assert outcome.ok, outcome.reason
-    state.link.invalidate()
+    outcome = pair(client, fake_hub)
+    assert outcome.ok, outcome.code
     return client
 
 
 class TokenHeaders(dict[str, str]):
-    """Authorization-header die voor elke mutatie (via ``idem``) een **nieuwe** JWT maakt, zoals de Hub dat doet:
-    een JWT (``jti``) mag voor hooguit één wijziging gebruikt worden (B13-002, replaybescherming)."""
+    """Authorization-header die bij **elk** verzoek (en elke ``idem``/``fresh``) een nieuwe JWT maakt, zoals de Hub:
+    een JWT (``jti``) mag voor hooguit één mutatie gebruikt worden (§4.6). Tests die hergebruik willen bewijzen,
+    gebruiken een vaste token-tekst."""
 
     def __init__(self, mint: Callable[[], str]) -> None:
         super().__init__({"Authorization": f"Bearer {mint()}"})
         self.mint = mint
+
+    def items(self) -> Any:  # httpx leest headers via items(): per verzoek een nieuwe JWT
+        return {**dict(super().items()), "Authorization": f"Bearer {self.mint()}"}.items()
 
 
 @pytest.fixture
@@ -345,6 +350,13 @@ def auth(hub_keys: HubKeys) -> Callable[..., dict[str, str]]:
         return TokenHeaders(lambda: hub_keys.token(list(roles), sub=sub))
 
     return _auth
+
+
+def fresh(headers: dict[str, str]) -> dict[str, str]:
+    """Dezelfde soort token, maar met een nieuwe ``jti`` (per mutatie een nieuwe JWT, §4.6)."""
+    if isinstance(headers, TokenHeaders):
+        return {**headers, "Authorization": f"Bearer {headers.mint()}"}
+    return dict(headers)
 
 
 def idem(headers: dict[str, str] | None = None, key: str | None = None, **extra: str) -> dict[str, str]:

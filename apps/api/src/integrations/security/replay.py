@@ -1,15 +1,17 @@
-"""Replaybescherming voor Hub-JWT's bij mutaties (B13-002 "replay rejected"; verenigbaar met contract 1.2).
+"""Persistente replaycache voor Hub-JWT's (contract 1.2 §4.6; B13-002 "replay rejected").
 
-Regel (veiligste interpretatie, ADR-0007): een JWT (``jti``) mag voor **één** mutatie gebruikt worden. Een mutatie is
-een POST/PUT/PATCH/DELETE met een geldige ``Idempotency-Key``. Een herhaling met hetzelfde token, dezelfde methode,
-hetzelfde pad en dezelfde ``Idempotency-Key`` (netwerk-retry) blijft toegestaan; de idempotency-laag geeft dan het
-opgeslagen resultaat. Elk ander hergebruik → ``401 unauthorized`` (``token_hergebruikt``). Lezen (GET) mag binnen de
-levensduur (≤ 120 s) vaker. Een mutatie-JWT zonder ``jti`` wordt geweigerd. Is de controle niet mogelijk (database
-weg), dan **fail-closed** met 503.
+- Gedeeld door alle processen (tabel ``jwt_jti_use`` in PostgreSQL) op ``(iss, jti)`` tot ``exp`` + 30 s.
+- Een **mutatie** (POST/PUT/PATCH/DELETE) met een al gebruikte ``jti`` → 401 ``token_replayed``, behalve een exacte
+  herhaling (zelfde ``jti``, principal, methode, pad en ``Idempotency-Key``): die beantwoordt de idempotency-laag met
+  het opgeslagen resultaat (netwerk-retry). Zonder ``Idempotency-Key`` is er geen exacte herhaling.
+- Lezen (GET/HEAD) mag binnen de levensduur vaker en wordt niet vastgelegd.
+- Controle niet mogelijk (database weg) → 503 ``replay_check_unavailable`` (fail-closed).
+- Geldt voor gebruikers-JWT's én dienst-JWT's van de Hub: de Hub haalt dus per mutatie een nieuwe JWT.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -18,12 +20,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from ..db import Database
-from ..errors import ApiError, unauthorized
+from ..errors import ApiError
 from ..models import JwtJtiUse
 from ..timeutil import utcnow
-from .auth import Principal
+from .auth import auth_error
 
-MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+log = logging.getLogger("integrations.replay")
 
 
 def valid_idempotency_key(raw: str | None) -> str | None:
@@ -40,56 +42,51 @@ class ReplayGuard:
         self.db = db
         self.leeway_s = leeway_s
 
-    def check(self, principal: Principal, method: str, path: str, idempotency_key: str) -> None:
-        if principal.kind != "user":
-            return
-        jti = principal.token_id
-        if not jti:
-            raise unauthorized(
-                "jti_ontbreekt", "Niet geautoriseerd: een token voor een wijziging moet een 'jti' hebben."
-            )
-        exp = principal.expires_at or utcnow().timestamp()
+    def check(
+        self,
+        *,
+        iss: str,
+        jti: str,
+        exp: float,
+        subject: str,
+        method: str,
+        path: str,
+        idempotency_key: str | None,
+    ) -> None:
         expires = datetime.fromtimestamp(exp, UTC) + timedelta(seconds=self.leeway_s)
+        key = valid_idempotency_key(idempotency_key) or ((idempotency_key or "").strip()[:64] or None)
+        values = {
+            "iss": iss[:40],
+            "jti": jti[:200],
+            "subject": subject[:200],
+            "method": method[:10],
+            "path": path[:500],
+            "idempotency_key": key,
+        }
         try:
             with self.db.sessions() as s:
                 won = s.execute(
                     insert(JwtJtiUse)
-                    .values(
-                        jti=jti[:200],
-                        subject=principal.subject[:200],
-                        method=method[:10],
-                        path=path[:500],
-                        idempotency_key=idempotency_key,
-                        first_seen_at=utcnow(),
-                        expires_at=expires,
-                    )
-                    .on_conflict_do_nothing(index_elements=["jti"])
+                    .values(**values, first_seen_at=utcnow(), expires_at=expires)
+                    .on_conflict_do_nothing(index_elements=["iss", "jti"])
                     .returning(JwtJtiUse.jti)
                 ).first()
                 s.commit()
                 if won is not None:
                     return
-                row = s.get(JwtJtiUse, jti[:200])
-        except ApiError:
-            raise
+                row = s.get(JwtJtiUse, (values["iss"], values["jti"]))
+                seen = None if row is None else (row.subject, row.method, row.path, row.idempotency_key)
         except Exception as exc:  # database weg → nooit doorlaten
+            log.error("replaycontrole niet mogelijk (%s); verzoek geweigerd", type(exc).__name__)
             raise ApiError(
                 503,
                 "replay_check_unavailable",
                 "De controle op hergebruik van tokens is tijdelijk niet beschikbaar; probeer het later opnieuw.",
+                headers={"Retry-After": "5"},
             ) from exc
-        if (
-            row is not None
-            and row.subject == principal.subject[:200]
-            and row.method == method[:10]
-            and row.path == path[:500]
-            and row.idempotency_key == idempotency_key
-        ):
-            return  # zelfde verzoek opnieuw (retry): de idempotency-laag geeft het opgeslagen resultaat
-        raise unauthorized(
-            "token_hergebruikt",
-            "Niet geautoriseerd: dit token is al voor een andere wijziging gebruikt; vraag een nieuw token aan de Hub.",
-        )
+        exact = key is not None and seen == (values["subject"], values["method"], values["path"], key)
+        if not exact:
+            raise auth_error("token_replayed")
 
 
 def purge_expired(db_session: Session) -> int:

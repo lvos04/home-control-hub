@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 from typing import Any
 
@@ -14,7 +13,7 @@ from sqlalchemy import create_engine, inspect, text
 from integrations.config import Settings
 from integrations.migrations import downgrade, head_revision, upgrade
 from integrations.models import all_models
-from tests.conftest import AUTHENTIK_URL, HUB_URL, FakeHub, idem, recreate_database
+from tests.conftest import AUTHENTIK_URL, FakeHub, fresh, idem, recreate_database
 
 pytestmark = pytest.mark.integration
 
@@ -81,7 +80,7 @@ def test_error_format_and_trace_id(client: Any) -> None:
 
 def test_not_paired_is_fail_closed(client: Any, auth: Any) -> None:
     r = client.get("/connector/v1/discover", headers=auth("admin"))
-    assert r.status_code == 401 and r.json()["details"]["reason"] in ("jwks_niet_beschikbaar", "niet_gekoppeld")
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "not_linked"
 
 
 def test_roles_least_privilege(paired_client: Any, auth: Any) -> None:
@@ -97,42 +96,39 @@ def test_roles_least_privilege(paired_client: Any, auth: Any) -> None:
     assert r.status_code == 403
 
 
-def test_service_token_access(paired_client: Any, fake_hub: FakeHub) -> None:
-    svc = {"Authorization": f"Bearer {fake_hub.issued_token}"}
+def test_hub_service_jwt_access(paired_client: Any, fake_hub: FakeHub) -> None:
+    svc = fake_hub.service_auth()
     assert paired_client.get("/connector/v1/discover", headers=svc).status_code == 200
     assert paired_client.get("/connector/v1/events", headers=svc).status_code == 200
-    # het service-token geeft geen beheerrechten op het herstelregister
+    # de dienst-JWT geeft geen beheerrechten op het herstelregister
     assert paired_client.get("/integrations/v1/sso/recovery/overview", headers=svc).status_code == 403
-    bad = {"Authorization": "Bearer svc-" + "0" * 64}
-    assert paired_client.get("/connector/v1/discover", headers=bad).status_code == 401
+    # een service-token (svc_…) wordt inkomend nooit geaccepteerd (§4.3)
+    bad = {"Authorization": "Bearer svc_" + "0" * 43}
+    r = paired_client.get("/connector/v1/discover", headers=bad)
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "service_token_not_accepted"
 
 
-def test_jwks_fail_closed_when_hub_down(app_factory: Any, fake_hub: FakeHub, hub_keys: Any) -> None:
-    fake_hub.include_jwks_in_enroll = False
-    c = app_factory(jwks_ttl_s=1, jwks_max_stale_s=0)
-    state = c.app.state
-    with state.db.sessions() as s:
-        assert state.enrollment.enroll_with_code(s, HUB_URL, "KOPP-ELCO-DE42").ok
-        s.commit()
-    token = {"Authorization": f"Bearer {hub_keys.token(['admin'])}"}
-    assert c.get("/connector/v1/discover", headers=token).status_code == 200
-    assert fake_hub.jwks_calls >= 1
+def test_pinned_keys_work_while_hub_is_down(paired_client: Any, fake_hub: FakeHub, hub_keys: Any) -> None:
+    """§4.5: de vertrouwensset zijn de gepinde sleutels; de Hub hoeft niet bereikbaar te zijn en de JWKS wordt niet
+    via HTTP opgehaald (die voegt nooit vertrouwen toe)."""
     fake_hub.up = False
-    time.sleep(1.2)  # cache verlopen, Hub weg → fail-closed
-    r = c.get("/connector/v1/discover", headers=token)
-    assert r.status_code == 401 and r.json()["details"]["reason"] == "jwks_niet_beschikbaar"
-    health = c.get("/connector/v1/health", headers={"Authorization": f"Bearer {fake_hub.issued_token}"}).json()
-    jwks_check = next(x for x in health["checks"] if x["name"] == "hub_jwks")
-    assert jwks_check["status"] == "down" and health["status"] == "degraded"
+    token = {"Authorization": f"Bearer {hub_keys.token(['admin'])}"}
+    assert paired_client.get("/connector/v1/discover", headers=token).status_code == 200
+    assert not [r for r in fake_hub.requests if r.url.path == "/api/v1/auth/jwks"]
+    health = paired_client.get("/connector/v1/health", headers=fake_hub.service_auth()).json()
+    keys_check = next(x for x in health["checks"] if x["name"] == "hub_sleutels")
+    assert keys_check["status"] == "healthy" and keys_check["detail"]["keyset_fingerprint"] == fake_hub.fingerprint()
 
 
 # ------------------------------------------------------------------ idempotency en ETag
 def test_idempotency_required_replay_and_conflict(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
     body = {"system": "hub_local", "username": "nood", "is_break_glass": True, "login_kind": "lokaal"}
-    r = c.post("/integrations/v1/sso/recovery/accounts", json=body, headers=h)
+    r = c.post("/integrations/v1/sso/recovery/accounts", json=body, headers=fresh(h))
     assert r.status_code == 400 and r.json()["code"] == "idempotency_key_required"
-    r = c.post("/integrations/v1/sso/recovery/accounts", json=body, headers={**h, "Idempotency-Key": "geen-uuid"})
+    r = c.post(
+        "/integrations/v1/sso/recovery/accounts", json=body, headers={**fresh(h), "Idempotency-Key": "geen-uuid"}
+    )
     assert r.json()["code"] == "idempotency_key_invalid"
     key = str(uuid.uuid4())
     first = c.post("/integrations/v1/sso/recovery/accounts", json=body, headers=idem(h, key))
@@ -297,6 +293,6 @@ def test_status_page_not_paired(client: Any) -> None:
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     html = r.text
-    assert 'lang="nl"' in html and "niet gekoppeld" in html and "Koppelcode" in html
+    assert 'lang="nl"' in html and "nooit gekoppeld" in html and "Koppelcode" in html and "Hub-vingerafdruk" in html
     assert "default-src 'none'" in r.headers["Content-Security-Policy"] and "<script" not in html
     assert r.cookies.get("hch_csrf")

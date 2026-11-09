@@ -44,10 +44,16 @@ def readiness(request: Request) -> tuple[bool, list[dict[str, Any]]]:
     return all(c["status"] == "ok" for c in checks), checks
 
 
-@router.get("/readyz", summary="Klaar voor verkeer: database, migraties, geheimen (zonder auth)")
+@router.get("/readyz", summary="Klaar voor verkeer: database, migraties, geheimen (zonder auth, zonder geheimen)")
 def readyz(request: Request) -> JSONResponse:
     ok, checks = readiness(request)
-    return JSONResponse({"status": "ready" if ok else "not_ready", "checks": checks}, status_code=200 if ok else 503)
+    # koppelstatus alleen als informatie (witte lijst §3.5); een niet-gekoppelde dienst is wel 'ready'
+    body = {
+        "status": "ready" if ok else "not_ready",
+        "checks": checks,
+        "hub_link": request.app.state.hublink.public_state(),
+    }
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 def _check(name: str, status: str, detail: Any = None, reason: str | None = None) -> dict[str, Any]:
@@ -75,28 +81,33 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
             {"huidig": current, "verwacht": state.alembic_head},
         )
     )
-    link = state.enrollment.state(session)
-    coupled = link.get("status") == "gekoppeld"
+    link = state.hublink.state()
+    coupled = link.linked
     checks.append(
         _check(
             "hub_koppeling",
-            "healthy" if coupled else "degraded",
-            {"status": link.get("status")},
-            None if coupled else link.get("reason"),
+            "healthy" if coupled and link.confirmed_at else ("degraded" if coupled else "unknown"),
+            {"state": link.state, "bevestigd": bool(link.confirmed_at), "koppelen_bezig": link.pending is not None},
+            None if coupled and link.confirmed_at else ("niet_bevestigd" if coupled else link.state),
         )
     )
-    js = state.jwks.status()
-    if not coupled:
-        jwks_status, jwks_reason = "unknown", "niet_gekoppeld"
-    elif js.available and not js.stale:
-        jwks_status, jwks_reason = "healthy", None
-    elif js.available:
-        jwks_status, jwks_reason = "degraded", "verouderd"
-    elif js.age_s is None and js.last_error is None:
-        jwks_status, jwks_reason = "unknown", "nog_niet_opgehaald"
+    # §4.5: vertrouwd worden alleen de gepinde sleutels (geen JWKS via HTTP); een geweigerde sleutelrotatie stopt het
+    # toepassen van verdere rotaties en is een incident
+    keys_reason: str | None
+    keys_detail: dict[str, Any]
+    if not coupled or link.pins is None:
+        keys_status, keys_reason, keys_detail = "unknown", "niet_gekoppeld", {}
     else:
-        jwks_status, jwks_reason = "down", js.last_error or "niet_beschikbaar"
-    checks.append(_check("hub_jwks", jwks_status, {"keys": js.keys, "age_s": js.age_s}, jwks_reason))
+        blocked = link.key_rotation_blocked_sequence
+        keys_status = "degraded" if blocked is not None else "healthy"
+        keys_reason = "sleutelrotatie_geweigerd" if blocked is not None else None
+        keys_detail = {
+            "jwt": len(link.pins.jwt),
+            "policy": len(link.pins.policy),
+            "rotation_sequence": link.pins.rotation_sequence,
+            "keyset_fingerprint": link.pins.keyset_fingerprint,
+        }
+    checks.append(_check("hub_sleutels", keys_status, keys_detail, keys_reason))
 
     dead = session.scalar(select(func.count()).where(OutboxEvent.delivery_status == "dead_letter")) or 0
     stale_pending = (
@@ -143,9 +154,9 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
     )
     checks.append(_check("bronnen", src_status, counts, "niet_geconfigureerd" if counts["unknown"] else None))
 
-    service_checks = [c for c in checks if c["name"] in ("migraties", "hub_koppeling", "hub_jwks", "outbox")]
+    service_checks = [c for c in checks if c["name"] in ("migraties", "hub_koppeling", "hub_sleutels", "outbox")]
     bad = [c for c in service_checks if c["status"] not in ("healthy", "unknown")]
-    # de dienst zelf draait; een uitgevallen afhankelijkheid (Hub/JWKS/outbox) maakt hem 'degraded', nooit 'healthy'
+    # de dienst zelf draait; een uitgevallen afhankelijkheid (Hub/sleutels/outbox) maakt hem 'degraded', nooit 'healthy'
     status = "degraded" if bad or not coupled else "healthy"
     reason = next((c["reason_code"] or c["name"] for c in service_checks if c["status"] != "healthy"), None)
     return {

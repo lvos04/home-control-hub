@@ -1,13 +1,18 @@
-"""Kleine Nederlandse statuspagina op ``GET /`` (contract §1) + koppelen met koppelcode (contract §3).
+"""Kleine Nederlandse statuspagina op ``GET /`` (contract §1) + koppelen met koppelcode (contract 1.2 §3.7).
 
 Veiligheid:
-- Geen geheimen, accountnamen, aantallen of aandachtspunten op de pagina; alleen koppelstatus, versie, gezondheid
-  en totaalniveaus.
-- Formulieren: CSRF-token (double-submit-cookie, SameSite=Strict) + Origin-controle; geen JavaScript; strikte CSP.
-- Koppelen kan alleen als de dienst **niet** gekoppeld is. Ontkoppelen via deze pagina vereist de lokale
-  ontkoppelcode die bij elke start in de app-log staat (TrueNAS → Apps → home-control-hub → Logs); zo kan alleen
-  wie de NAS beheert een verloren Hub vervangen.
-- Meldingen komen uit een vaste lijst (geen weerspiegelde invoer).
+- Geen geheimen, accountnamen, aantallen of aandachtspunten op de pagina; alleen de witte lijst van de koppelstatus
+  (§3.5), versie, gezondheid en totaalniveaus.
+- Het koppelformulier bestaat **alleen zolang de dienst nog nooit gekoppeld is** (``first_linked_at`` leeg). Daarna:
+  alleen de status en "ontkoppelen of opnieuw koppelen gaat via de Hub". Er is geen ontkoppelen, geen lokale
+  ontkoppelcode en geen herkoppelen na intrekking op deze pagina.
+- Velden: Hub-adres (zelfde regels als ``HUB_URL``), koppelcode en de verplichte Hub-vingerafdruk.
+- Formulieren: CSRF-token (double-submit-cookie, SameSite=Strict, HttpOnly) + ``Origin``-controle; geen JavaScript;
+  strikte CSP. Rate-limit: max. 5 pogingen per 15 min per bron-IP (adres van de TCP-verbinding; ``X-Forwarded-For``
+  wordt nooit gebruikt) én max. 20 per 15 min voor de hele dienst; overschrijding → vaste melding, geen verzoek naar
+  de Hub. De teller staat in het geheugen: de image draait precies één API-proces (§3.7).
+- Meldingen komen uit een vaste lijst (geen weerspiegelde invoer); het Hub-adres van een mislukte poging wordt
+  nergens bewaard.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from __future__ import annotations
 import hmac
 import html
 import secrets
+import threading
 import time
 from collections import deque
 from typing import Any
@@ -23,66 +29,74 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from . import APP_ID, __version__, audit, events
+from . import APP_ID, __version__, audit
 from .domains import DOMAIN_TITLES_NL, DOMAINS
 from .domains.sso import service as sso_service
 from .errors import trace_id_for
 from .health import readiness
-from .security.auth import sha256_hex
+from .hublink_store import ERROR_MESSAGES
 from .sources import ALL_SOURCES
 
 router = APIRouter(include_in_schema=False)
 
 CSRF_COOKIE = "hch_csrf"
-ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-NOTICES = {
-    "gekoppeld": ("ok", "Gekoppeld met de Hub."),
-    "ontkoppeld": ("ok", "Ontkoppeld. Je kunt nu opnieuw koppelen met een nieuwe koppelcode."),
+VIA_HUB_NL = "Ontkoppelen of opnieuw koppelen gaat via de Hub."
+NOTICES: dict[str, tuple[str, str]] = {
+    "gekoppeld": ("ok", "Gekoppeld met de Hub. Vergelijk de sleutelset-vingerafdruk hieronder met die in de Hub."),
     "al_gekoppeld": (
         "fout",
-        "Deze dienst is al gekoppeld. Ontkoppel eerst (met de lokale ontkoppelcode uit de app-log).",
+        "Koppelen via deze pagina kan alleen zolang de dienst nog nooit gekoppeld is. " + VIA_HUB_NL,
     ),
-    "niet_gekoppeld": ("fout", "Deze dienst is niet gekoppeld."),
+    "koppelen_bezig": ("fout", "Er loopt al een koppelpoging. Wacht even en laad de pagina opnieuw."),
     "ongeldig_formulier": (
         "fout",
         "Het formulier is verlopen of ongeldig. Laad de pagina opnieuw en probeer het nog eens.",
     ),
-    "te_veel_pogingen": ("fout", "Te veel pogingen. Wacht een paar minuten en probeer het opnieuw."),
-    "ontkoppelcode_onjuist": ("fout", "De ontkoppelcode klopt niet. Je vindt hem in de app-log van deze start."),
+    "te_veel_pogingen": ("fout", "Te veel pogingen. Wacht een kwartier en probeer het opnieuw."),
     "ongeldig_hub_adres": (
         "fout",
-        "Het Hub-adres is ongeldig. Gebruik http(s)://<NAS-adres>:<poort> (geen localhost).",
+        "Het Hub-adres is ongeldig. Gebruik http(s)://<NAS-adres>:<poort> zonder pad (geen localhost).",
     ),
-    "hub_onbereikbaar": ("fout", "De Hub is niet bereikbaar op dit adres. Controleer het adres en of de Hub draait."),
-    "hub_weigerde_code": (
+    "ongeldige_koppelcode": ("fout", "De koppelcode moet 12 tekens zijn (XXXX-XXXX-XXXX), zoals de Hub hem toont."),
+    "ongeldige_vingerafdruk": (
         "fout",
-        "De Hub weigerde de koppelcode (verlopen, al gebruikt of ongeldig). Maak een nieuwe.",
+        "De Hub-vingerafdruk moet 16 tekens zijn (XXXX-XXXX-XXXX-XXXX), zoals de Hub hem naast de koppelcode toont.",
     ),
-    "enroll_endpoint_ontbreekt": ("fout", "Deze Hub-versie kent het aanmeld-endpoint niet."),
-    "hub_antwoord_ongeldig": ("fout", "Het antwoord van de Hub was ongeldig."),
+    "database_onbereikbaar": ("fout", "De eigen database is nu niet bereikbaar; probeer het over een minuut opnieuw."),
+    **{code: ("fout", text) for code, text in ERROR_MESSAGES.items()},
+}
+STATE_LABELS = {
+    "nooit_gekoppeld": ("onb", "nooit gekoppeld"),
+    "gekoppeld": ("ok", "gekoppeld"),
+    "ontkoppeld": ("let", "ontkoppeld"),
+    "ingetrokken": ("fout", "ingetrokken"),
+}
+STATE_HELP = {
+    "nooit_gekoppeld": "Niet gekoppeld: maak in de Hub een koppelcode voor home-control-hub en vul die hieronder in, "
+    "of laat het platform de dienst met een eenmalig token installeren.",
+    "gekoppeld": "Gekoppeld met de Hub. " + VIA_HUB_NL,
+    "ontkoppeld": "Niet gekoppeld: de koppeling met de Hub is verwijderd. " + VIA_HUB_NL,
+    "ingetrokken": "Ingetrokken door de Hub: deze dienst weigert alle Hub-aanroepen. Opnieuw koppelen gaat via de Hub.",
 }
 
 
-def new_unpair_code() -> str:
-    raw = "".join(secrets.choice(ALPHABET) for _ in range(12))
-    return f"{raw[:4]}-{raw[4:8]}-{raw[8:]}"
+class PairThrottle:
+    """Max. ``per_ip`` pogingen per bron-IP en ``total`` pogingen voor de hele dienst per ``window_s`` (§3.7)."""
 
+    def __init__(self, per_ip: int = 5, total: int = 20, window_s: float = 900) -> None:
+        self.per_ip, self.total, self.window_s = per_ip, total, window_s
+        self.hits: deque[tuple[float, str]] = deque()
+        self._lock = threading.Lock()
 
-class Throttle:
-    """Max. ``limit`` pogingen per ``window_s`` (in het geheugen; per proces)."""
-
-    def __init__(self, limit: int = 10, window_s: float = 600) -> None:
-        self.limit, self.window_s = limit, window_s
-        self.hits: deque[float] = deque()
-
-    def allow(self) -> bool:
+    def allow(self, ip: str) -> bool:
         now = time.monotonic()
-        while self.hits and now - self.hits[0] > self.window_s:
-            self.hits.popleft()
-        if len(self.hits) >= self.limit:
-            return False
-        self.hits.append(now)
-        return True
+        with self._lock:
+            while self.hits and now - self.hits[0][0] > self.window_s:
+                self.hits.popleft()
+            if len(self.hits) >= self.total or sum(1 for _, h in self.hits if h == ip) >= self.per_ip:
+                return False
+            self.hits.append((now, ip))
+            return True
 
 
 SECURITY_HEADERS = {
@@ -112,14 +126,15 @@ td,th{border-color:#262b33}small,.muted{color:#9aa3ad}input{background:#0f1216;c
 
 
 def _tag(status: str) -> str:
+    if status in STATE_LABELS:
+        cls, label = STATE_LABELS[status]
+        return f'<span class="tag {cls}">{html.escape(label)}</span>'
     cls = {
         "ok": "ok",
-        "gekoppeld": "ok",
         "healthy": "ok",
         "ready": "ok",
         "risico": "let",
         "degraded": "let",
-        "koppelen_mislukt": "fout",
         "down": "fout",
         "fout": "fout",
     }.get(status, "onb")
@@ -128,8 +143,6 @@ def _tag(status: str) -> str:
         "degraded": "beperkt",
         "down": "storing",
         "unknown": "onbekend",
-        "niet_gekoppeld": "niet gekoppeld",
-        "koppelen_mislukt": "koppelen mislukt",
         "ready": "klaar",
         "not_ready": "niet klaar",
     }.get(status, status)
@@ -167,17 +180,39 @@ def _redirect(notice: str) -> Response:
     return _with_headers(RedirectResponse(f"/?melding={notice}", status_code=303))
 
 
+def _link_rows(link: dict[str, Any]) -> str:
+    rows: list[tuple[str, str]] = []
+    if link.get("koppelen_bezig"):
+        rows.append(("Koppelen", "bezig"))
+    for key, label in (
+        ("hub_url", "Hub-adres"),
+        ("service_id", "Dienst-ID in de Hub"),
+        ("via", "Gekoppeld via"),
+        ("first_linked_at", "Eerste koppeling"),
+        ("linked_at", "Laatst gekoppeld"),
+        ("keyset_fingerprint", "Sleutelset-vingerafdruk van de Hub"),
+    ):
+        if link.get(key):
+            rows.append((label, str(link[key])))
+    if link.get("service_token_last4"):
+        rows.append(("Service-token", "…" + str(link["service_token_last4"])))
+    err = link.get("last_error")
+    if isinstance(err, dict) and err.get("message"):
+        rows.append(("Laatste melding", str(err["message"])))
+    return "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in rows)
+
+
 @router.get("/", response_class=HTMLResponse)
 def status_page(request: Request, melding: str | None = None) -> Response:
     state = request.app.state
     csrf = _csrf_token(request)
     ready, checks = readiness(request)
-    link: dict[str, Any] = {"status": "onbekend", "message_nl": "Database niet bereikbaar."}
+    current = state.hublink.state()
+    link = current.public()
     readiness_level = None
     configured = 0
     if state.db.ping():
         with state.db.sessions() as s:
-            link = state.enrollment.public_state(s)
             try:
                 readiness_level = sso_service.overall(s, state.settings.break_glass_test_max_age_days)
             except Exception:
@@ -193,21 +228,20 @@ def status_page(request: Request, melding: str | None = None) -> Response:
             f'<div class="card"><span class="tag {cls}">{"Gelukt" if cls == "ok" else "Let op"}</span> '
             f"{html.escape(text)}</div>"
         )
+    help_nl = (
+        "Koppelstatus onleesbaar; de dienst vertrouwt niets van de Hub. " + VIA_HUB_NL
+        if current.corrupt
+        else (STATE_HELP.get(current.state, ""))
+    )
     parts.append(
         '<div class="card"><table>'
         f"<tr><th>Dienst</th><td>{APP_ID} · versie {html.escape(__version__)}</td></tr>"
         f"<tr><th>Gereed</th><td>{_tag('ready' if ready else 'not_ready')} "
         + " ".join(f"<small>{html.escape(c['name'])}: {html.escape(c['status'])}</small>" for c in checks)
         + "</td></tr>"
-        f"<tr><th>Koppeling met de Hub</th><td>{_tag(str(link.get('status')))}<br><small>"
-        f"{html.escape(str(link.get('message_nl') or ''))}</small>"
-        + (
-            f"<br><small>Hub: {html.escape(str(link.get('hub_url')))} · sinds {html.escape(str(link.get('enrolled_at')))}"
-            f" · token …{html.escape(str(link.get('service_token_last4') or ''))}</small>"
-            if link.get("status") == "gekoppeld"
-            else ""
-        )
-        + "</td></tr></table></div>"
+        f"<tr><th>Koppeling met de Hub</th><td>{_tag(current.state)}<br><small>{html.escape(help_nl)}</small></td></tr>"
+        + _link_rows(link)
+        + "</table></div>"
     )
     if readiness_level is not None:
         # alleen het totaalniveau: aantallen en aandachtspunten (bv. 'geen noodaccount') zijn beveiligingsinformatie
@@ -216,7 +250,7 @@ def status_page(request: Request, melding: str | None = None) -> Response:
             '<div class="card"><h2>Beheerherstel (B13-001)</h2>'
             f"<p>{_tag(readiness_level['level'])}</p>"
             '<p class="muted">Details en oefeningen staan in de Hub (alleen voor beheerders). '
-            "Noodtoegang is niet afhankelijk van Authentik.</p></div>"
+            "De noodlogin zelf zit in de Hub en hangt niet van deze dienst of van Authentik af.</p></div>"
         )
     rows = "".join(
         f"<tr><td>{html.escape(DOMAIN_TITLES_NL[d])}</td><td>"
@@ -229,29 +263,23 @@ def status_page(request: Request, melding: str | None = None) -> Response:
         "Niet-geconfigureerde bronnen tonen 'onbekend', nooit 'gezond'.</small></p>"
         f"<table>{rows}</table></div>"
     )
-    if link.get("status") != "gekoppeld":
+    if not current.ever_linked and current.pending is None:
         parts.append(
             '<div class="card"><h2>Koppelen met de Hub</h2>'
-            '<p class="muted">Maak in de Hub een koppelcode voor <b>home-control-hub</b> en vul die hier in. '
-            "Gebruik het LAN-adres van de NAS met de poort van de Hub (bijv. de poort uit het Custom App-formulier).</p>"
+            '<p class="muted">Kan alleen zolang deze dienst nog nooit gekoppeld is. Maak in de Hub een koppelcode voor '
+            "<b>home-control-hub</b>; de Hub toont daarnaast de sleutelset-vingerafdruk. Vul beide hier in, met het "
+            "LAN-adres van de NAS en de poort van de Hub. Aanbevolen is installeren via de Hub (eenmalig token).</p>"
             '<form method="post" action="/koppelen" autocomplete="off">'
             f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
             '<label for="hub_url">Hub-adres</label>'
-            '<input id="hub_url" name="hub_url" type="url" required placeholder="http://&lt;NAS-adres&gt;:&lt;poort&gt;">'
+            '<input id="hub_url" name="hub_url" type="url" required maxlength="500" '
+            'placeholder="http://&lt;NAS-adres&gt;:&lt;poort&gt;">'
             '<label for="code">Koppelcode</label>'
-            '<input id="code" name="code" required maxlength="128" autocomplete="one-time-code">'
+            '<input id="code" name="code" required maxlength="32" autocomplete="one-time-code" '
+            'placeholder="XXXX-XXXX-XXXX">'
+            '<label for="fingerprint">Hub-vingerafdruk</label>'
+            '<input id="fingerprint" name="fingerprint" required maxlength="64" placeholder="XXXX-XXXX-XXXX-XXXX">'
             '<button type="submit">Koppelen</button></form></div>'
-        )
-    else:
-        parts.append(
-            '<div class="card"><h2>Ontkoppelen</h2>'
-            '<p class="muted">Alleen nodig als de Hub opnieuw is geïnstalleerd. Vul de lokale ontkoppelcode in uit de '
-            "app-log van deze start (TrueNAS → Apps → home-control-hub → Logs).</p>"
-            '<form method="post" action="/ontkoppelen" autocomplete="off">'
-            f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
-            '<label for="unpair">Lokale ontkoppelcode</label>'
-            '<input id="unpair" name="unpair_code" required maxlength="20">'
-            '<button type="submit">Ontkoppelen</button></form></div>'
         )
     body = (
         '<!doctype html><html lang="nl"><head><meta charset="utf-8">'
@@ -265,71 +293,39 @@ def status_page(request: Request, melding: str | None = None) -> Response:
 
 
 @router.post("/koppelen")
-def pair(request: Request, csrf: str = Form(""), hub_url: str = Form(""), code: str = Form("")) -> Response:
+def pair(
+    request: Request,
+    csrf: str = Form(""),
+    hub_url: str = Form(""),
+    code: str = Form(""),
+    fingerprint: str = Form(""),
+) -> Response:
     state = request.app.state
     if not _form_ok(request, csrf):
         return _redirect("ongeldig_formulier")
-    if not state.pair_throttle.allow():
+    if state.hublink.state().ever_linked:
+        return _redirect("al_gekoppeld")  # geen poging, telt niet mee
+    ip = request.client.host if request.client else "onbekend"  # TCP-bron; nooit X-Forwarded-For (§3.7)
+    if not state.pair_throttle.allow(ip):
         return _redirect("te_veel_pogingen")
-    with state.db.sessions() as s:
-        if state.enrollment.state(s).get("status") == "gekoppeld":
-            return _redirect("al_gekoppeld")
-        outcome = state.enrollment.enroll_with_code(s, hub_url[:500], code[:128])
-        tid = trace_id_for(request)
-        audit.record(
-            s,
-            domain="sso",
-            action="hub.pair" if outcome.ok else "hub.pair_failed",
-            entity_type="hub_link",
-            entity_id="hub",
-            principal=None,
-            trace_id=tid,
-            actor_override=("user", "statuspagina"),
-            message_nl=outcome.message_nl,
-            details={"reason": outcome.reason},
-        )
-        if outcome.ok:
-            events.emit(
+    tid = trace_id_for(request)
+    outcome = state.hublink.pair_with_code(
+        hub_url=hub_url[:500], pairing_code=code[:64], fingerprint=fingerprint[:64], trace_id=tid
+    )
+    if not outcome.ok and state.db.ping():
+        with state.db.sessions() as s:
+            audit.record(
                 s,
-                event_type="service.hub_link.paired",
+                domain="hub_link",
+                action="hub.pair_failed",
                 entity_type="hub_link",
                 entity_id="hub",
-                actor_type="user",
-                actor_id="statuspagina",
+                principal=None,
                 trace_id=tid,
-                payload={"via": "koppelcode"},
+                actor_override=("user", "statuspagina"),
+                message_nl="Koppelen via de statuspagina mislukt.",
+                details={"code": outcome.code},
             )
-        s.commit()
-    state.link.invalidate()
-    return _redirect("gekoppeld" if outcome.ok else outcome.reason if outcome.reason in NOTICES else "hub_onbereikbaar")
-
-
-@router.post("/ontkoppelen")
-def unpair(request: Request, csrf: str = Form(""), unpair_code: str = Form("")) -> Response:
-    state = request.app.state
-    if not _form_ok(request, csrf):
-        return _redirect("ongeldig_formulier")
-    if not state.pair_throttle.allow():
-        return _redirect("te_veel_pogingen")
-    given = unpair_code.strip().upper()
-    if not hmac.compare_digest(sha256_hex(given), state.unpair_code_sha256):
-        return _redirect("ontkoppelcode_onjuist")
-    with state.db.sessions() as s:
-        if state.enrollment.state(s).get("status") != "gekoppeld":
-            return _redirect("niet_gekoppeld")
-        state.enrollment.unpair(s)
-        tid = trace_id_for(request)
-        audit.record(
-            s,
-            domain="sso",
-            action="hub.unpair",
-            entity_type="hub_link",
-            entity_id="hub",
-            principal=None,
-            trace_id=tid,
-            actor_override=("user", "statuspagina+ontkoppelcode"),
-            message_nl="Ontkoppeld via de statuspagina met de lokale ontkoppelcode.",
-        )
-        s.commit()
-    state.link.invalidate()
-    return _redirect("ontkoppeld")
+            s.commit()
+    notice = "gekoppeld" if outcome.ok else str(outcome.code)
+    return _redirect(notice if notice in NOTICES else "hub_onbereikbaar")

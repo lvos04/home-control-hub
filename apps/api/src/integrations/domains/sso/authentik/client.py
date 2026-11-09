@@ -102,6 +102,7 @@ class AuthentikClient:
             timeout=timeout,
             transport=self.transport,
             follow_redirects=False,
+            trust_env=False,  # contract §5: proxy-omgevingsvariabelen negeren
             headers={"User-Agent": f"home-control-hub/{__version__}", "Accept": "application/json"},
         )
 
@@ -219,7 +220,7 @@ def client_from_source(
     if not row.enabled:
         raise AuthentikError("uitgeschakeld")
     try:
-        base = validate_hub_url(row.base_url, settings.allow_loopback_hub, label="Het Authentik-adres")
+        base = validate_hub_url(row.base_url, settings.allow_loopback_hub, label="Het Authentik-adres", allow_path=True)
     except HubUrlError as exc:
         raise AuthentikError("ongeldig_adres") from exc
     if not row.credential_ref:
