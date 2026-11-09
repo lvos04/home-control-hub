@@ -11,6 +11,11 @@
 - Onleesbaar bestand → fail-closed: niets wordt vertrouwd (``not_linked``) en de statuspagina biedt géén
   koppelformulier (onbekend of de dienst al eens gekoppeld was, dus geldt hij als "al eens gekoppeld"). Herstel gaat
   via een nieuw enrollment-token in het formulier van de Custom App (§3.8).
+- Moet er over een onleesbaar bestand heen geschreven worden (bv. ``pending`` of ``last_error`` van een env-token),
+  dan blijft het origineel bewaard als ``hub-link.json.onleesbaar-<tijd>`` en krijgt de nieuwe status
+  ``unreadable_replaced_at``. Zolang er daarna niet opnieuw gekoppeld is, geldt de status nog steeds als onleesbaar:
+  geen koppelformulier, niets vertrouwd. Zonder die markering zou een gewone schrijfactie het bestand stil terugzetten
+  naar ``nooit_gekoppeld`` en verscheen het koppelformulier weer (open bij fout; review contract 1.2, ADR-0013).
 """
 
 from __future__ import annotations
@@ -64,7 +69,10 @@ ERROR_MESSAGES: dict[str, str] = {
     "ingetrokken_door_hub": "De Hub heeft deze koppeling ingetrokken. Opnieuw koppelen gaat via de Hub.",
     "overzetten_onvolledig": "De koppeling uit een oudere versie kon niet volledig worden overgezet. Opnieuw koppelen "
     "gaat via de Hub.",
+    "koppelstatus_onleesbaar": "Het koppelbestand van deze dienst is onleesbaar; de dienst vertrouwt niets van de Hub. "
+    "Opnieuw koppelen gaat via een nieuw token van de Hub (HUB_ENROLLMENT_TOKEN).",
 }
+UNREADABLE_SUFFIX = ".onleesbaar-"
 
 
 def error_message(code: str | None) -> str | None:
@@ -135,12 +143,22 @@ class LinkState(_Model):
     # aanvullend (ADR-0010): een rotatieverzoek van de Hub en een geweigerde sleutelrotatie overleven een herstart
     token_rotation_requested_at: str | None = None
     key_rotation_blocked_sequence: int | None = None
+    # aanvullend (ADR-0013): een onleesbaar bestand is vervangen (origineel bewaard als hub-link.json.onleesbaar-<tijd>)
+    # zonder dat er sindsdien gekoppeld is; onbekend of de dienst al eens gekoppeld was
+    unreadable_replaced_at: str | None = None
 
     _corrupt: bool = PrivateAttr(default=False)
 
     @property
-    def corrupt(self) -> bool:
+    def unreadable(self) -> bool:
+        """Het bestand zelf is nu onleesbaar (alleen dan wordt het origineel apart gezet bij een schrijfactie)."""
         return self._corrupt
+
+    @property
+    def corrupt(self) -> bool:
+        """Koppelstatus onbekend: het bestand is onleesbaar, of een onleesbaar bestand is vervangen en er is sindsdien
+        niet opnieuw gekoppeld. Dan geen koppelformulier en niets vertrouwd (fail-closed)."""
+        return self._corrupt or (self.unreadable_replaced_at is not None and self.first_linked_at is None)
 
     @property
     def linked(self) -> bool:
@@ -150,7 +168,7 @@ class LinkState(_Model):
     @property
     def ever_linked(self) -> bool:
         """Bepaalt of de statuspagina nog een koppelformulier mag tonen (§3.7); onleesbaar telt als 'wel'."""
-        return self._corrupt or self.first_linked_at is not None
+        return self.corrupt or self.first_linked_at is not None
 
     def remember_token(self, digest: str) -> None:
         if digest not in self.used_enrollment_token_sha256:
@@ -159,7 +177,10 @@ class LinkState(_Model):
 
     def public(self) -> dict[str, Any]:
         """Witte lijst voor statuspagina, ``/readyz`` en ``GET /connector/v1/hub-link`` (§3.5): nooit het
-        service-token of ``pending.secret_sha256``."""
+        service-token of ``pending.secret_sha256``. Is de koppelstatus onbekend (onleesbaar), dan meldt ``last_error``
+        dat met de vaste code ``koppelstatus_onleesbaar``: ``state`` alleen zou dan ten onrechte "nooit gekoppeld"
+        lijken."""
+        error = LastError(code="koppelstatus_onleesbaar", at=now_iso()) if self.corrupt else self.last_error
         return {
             "state": self.state,
             "koppelen_bezig": self.pending is not None,
@@ -170,11 +191,7 @@ class LinkState(_Model):
             "first_linked_at": self.first_linked_at,
             "keyset_fingerprint": self.pins.keyset_fingerprint if self.pins else None,
             "service_token_last4": self.service_token_last4,
-            "last_error": (
-                {"code": self.last_error.code, "message": error_message(self.last_error.code)}
-                if self.last_error
-                else None
-            ),
+            "last_error": ({"code": error.code, "message": error_message(error.code)} if error else None),
         }
 
 
@@ -274,9 +291,30 @@ class HubLinkStore:
             new = change(_clone(current))
             if new is None:
                 return current
+            if current.corrupt and new.first_linked_at is None:
+                # nog steeds onbekend of de dienst al eens gekoppeld was: dat blijft na het schrijven zichtbaar
+                # (geen koppelformulier, niets vertrouwd) tot een geslaagde koppeling via een nieuw token
+                new.unreadable_replaced_at = current.unreadable_replaced_at or new.unreadable_replaced_at or now_iso()
+            if current.unreadable:
+                self._set_aside_unreadable()
             self._write(new)
             new._corrupt = False  # het bestand is nu weer leesbaar
             return new
+
+    def _set_aside_unreadable(self) -> None:
+        """Bewaar een onleesbaar ``hub-link.json`` (0600, zelfde map) voor onderzoek vóór het vervangen."""
+        aside = self.dir / f"{LINK_FILE}{UNREADABLE_SUFFIX}{utcnow().strftime('%Y%m%dT%H%M%S%fZ')}"
+        try:
+            os.rename(self.path, aside)
+            os.chmod(aside, 0o600)
+        except OSError as exc:
+            log.error(
+                "onleesbaar hub-link.json kon niet apart worden gezet (%s); het wordt vervangen", type(exc).__name__
+            )
+            return
+        log.error(
+            "onleesbaar hub-link.json bewaard als %s; de koppelstatus blijft onbekend tot opnieuw koppelen", aside.name
+        )
 
     def write_initial(self, state: LinkState) -> bool:
         """Schrijf alleen als het bestand nog niet bestaat (onder de vergrendeling). Geeft ``True`` als geschreven."""

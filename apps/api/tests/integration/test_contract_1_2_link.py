@@ -261,3 +261,45 @@ def test_pair_then_relink_via_status_page_is_impossible_but_env_still_works(
     st = w.store.read()
     assert st.state == "gekoppeld" and st.via == "token" and st.service_token != first.service_token
     assert sha256_hex(str(w.settings.enrollment_token)) in st.used_enrollment_token_sha256
+
+
+def test_unreadable_link_file_stays_fail_closed_after_a_failed_env_token(
+    client: Any, fake_hub: FakeHub, make_settings: Any, data_dir: Path
+) -> None:
+    """Review contract 1.2 (ADR-0013): een onleesbaar ``hub-link.json`` + een env-token dat definitief mislukt mocht het
+    bestand niet stil terugzetten naar ``nooit_gekoppeld`` (dan kwam het koppelformulier terug en kon iemand op het LAN
+    de dienst aan een eigen "Hub" koppelen). Herstel blijft: een nieuw, geldig env-token van de Hub."""
+    from integrations.worker import Worker
+
+    secrets_dir = data_dir / "secrets"
+    (secrets_dir / "hub-link.json").write_text('{"state": ', encoding="utf-8")
+    csrf = client.cookies.get("hch_csrf") or "x" * 32
+    assert 'action="/koppelen"' not in client.get("/").text
+    bad = "enr_" + "Q" * 43  # onbekend bij de Hub → 401 invalid_enrollment (definitief)
+    w = Worker(make_settings(hub_url=HUB_URL, enrollment_token=bad), fake_hub.transport)
+    w.run_once()
+    w.run_once()
+    st = w.store.read()
+    assert st.corrupt and st.ever_linked and not st.linked and st.last_error is not None
+    assert sha256_hex(bad) in st.used_enrollment_token_sha256 and len(fake_hub.enroll_requests) == 1  # niet opnieuw
+    assert len(list(secrets_dir.glob("hub-link.json.onleesbaar-*"))) == 1
+    page = client.get("/")
+    assert 'action="/koppelen"' not in page.text and "koppelstatus_onleesbaar" in page.text
+    client.cookies.set("hch_csrf", csrf)
+    assert (
+        _post(client, csrf, code=fake_hub.sim.new_pairing_code(), fingerprint=fake_hub.fingerprint()) == "al_gekoppeld"
+    )
+    assert len(fake_hub.enroll_requests) == 1  # geen koppelpoging via de statuspagina
+    ready = client.get("/readyz").json()["hub_link"]
+    assert ready["state"] == "nooit_gekoppeld" and ready["last_error"]["code"] == "koppelstatus_onleesbaar"
+    assert client.get("/connector/v1/discover", headers=fake_hub.service_auth()).json()["details"]["reason"] == (
+        "not_linked"
+    )
+    # herstel: een nieuw, geldig env-token van de Hub koppelt (en maakt de status weer bekend)
+    w2 = Worker(
+        make_settings(hub_url=HUB_URL, enrollment_token=fake_hub.sim.new_enrollment_token()), fake_hub.transport
+    )
+    w2.run_once()
+    st = w2.store.read()
+    assert st.state == "gekoppeld" and not st.corrupt and st.unreadable_replaced_at is None
+    assert client.get("/connector/v1/hub-link", headers=fake_hub.service_auth()).status_code == 200

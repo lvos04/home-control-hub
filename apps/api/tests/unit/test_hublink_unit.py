@@ -25,7 +25,7 @@ from integrations.enrollment import (
     verify_rotation,
 )
 from integrations.hubclient import HubClient
-from integrations.hublink_store import MAX_USED_TOKENS, HubLinkStore, LinkState, Pending
+from integrations.hublink_store import MAX_USED_TOKENS, HubLinkStore, LastError, LinkState, Pending
 from integrations.security.hubkeys import validate_hub_jwk
 from integrations.security.secrets import enroll_public_jwk, ensure_secrets, load_identity
 from integrations.status_page import PairThrottle
@@ -246,6 +246,45 @@ def test_store_lock_serialises_read_modify_write(tmp_path: Path) -> None:
     assert len(store.read().used_enrollment_token_sha256) == 15  # 5 × 3 geschreven, geen verloren updates
     with_more = store.read()
     assert len(set(with_more.used_enrollment_token_sha256)) == len(with_more.used_enrollment_token_sha256)
+
+
+def test_write_over_unreadable_file_keeps_it_and_stays_fail_closed(tmp_path: Path) -> None:
+    """Review contract 1.2 (ADR-0013): een gewone schrijfactie (``last_error``, ``pending``, tokenhash) over een onleesbaar
+    bestand mag de koppelstatus niet stil terugzetten naar ``nooit_gekoppeld``: dan kwam het koppelformulier terug
+    (open bij fout). Het origineel blijft bewaard (0600) en de status blijft 'onbekend' tot een geslaagde koppeling."""
+    store = HubLinkStore(tmp_path)
+    (tmp_path / "hub-link.json").write_text("geen json", encoding="utf-8")
+
+    def error(st: LinkState) -> LinkState:
+        st.last_error = LastError(code="hub_adres_ongeldig", at="2026-11-09T12:00:00Z")
+        st.remember_token("a" * 64)
+        return st
+
+    after = store.update(error)
+    asides = sorted(tmp_path.glob("hub-link.json.onleesbaar-*"))
+    assert len(asides) == 1 and asides[0].read_text(encoding="utf-8") == "geen json"
+    assert stat.S_IMODE(asides[0].stat().st_mode) == 0o600
+    for st in (after, store.read(), HubLinkStore(tmp_path).read()):  # ook een ander proces ziet het
+        assert st.corrupt and st.ever_linked and not st.linked and not st.unreadable
+        assert st.state == "nooit_gekoppeld" and st.unreadable_replaced_at is not None
+        assert st.used_enrollment_token_sha256 == ["a" * 64]  # het env-token wordt niet opnieuw geprobeerd
+        assert st.public()["last_error"]["code"] == "koppelstatus_onleesbaar"
+    # een volgende schrijfactie zet niets meer apart en houdt de markering
+    store.update(lambda st: st.model_copy(update={"last_error": None}))
+    assert len(list(tmp_path.glob("hub-link.json.onleesbaar-*"))) == 1 and store.read().corrupt
+    # pas een geslaagde koppeling (first_linked_at gevuld) maakt de status weer bekend
+    linked = store.update(lambda _st: LinkState(state="ontkoppeld", first_linked_at="2026-11-09T12:00:00Z"))
+    assert not linked.corrupt and linked.unreadable_replaced_at is None and not store.read().corrupt
+
+
+def test_unreadable_file_without_write_is_untouched(tmp_path: Path) -> None:
+    store = HubLinkStore(tmp_path)
+    (tmp_path / "hub-link.json").write_text("{}x", encoding="utf-8")
+    assert store.update(lambda _st: None).corrupt  # 'niets wijzigen' schrijft niets en zet niets apart
+    assert (tmp_path / "hub-link.json").read_text(encoding="utf-8") == "{}x"
+    assert not list(tmp_path.glob("hub-link.json.onleesbaar-*"))
+    pub = store.read().public()
+    assert pub["state"] == "nooit_gekoppeld" and pub["last_error"]["code"] == "koppelstatus_onleesbaar"
 
 
 # ------------------------------------------------------------------ sleutelrotatie (§4.5)
