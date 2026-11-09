@@ -20,9 +20,11 @@ goedkeuring, executor) bestaat pas in fase P2. Er is geen echte Authentik, NAS o
    `docs/b13/authentik-api-verificatie.json`). Versieafhankelijk: `grant_types` pas vanaf 2026.5, `?actions=` pas
    vanaf 2025.8 (oudere versies negeren die filter en zouden alles teruggeven → dan per actie vragen).
    Nieuwere lijnen: lezen met waarschuwing, geen voorstellen. Ouder dan 2024.10: niet ondersteund.
-3. **Least privilege.** Detectie leest `/core/users/me/`; een superuser-token geeft status `degraded`
-   (`token_te_ruim`). Aanbevolen: een Authentik-serviceaccount met alleen leesrechten (exacte RBAC-rechtnamen zijn
-   **te verifiëren** op een echte installatie). Een ontbrekend recht maakt een onderdeel `onvolledig`, nooit "leeg".
+3. **Least privilege.** Detectie leest `/core/users/me/`; een superuser-token of een schrijvend systeemrecht geeft
+   status `degraded` (`token_te_ruim`). Rolrechten op objecten zijn via die route niet te zien: zonder bevinding is de
+   uitkomst `deels_gecontroleerd`, nooit `ok` (aangescherpt in ADR-0009). Aanbevolen: een Authentik-serviceaccount
+   met alleen leesrechten (exacte RBAC-rechtnamen zijn **te verifiëren** op een echte installatie). Een ontbrekend
+   recht maakt een onderdeel `onvolledig`, nooit "leeg".
 4. **Schoning met een whitelist.** Wat uit Authentik bewaard of doorgegeven wordt bevat alleen genoemde velden: nooit
    `client_secret`, privésleutels, e-mail of vrije `attributes`. Flow-exports (blueprints) worden regel voor regel
    geredigeerd (`password|secret|token|private_key|api_key`) en alleen met sha256 van het origineel bewaard.
@@ -53,7 +55,8 @@ goedkeuring, executor) bestaat pas in fase P2. Er is geen echte Authentik, NAS o
    geheim, verdacht verzoek, login van een geregistreerd Authentik-noodaccount, wijziging van een aan een rol
    gekoppelde groep, beheerrecht toegekend, afwijking na herstel. De grenzen zijn een startpunt, niet geijkt op een
    echte installatie. De rechtenkaart wordt alleen bij een **volledig** gelezen toestand vergeleken (een half gelezen
-   lijst mag nooit "toegang ingetrokken" opleveren) en alleen bij verandering opgeslagen. Ingetrokken toegang →
+   lijst mag nooit "toegang ingetrokken" opleveren) en alleen bij verandering opgeslagen. Is de laatste volledige
+   lezing te oud, dan is de kaart `verouderd` (ADR-0009). Ingetrokken toegang →
    `sso.access.revoked` zodat de Hub sessies kan beëindigen; worker synchroniseert elke 300 s
    (`HCH_AUTHENTIK_SYNC_INTERVAL_S`, 0 = uit).
 8. **B13-005 back-up en upgrade.** De configuratie-export via API + flow-blueprints is een *controlebasis*, geen

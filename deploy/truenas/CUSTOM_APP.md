@@ -91,8 +91,9 @@ de app bewaart ze versleuteld in `/appdata` (`vault.key` in `/appdata/secrets`).
 
 Authentik zelf installeer je als **officiële TrueNAS-catalogusapp** `authentik` (niet met dit formulier); laat daar
 **Mount Docker Socket uit**. Daarna in de Hub-UI bij de bron *Authentik*: het LAN-adres van Authentik en een
-**API-token van een serviceaccount met alleen leesrechten** (geen superuser — de app meldt een te ruim token als
-waarschuwing). Deze app leest alleen; wijzigingen in Authentik zijn voorstellen die pas met een door de Hub
+**API-token van een serviceaccount met alleen leesrechten** (geen superuser — de app meldt een superuser-token of
+schrijvende systeemrechten als waarschuwing; de rolrechten van het serviceaccount kan de app niet zelf zien, die
+controleer je in Authentik: alleen `view`-rechten). Deze app leest alleen; wijzigingen in Authentik zijn voorstellen die pas met een door de Hub
 ondertekende opdracht kunnen worden uitgevoerd (nog niet beschikbaar). Back-up en upgrade: zie
 `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
 

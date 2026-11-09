@@ -9,7 +9,9 @@ via de back-up/snapshotfunctie van het platform. Home Control Hub maakt daarnaas
 om na een herstel of upgrade te controleren of rechten, 2FA en clients weer kloppen.
 
 ## Vóór een upgrade
-1. **Hub → SSO → Authentik → Detecteren**: controleer de versie en dat het token geen superuser is.
+1. **Hub → SSO → Authentik → Detecteren**: controleer de versie en dat het token geen superuser is en geen
+   schrijvende systeemrechten heeft. De uitkomst is hooguit `deels_gecontroleerd`: kijk in Authentik zelf na dat
+   de rollen van het serviceaccount alleen `view`-rechten geven.
 2. **Configuratie-export maken**: moet *volledig* zijn (geen ontbrekende onderdelen).
 3. **Back-up van de Authentik-database** maken via het platform (de Hub bevestigt het checkpoint).
 4. **Pre-upgrade-gate** met de exacte doelversie (bv. de volgende release-lijn). Alleen doorgaan bij `ok_lokaal`
