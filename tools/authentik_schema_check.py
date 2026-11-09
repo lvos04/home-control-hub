@@ -58,14 +58,17 @@ def check_version(version: str, raw: bytes) -> dict[str, Any]:
     doc = yaml.safe_load(raw)
     paths, comps = doc["paths"], doc["components"]
     line = compat.parse_version(version)
-    assert line is not None
+    if line is None:
+        raise SystemExit(f"ongeldige versie {version!r} in RELEASE_LINES")
     problems: list[str] = []
     checked = 0
     for use in compat.USED_API:
         if use.since is not None and line.line < use.since:
             # de grens moet exact zijn: vóór 'since' hoort het kenmerk te ontbreken
             if _present(use, paths, comps):
-                problems.append(f"{use.method.upper()} {use.path} {use.params or use.fields}: bestaat al vóór {use.since}")
+                problems.append(
+                    f"{use.method.upper()} {use.path} {use.params or use.fields}: bestaat al vóór {use.since}"
+                )
             continue
         checked += 1
         ops = paths.get(use.path)
