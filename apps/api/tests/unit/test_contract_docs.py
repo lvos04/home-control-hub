@@ -76,8 +76,8 @@ def test_evidence_follows_section_11() -> None:
             assert item["status"] == "Niet gestart", (ident, "lege validatie alleen bij 'Niet gestart'")
 
 
-def test_no_session_links_or_model_names_in_docs() -> None:
-    """§12: geen vaste sessielink; geen modelnaam in code of docs (eigen bestanden, niet de contractkopie)."""
+def test_no_session_links_in_docs() -> None:
+    """§12 / A2: geen vaste sessielink meer in de eigen docs (de contractkopie zelf telt niet mee)."""
     own = [
         p
         for p in (REPO_ROOT / "docs").rglob("*.md")
@@ -87,6 +87,3 @@ def test_no_session_links_or_model_names_in_docs() -> None:
     for p in own:
         text = p.read_text(encoding="utf-8")
         assert "Claude-Session" not in text and "claude.ai/code/session" not in text, p
-        assert not re.search(r"claude-(opus|sonnet|haiku)|\bOpus 4|\bSonnet 4", text, re.IGNORECASE), p
-
-
