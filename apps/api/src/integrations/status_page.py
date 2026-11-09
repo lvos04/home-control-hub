@@ -32,7 +32,7 @@ import time
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -53,12 +53,20 @@ router = APIRouter(include_in_schema=False)
 
 CSRF_COOKIE = "hch_csrf"
 DIENST_NAAM = "Home Control Hub"
+# kort: "Onderdeel van TrueNAS Home Platform" staat erboven en "Alle schermen staan in de Hub" in de voet (sjabloon)
 DIENST_OMSCHRIJVING = (
-    "Integratiedienst van het TrueNAS Home Platform: netwerk en privacy, Node-RED-automatisering, Authentik en "
-    "toegangsbeheer, energie en resources. Alle schermen staan in de Hub; dit is alleen de statuspagina."
+    "Integratiedienst voor netwerk en privacy, Node-RED-automatisering, Authentik en toegangsbeheer, en energie en "
+    "resources. Dit is alleen de statuspagina."
 )
 KOPPELCODE_GELDIG = "60 minuten"
 VIA_HUB_NL = "Ontkoppelen of opnieuw koppelen gaat via de Hub."
+OPNIEUW_VIA_HUB_NL = "Opnieuw koppelen gaat via de Hub."
+#: een meting van een bron die ouder is, is verouderd: Onbekend, nooit de laatst bekende stand (Peil §4.1/§4.4;
+#: 05_OPERATIES "nooit healthy op stale cache"). Gelijk aan de inventaris-TTL van de Hub (15 min); ADR-0012.
+BRON_MAX_LEEFTIJD = timedelta(minutes=15)
+#: wie na een mislukte poging het formulier opnieuw ziet: de velden zijn leeg (ingevulde waarden worden nooit
+#: teruggezet, ADR-0011 besluit 6); dat zeggen we erbij (WCAG 3.3.7, uitzondering voor veiligheid)
+OPNIEUW_INVULLEN_NL = "Ingevulde waarden bewaren we bewust niet: vul alle velden opnieuw in."
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
@@ -98,7 +106,7 @@ _NIETS_NAAR_HUB = "Er is niets naar de Hub gestuurd."
 FOUTEN: dict[str, FoutSoort] = {
     "ongeldig_formulier": FoutSoort(
         403,
-        "Het formulier is verlopen of komt niet van deze pagina. Vul het opnieuw in. " + _NIETS_NAAR_HUB,
+        "Het formulier is verlopen of komt niet van deze pagina. " + _NIETS_NAAR_HUB,
         titel="Koppelen is niet gestart",
     ),
     "al_gekoppeld": FoutSoort(
@@ -108,7 +116,8 @@ FOUTEN: dict[str, FoutSoort] = {
     ),
     "koppelen_bezig": FoutSoort(
         409,
-        "Er loopt al een koppelpoging. Wacht een minuut en laad de pagina opnieuw.",
+        "Er loopt al een koppelpoging. " + _NIETS_NAAR_HUB + " Hoe die poging ervoor staat, zie je hieronder bij "
+        "Status, regel Koppeling met de Hub.",
         titel="Koppelen is niet gestart",
     ),
     "te_veel_pogingen": FoutSoort(
@@ -166,6 +175,8 @@ FOUTEN: dict[str, FoutSoort] = {
     "hub_antwoord_ongeldig": FoutSoort(502, ERROR_MESSAGES["hub_antwoord_ongeldig"]),
     "enroll_endpoint_ontbreekt": FoutSoort(502, ERROR_MESSAGES["enroll_endpoint_ontbreekt"]),
 }
+#: fouten waarbij opnieuw invullen nu niet helpt (wachten of via de Hub)
+_GEEN_INVOER = frozenset({"al_gekoppeld", "koppelen_bezig", "te_veel_pogingen", "rate_limited"})
 ONBEKENDE_FOUT = FoutSoort(502, "Koppelen is niet gelukt. Er is niets opgeslagen. Probeer het opnieuw.")
 
 
@@ -317,7 +328,7 @@ def _laatste_fout(link: LinkState, nu: datetime) -> str | None:
     wanneer = _parse(link.last_error.at)
     tijd = nl_datumtijd(wanneer.astimezone(nu.tzinfo)) if wanneer else "tijd onbekend"
     tekst = ERROR_MESSAGES.get(link.last_error.code, "Koppelen is niet gelukt.")
-    return f"Laatste melding ({tijd}, code {link.last_error.code}): {tekst}"
+    return f"Laatste melding, {tijd} (code {link.last_error.code}): {tekst}"
 
 
 # ------------------------------------------------------------------------------------------------ model
@@ -338,36 +349,57 @@ def koppeltoestand(link: LinkState) -> str | None:
 
 
 def _koppel_controle(m: Meting, met_laatste_fout: bool) -> tuple[dict[str, Any] | None, str | None]:
-    """Controle 'Koppeling met de Hub' (alleen als er iets ontbreekt) en de reden waarom de dienst niet gereed is."""
+    """Controle 'Koppeling met de Hub' (alleen als er iets ontbreekt) en de reden waarom de dienst niet gereed is.
+
+    Het woord in de pil is altijd het vaste Peil-woord bij het icoon van de toon (Onbekend = ``circle-help``, Storing =
+    ``octagon-x``; ONTWERPTAAL §7 "één icoon per betekenis", §11.1); de precieze toestand ("Niet gekoppeld",
+    "Ingetrokken", …) opent de reden ernaast. Het sjabloon kan in een controle geen ``link-2-off`` tonen (ADR-0012)."""
     link, nu, naam = m.link, m.nu, "Koppeling met de Hub"
     laatste = _laatste_fout(link, nu) if met_laatste_fout else None
+
+    def rij(toon: str, *delen: str | None) -> dict[str, Any]:
+        return _rij(naam, toon, nu, " ".join(d for d in delen if d))
+
     if link.corrupt:
+        # de variabelenaam staat hier (14 px, brede kolom) en niet in de melding: een woord van 20 tekens past
+        # daar op 320 px niet met de tekstafstand van WCAG 1.4.12 (het sjabloon breekt lopende tekst niet; ADR-0012)
         reden = (
-            "Het koppelbestand in /appdata/secrets is onleesbaar; de dienst vertrouwt niets van de Hub. Herstel: zet "
-            "in het formulier van de Custom App een nieuw eenmalig token van de Hub (HUB_ENROLLMENT_TOKEN)."
+            "Koppelbestand onleesbaar: de dienst vertrouwt niets van de Hub. Herstel: een nieuw eenmalig token van de "
+            "Hub in de variabele HUB_ENROLLMENT_TOKEN van de Custom App."
         )
-        return _rij(naam, "storing", nu, reden, "Onleesbaar"), "koppelstatus onleesbaar"
+        return rij("storing", reden), "koppelstatus onleesbaar"
     toestand = koppeltoestand(link)
     if toestand == "koppelformulier":
         if link.pending is not None:
-            reden = "Er loopt een koppelpoging. Laad de pagina over een minuut opnieuw."
-            return _rij(naam, "onbekend", nu, reden, "Koppelen bezig"), "koppelen is bezig"
-        reden = " ".join(
-            x for x in ("Zonder koppeling voert de dienst niets uit voor de Hub.", laatste) if x is not None
+            via = (
+                "met het token HUB_ENROLLMENT_TOKEN uit de Custom App"
+                if link.pending.kind == "token"
+                else "met een koppelcode van deze pagina"
+            )
+            reden = (
+                f"Koppelen bezig {via}; de dienst probeert het zelf opnieuw. Het formulier hieronder werkt pas weer "
+                "als deze poging klaar is."
+            )
+            return rij("onbekend", reden, laatste), "koppelen is bezig"
+        return (
+            rij("onbekend", "Niet gekoppeld: zonder koppeling voert de dienst niets uit voor de Hub.", laatste),
+            "wacht op koppeling met de Hub",
         )
-        return _rij(naam, "onbekend", nu, reden, "Niet gekoppeld"), "wacht op koppeling met de Hub"
     if toestand == "ingetrokken":
-        reden = "De Hub heeft de koppeling ingetrokken; de dienst weigert elke opdracht. " + VIA_HUB_NL
-        return _rij(naam, "onbekend", nu, reden, "Ingetrokken"), "de Hub heeft de koppeling ingetrokken"
+        reden = "Ingetrokken door de Hub: de dienst weigert elke opdracht. " + OPNIEUW_VIA_HUB_NL
+        return rij("onbekend", reden), "de Hub heeft de koppeling ingetrokken"
     if toestand == "ontkoppeld":
-        reden = "De Hub heeft deze dienst ontkoppeld; de dienst voert niets uit. " + VIA_HUB_NL
-        return _rij(naam, "onbekend", nu, reden, "Ontkoppeld"), "ontkoppeld door de Hub"
+        reden = "Ontkoppeld door de Hub: de dienst voert niets uit. " + OPNIEUW_VIA_HUB_NL
+        return rij("onbekend", reden), "ontkoppeld door de Hub"
     if not link.linked:
-        reden = "De koppeling is onvolledig opgeslagen; de dienst vertrouwt niets van de Hub. " + VIA_HUB_NL
-        return _rij(naam, "storing", nu, reden, "Onvolledig"), "koppeling onvolledig"
+        reden = "Koppeling onvolledig opgeslagen: de dienst vertrouwt niets van de Hub. " + OPNIEUW_VIA_HUB_NL
+        return rij("storing", reden), "koppeling onvolledig"
     if link.confirmed_at is None:
-        reden = "Gekoppeld, maar de Hub heeft de koppeling nog niet bevestigd. De dienst probeert het opnieuw."
-        return _rij(naam, "onbekend", nu, reden, "Niet bevestigd"), "wacht op bevestiging door de Hub"
+        reden = (
+            "Niet bevestigd: gekoppeld, maar de Hub heeft de koppeling nog niet bevestigd. De dienst probeert het "
+            "opnieuw."
+        )
+        return rij("onbekend", reden), "wacht op bevestiging door de Hub"
     return None, None
 
 
@@ -469,6 +501,8 @@ def bouw_model(
             melding_code=fout.code,
             trace_id=fout.trace_id,
         )
+        if toestand == "koppelformulier" and fout.code not in _GEEN_INVOER:
+            data["melding_tekst"] = f"{soort.tekst} {OPNIEUW_INVULLEN_NL}"
         if soort.veld is not None and toestand == "koppelformulier":
             doel = _VELD_ID[soort.veld]
             data.update(
@@ -489,8 +523,8 @@ def bouw_model(
             melding_titel="Koppelstatus onleesbaar",
             melding_tekst=(
                 "Het koppelbestand van deze dienst kon niet worden gelezen. De dienst vertrouwt daarom niets van de "
-                "Hub en biedt geen koppelformulier. Herstel: zet in het formulier van de Custom App een nieuw "
-                "eenmalig token van de Hub (HUB_ENROLLMENT_TOKEN)."
+                "Hub en biedt geen koppelformulier. Herstel: maak in de Hub een nieuw eenmalig token en zet het in het "
+                "formulier van de Custom App; welke variabele dat is, staat hieronder bij Status."
             ),
             melding_code="koppelstatus_onleesbaar",
             trace_id=melding_trace_id,
@@ -526,21 +560,13 @@ def _dienst_blok(m: Meting) -> list[dict[str, Any]]:
             )
             blok.append(rij(naam, "onbekend", reden))
             continue
-        toon = max((_BRON_TOON.get(b.status, "onbekend") for b in ingesteld), key=lambda t: _ERNST[t])
-        tijden = [b.gemeten for b in ingesteld if b.gemeten is not None]
-        meting = f"laatst gemeten {nl_datumtijd(max(tijden).astimezone(m.nu.tzinfo))}" if tijden else "nog niet gemeten"
-        blok.append(rij(naam, toon, f"{len(ingesteld)} van {totaal} bronnen ingesteld · {meting}."))
+        blok.append(_domein_rij(naam, totaal, ingesteld, m.nu))
     niveau = m.herstel_niveau if m.db_ok else None
     blok.append(
         rij(
             "Beheerherstel (B13-001)",
             _HERSTEL_TOON.get(niveau or "", "onbekend"),
-            (
-                "Alleen het totaalniveau; details en oefeningen staan in de Hub (alleen voor beheerders). De "
-                "noodlogin zit in de Hub en hangt niet van deze dienst of van Authentik af."
-                if niveau is not None
-                else "Niet te meten: de eigen database antwoordt niet."
-            ),
+            _HERSTEL_REDEN.get(niveau or "", "Niet te meten: de eigen database antwoordt niet."),
         )
     )
     blok.append(
@@ -554,6 +580,51 @@ def _dienst_blok(m: Meting) -> list[dict[str, Any]]:
     return blok
 
 
+_HERSTEL_DETAILS = "Alleen het totaalniveau staat hier; details en oefeningen staan in de Hub (alleen voor beheerders)."
+#: Onbekend en Beperkt altijd met een reden, zonder aandachtspunten of accountnamen van het herstelregister
+_HERSTEL_REDEN = {
+    "ok": f"{_HERSTEL_DETAILS} De noodlogin zit in de Hub en hangt niet van deze dienst of van Authentik af.",
+    "risico": f"Het herstelregister heeft aandachtspunten. {_HERSTEL_DETAILS}",
+    "onbekend": f"Het herstelregister is nog niet volledig ingevuld of getest. {_HERSTEL_DETAILS}",
+}
+
+
+def _domein_rij(naam: str, totaal: int, ingesteld: list[BronStand], nu: datetime) -> dict[str, Any]:
+    """Stand van een domein: de slechtste van de **verse** metingen; een verouderde of nooit gedane meting telt als
+    Onbekend en nooit als de laatst bekende stand (Peil §4.1 regel 4, §4.4; ADR-0012)."""
+    soorten: dict[str, int] = {}
+    tonen: list[str] = []
+    verse: list[datetime] = []
+    oud: list[datetime] = []
+    for b in ingesteld:
+        if b.gemeten is None:
+            soort, toon = "nog nooit gemeten", "onbekend"
+        elif nu - b.gemeten > BRON_MAX_LEEFTIJD:
+            soort, toon = "verouderd", "onbekend"
+            oud.append(b.gemeten)
+        else:
+            toon = _BRON_TOON.get(b.status, "onbekend")
+            soort = {"gezond": "gezond", "beperkt": "beperkt", "storing": "storing"}.get(toon, "onbekend")
+            verse.append(b.gemeten)
+        soorten[soort] = soorten.get(soort, 0) + 1
+        tonen.append(toon)
+    toon = max(tonen, key=lambda t: _ERNST[t])
+    volgorde = ("storing", "beperkt", "onbekend", "verouderd", "nog nooit gemeten", "gezond")
+    if oud:  # Peil §11.1: "Verouderd · laatst bekend <tijd>" (de tijd, niet de oude stand)
+        soorten_tekst = {"verouderd": f"verouderd (laatst bekend {nl_datumtijd(max(oud).astimezone(nu.tzinfo))})"}
+    else:
+        soorten_tekst = {}
+    telling = ", ".join(f"{soorten[s]} {soorten_tekst.get(s, s)}" for s in volgorde if soorten.get(s))
+    woord = "bron" if totaal == 1 else "bronnen"
+    delen = [f"{len(ingesteld)} van {totaal} {woord} ingesteld: {telling}."]
+    if verse:
+        delen.append(f"Laatst gemeten {nl_datumtijd(max(verse).astimezone(nu.tzinfo))}.")
+    if oud:
+        minuten = int(BRON_MAX_LEEFTIJD.total_seconds() // 60)
+        delen.append(f"Metingen ouder dan {minuten} minuten tellen als onbekend.")
+    return {"naam": naam, "toon": _toon(toon), "label": _WOORD[toon], "reden": " ".join(delen)}
+
+
 def _totaal(
     rijen: list[dict[str, Any]], gereed: bool, niet_gereed: list[str], dienst_blok: list[dict[str, Any]]
 ) -> tuple[str, str, str]:
@@ -564,17 +635,17 @@ def _totaal(
     if toon == "storing":
         return toon, "Storing", f"Niet gereed — {waarom}."
     if toon == "beperkt":
-        beperkt = ", ".join(r["naam"].lower() for r in rijen if r["toon"] == "beperkt")
-        return toon, "Beperkt", (f"Niet gereed — {waarom}." if not gereed else f"Gereed; beperkt: {beperkt}.")
+        beperkt = ", ".join(r["naam"] for r in rijen if r["toon"] == "beperkt")  # namen ongewijzigd ("Hub")
+        return toon, "Beperkt", (f"Niet gereed — {waarom}." if not gereed else f"Gereed, maar beperkt: {beperkt}.")
     if toon == "onbekend":
         return toon, "Niet gereed", f"Deels onbekend — {waarom}."
     telling = {t: sum(1 for r in dienst_blok if r["toon"] == t) for t in ("storing", "beperkt", "onbekend")}
     onder = " · ".join(f"{n} {t}" for t, n in telling.items() if n)
-    # kort: deze regel staat vet naast de pil; de controles zelf staan eronder
+    # kort: deze regel staat vet naast de pil; hij noemt de kop van het blok waar de afwijkingen staan
     return (
         "gezond",
         "Gezond",
-        (f"Gereed; onderdelen hieronder: {onder}." if onder else "Gereed; alle controles en onderdelen zijn gezond."),
+        (f"Gereed. Wat deze dienst doet: {onder}." if onder else "Gereed. Alle controles en onderdelen zijn gezond."),
     )
 
 

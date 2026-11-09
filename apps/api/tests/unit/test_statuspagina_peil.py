@@ -18,7 +18,17 @@ import pytest
 
 from integrations import peil
 from integrations.hublink_store import LastError, LinkState, Pending, Pin, Pins, PublicJwk
-from integrations.status_page import FOUTEN, BronStand, Fout, Meting, bouw_model, koppeltoestand, nl_datumtijd
+from integrations.status_page import (
+    BRON_MAX_LEEFTIJD,
+    FOUTEN,
+    OPNIEUW_INVULLEN_NL,
+    BronStand,
+    Fout,
+    Meting,
+    bouw_model,
+    koppeltoestand,
+    nl_datumtijd,
+)
 from tests.conftest import REPO_ROOT
 
 NU = datetime(2026, 11, 9, 11, 56, tzinfo=UTC)
@@ -232,8 +242,9 @@ def test_not_linked_is_never_green_and_shows_last_error() -> None:
     assert data["gereed"] == "Nee — wacht op koppeling met de Hub"
     assert data["titel_toestand"] == "niet gekoppeld, niet gereed"
     rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
-    assert rij["toon"] == "onbekend" and rij["label"] == "Niet gekoppeld"
-    assert "code hub_weigerde" in rij["reden"] and "9 nov 2026, 11:50 UTC" in rij["reden"]
+    # vast Peil-woord bij het icoon (circle-help = Onbekend); de precieze toestand opent de reden (ADR-0012)
+    assert rij["toon"] == "onbekend" and rij["label"] == "Onbekend" and rij["reden"].startswith("Niet gekoppeld: ")
+    assert "Laatste melding, 9 nov 2026, 11:50 UTC (code hub_weigerde)" in rij["reden"]
     assert not data.get("melding")  # een opgeslagen fout is geen melding met trace-ID van dit verzoek
     html = _html(data)
     assert '<span class="pil pil-onbekend"><svg aria-hidden="true"><use href="#i-onbekend"/></svg>Niet gereed' in html
@@ -243,7 +254,7 @@ def test_not_linked_is_never_green_and_shows_last_error() -> None:
 def test_linked_and_confirmed_is_healthy_with_neutral_link_pill() -> None:
     data = bouw_model(_meting(_link("gekoppeld")), csrf="c" * 32, gekoppeld_melding=True)
     assert (data["totaal_toon"], data["totaal_label"], data["gereed"]) == ("gezond", "Gezond", "Ja")
-    assert data["totaal_toelichting"] == "Gereed; onderdelen hieronder: 1 beperkt · 3 onbekend."
+    assert data["totaal_toelichting"] == "Gereed. Wat deze dienst doet: 1 beperkt · 3 onbekend."
     assert all(r["naam"] != "Koppeling met de Hub" for r in data["checks"])  # alleen als er iets ontbreekt
     assert data["hub_adres"] == "http://hub.test:30400" and data["hub_vingerafdruk"] == FP
     assert data["gekoppeld_sinds"] == "8 nov 2026, 19:14 UTC"
@@ -265,18 +276,19 @@ def test_success_notice_only_when_really_linked() -> None:
 
 
 @pytest.mark.parametrize(
-    ("soort", "label", "reden"),
+    ("soort", "toestand", "reden"),
     [
-        ("onbevestigd", "Niet bevestigd", "wacht op bevestiging door de Hub"),
-        ("ingetrokken", "Ingetrokken", "de Hub heeft de koppeling ingetrokken"),
-        ("ontkoppeld", "Ontkoppeld", "ontkoppeld door de Hub"),
-        ("bezig", "Koppelen bezig", "koppelen is bezig"),
+        ("onbevestigd", "Niet bevestigd: ", "wacht op bevestiging door de Hub"),
+        ("ingetrokken", "Ingetrokken door de Hub: ", "de Hub heeft de koppeling ingetrokken"),
+        ("ontkoppeld", "Ontkoppeld door de Hub: ", "ontkoppeld door de Hub"),
+        ("bezig", "Koppelen bezig met het token HUB_ENROLLMENT_TOKEN uit de Custom App", "koppelen is bezig"),
     ],
 )
-def test_link_problems_make_the_service_not_ready(soort: str, label: str, reden: str) -> None:
+def test_link_problems_make_the_service_not_ready(soort: str, toestand: str, reden: str) -> None:
     data = bouw_model(_meting(_link(soort)), csrf="c" * 32)
     rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
-    assert (rij["toon"], rij["label"]) == ("onbekend", label)
+    assert (rij["toon"], rij["label"]) == ("onbekend", "Onbekend") and rij["reden"].startswith(toestand)
+    assert "Ontkoppelen" not in rij["reden"]  # na intrekken/ontkoppelen kan alleen opnieuw koppelen
     assert data["totaal_toon"] == "onbekend" and data["totaal_label"] == "Niet gereed"
     assert data["gereed"] == f"Nee — {reden}"
 
@@ -310,7 +322,7 @@ def test_schema_and_secrets_failures() -> None:
 def test_refused_key_rotation_is_limited_but_ready() -> None:
     data = bouw_model(_meting(_link("rotatie_geweigerd")), csrf="c" * 32)
     assert (data["totaal_toon"], data["totaal_label"], data["gereed"]) == ("beperkt", "Beperkt", "Ja")
-    assert data["totaal_toelichting"] == "Gereed; beperkt: sleutels van de hub."
+    assert data["totaal_toelichting"] == "Gereed, maar beperkt: Sleutels van de Hub."
 
 
 def test_sources_and_recovery_level_in_service_block() -> None:
@@ -324,15 +336,111 @@ def test_sources_and_recovery_level_in_service_block() -> None:
     assert rijen["Netwerk en privacy (B10)"]["toon"] == "storing"
     assert (
         rijen["Netwerk en privacy (B10)"]["reden"]
-        == "2 van 5 bronnen ingesteld · laatst gemeten 9 nov 2026, 11:55 UTC."
+        == "2 van 5 bronnen ingesteld: 1 storing, 1 gezond. Laatst gemeten 9 nov 2026, 11:55 UTC."
     )
     assert rijen["Node-RED-automatisering (B11)"]["toon"] == "onbekend"
-    assert "nog niet gemeten" in rijen["Node-RED-automatisering (B11)"]["reden"]
+    assert rijen["Node-RED-automatisering (B11)"]["reden"] == "1 van 1 bron ingesteld: 1 nog nooit gemeten."
     assert rijen["Energie en resources (B14)"]["reden"].startswith("Nog geen bron ingesteld")
     assert rijen["Beheerherstel (B13-001)"]["toon"] == "gezond"
     assert rijen["Boiler"]["label"] == "Alleen meten" and rijen["Boiler"]["toon"] == "gate"
     # een uitgevallen bron maakt de dienst zelf niet 'storing', maar de telling staat wel bij het totaal
     assert data["totaal_toon"] == "gezond" and "1 storing" in data["totaal_toelichting"]
+
+
+# ------------------------------------------------------------------ ontwerpreview Peil (ADR-0012)
+def test_stale_measurement_is_never_green() -> None:
+    """Een oude meting is Onbekend (verouderd), nooit de laatst bekende stand (Peil §4.1 regel 4, §4.4)."""
+    oud = NU - BRON_MAX_LEEFTIJD - timedelta(seconds=1)
+    bronnen = (
+        BronStand("sso", True, "healthy", oud),
+        BronStand("network", True, "healthy", NU - timedelta(minutes=2)),
+        BronStand("network", True, "healthy", NU - timedelta(days=3)),
+        BronStand("energy", True, "down", oud),
+    )
+    data = bouw_model(_meting(_link("gekoppeld"), bronnen=bronnen, herstel="ok"), csrf="c")
+    rijen = {r["naam"]: r for r in data["dienst_blok"]}
+    sso = rijen["Authentik en toegangsbeheer (B13)"]
+    assert (sso["toon"], sso["label"]) == ("onbekend", "Onbekend")
+    assert sso["reden"] == (
+        "1 van 1 bron ingesteld: 1 verouderd (laatst bekend 9 nov 2026, 11:40 UTC). Metingen ouder dan 15 minuten "
+        "tellen als onbekend."
+    )
+    # een verse gezonde en een oude gezonde meting: Onbekend (niet alles vers), met beide tijden
+    net = rijen["Netwerk en privacy (B10)"]
+    assert net["toon"] == "onbekend" and net["reden"] == (
+        "2 van 5 bronnen ingesteld: 1 verouderd (laatst bekend 6 nov 2026, 11:56 UTC), 1 gezond. Laatst gemeten "
+        "9 nov 2026, 11:54 UTC. Metingen ouder dan 15 minuten tellen als onbekend."
+    )
+    # ook een oude storing is geen actuele storing
+    assert rijen["Energie en resources (B14)"]["toon"] == "onbekend"
+    # precies op de grens is nog vers
+    grens = (BronStand("sso", True, "healthy", NU - BRON_MAX_LEEFTIJD),)
+    data = bouw_model(_meting(_link("gekoppeld"), bronnen=grens), csrf="c")
+    assert {r["naam"]: r["toon"] for r in data["dienst_blok"]}["Authentik en toegangsbeheer (B13)"] == "gezond"
+
+
+@pytest.mark.parametrize(
+    ("niveau", "toon", "begin"),
+    [
+        ("ok", "gezond", "Alleen het totaalniveau staat hier"),
+        ("risico", "beperkt", "Het herstelregister heeft aandachtspunten."),
+        ("onbekend", "onbekend", "Het herstelregister is nog niet volledig ingevuld of getest."),
+    ],
+)
+def test_recovery_level_always_has_a_reason(niveau: str, toon: str, begin: str) -> None:
+    data = bouw_model(_meting(_link("gekoppeld"), herstel=niveau), csrf="c")
+    rij = next(r for r in data["dienst_blok"] if r["naam"] == "Beheerherstel (B13-001)")
+    assert (
+        rij["toon"] == toon
+        and rij["reden"].startswith(begin)
+        and "details en oefeningen staan in de Hub" in rij["reden"]
+    )
+
+
+def test_pill_words_follow_the_icon() -> None:
+    """Elke pil draagt het vaste Peil-woord bij het icoon van zijn toon (ONTWERPTAAL §7, §11.1); alleen de totaalpil
+    zegt "Niet gereed" (sjabloon) en de boiler "Alleen meten" (beleid)."""
+    woorden = {"gezond": {"Gezond"}, "beperkt": {"Beperkt"}, "storing": {"Storing"}, "onbekend": {"Onbekend"}}
+    woorden["gate"] = {"Alleen meten"}
+    for soort in ("nooit", "nooit_mislukt", "bezig", "gekoppeld", "onbevestigd", "rotatie_geweigerd", "ontkoppeld"):
+        for db_ok in (True, False):
+            data = bouw_model(_meting(_link(soort), db_ok=db_ok), csrf="c")
+            for r in [*data["checks"], *data["dienst_blok"]]:
+                assert r["label"] in woorden[r["toon"]], (soort, r)
+    data = bouw_model(_meting(_link("onleesbaar")), csrf="c", melding_trace_id=TRACE)
+    rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
+    assert (rij["toon"], rij["label"]) == ("storing", "Storing") and rij["reden"].startswith("Koppelbestand onleesbaar")
+    # de lange variabelenaam alleen in de controle (14 px), niet in de melding (WCAG 1.4.12 op 320 px)
+    assert "HUB_ENROLLMENT_TOKEN" in rij["reden"] and "HUB_ENROLLMENT_TOKEN" not in data["melding_tekst"]
+
+
+def test_pending_reason_names_the_attempt_and_the_last_error() -> None:
+    link = _link("bezig")
+    link.last_error = LastError(code="hub_onbereikbaar", at="2026-11-09T11:55:00Z")
+    rij = next(r for r in bouw_model(_meting(link), csrf="c")["checks"] if r["naam"] == "Koppeling met de Hub")
+    assert "Het formulier hieronder werkt pas weer als deze poging klaar is." in rij["reden"]
+    assert "Laatste melding, 9 nov 2026, 11:55 UTC (code hub_onbereikbaar)" in rij["reden"]
+
+
+def test_failed_attempt_says_fields_must_be_filled_in_again() -> None:
+    """Ingevulde waarden worden nooit teruggezet (veiligheid, WCAG 3.3.7-uitzondering); de melding zegt dat."""
+    for code in ("hub_weigerde", "ongeldige_koppelcode", "hub_onbereikbaar", "ongeldig_formulier"):
+        data = bouw_model(_meting(_link("nooit")), csrf="c", fout=Fout(code, TRACE))
+        assert data["melding_tekst"].endswith(OPNIEUW_INVULLEN_NL), code
+        assert data["melding_tekst"].count("opnieuw in") == 1, code
+    for code in ("te_veel_pogingen", "koppelen_bezig", "rate_limited"):
+        data = bouw_model(_meting(_link("nooit")), csrf="c", fout=Fout(code, TRACE))
+        assert OPNIEUW_INVULLEN_NL not in data["melding_tekst"], code
+    data = bouw_model(_meting(_link("gekoppeld")), csrf="c", fout=Fout("al_gekoppeld", TRACE))
+    assert OPNIEUW_INVULLEN_NL not in data["melding_tekst"]
+
+
+def test_header_copy_is_short_and_not_repeated() -> None:
+    data = bouw_model(_meting(_link("nooit")), csrf="c")
+    html = _html(data)
+    # "Alle schermen staan in de Hub" staat al in de voet van het sjabloon; niet nog eens in de kop
+    assert html.count("Alle schermen staan in de Hub") == 1
+    assert "TrueNAS Home Platform" not in data["dienst_omschrijving"]
 
 
 @pytest.mark.parametrize("code", sorted(FOUTEN))
