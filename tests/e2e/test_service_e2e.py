@@ -1,6 +1,7 @@
 """Dienst-E2E (Sim-getest): koppelen met eenmalig token, B13-001 met Authentik offline, events naar de Hub-inbox,
-eerlijke 501's, fail-closed als de Hub wegvalt, geen header-SSO en een grens op de verzoekgrootte.
-Volgorde van de tests is bewust (module-scope stack)."""
+B13-002…005 tegen een nep-Authentik over HTTP (voorstel zonder schrijven, sync met afwijking naar de Hub, export,
+gate, herstelcheck), eerlijke 501's, fail-closed als de Hub wegvalt, geen header-SSO en een grens op de
+verzoekgrootte. Volgorde van de tests is bewust (module-scope stack)."""
 
 from __future__ import annotations
 
@@ -9,13 +10,14 @@ import uuid
 
 import httpx
 
-from tests.e2e.conftest import Stack
+from tests.e2e.conftest import Stack, TokenHeaders
 
 PASS = "e2e wachtwoordzin voor de herstelkit!"
 
 
 def _idem(h: dict[str, str]) -> dict[str, str]:
-    return {**h, "Idempotency-Key": str(uuid.uuid4())}
+    base = h.fresh() if isinstance(h, TokenHeaders) else h  # één JWT per wijziging (replaybescherming)
+    return {**base, "Idempotency-Key": str(uuid.uuid4())}
 
 
 def _wait(cond, timeout: float = 30, step: float = 0.5) -> bool:  # type: ignore[no-untyped-def]
@@ -106,6 +108,58 @@ def test_05_events_pushed_to_hub_inbox(stack: Stack) -> None:
     assert e["schema_version"] == "1.0" and e["source_app"] == "home-control-hub"
     assert len({x["event_id"] for x in inbox}) == len(inbox)
     assert e["timestamp_utc"].endswith("Z")
+
+
+def test_05b_b13_authentik_over_http(stack: Stack) -> None:
+    h = stack.token("admin")
+    base = f"{stack.hch}/integrations/v1/sso"
+    ak_token = httpx.get(f"{stack.authentik}/sim/token").json()["token"]
+    src = httpx.get(f"{stack.hch}/integrations/v1/sources/authentik", headers=h).json()  # bestaat al (test_03)
+    r = httpx.put(
+        f"{stack.hch}/integrations/v1/sources/authentik",
+        json={"base_url": stack.authentik, "enabled": True, "credential": ak_token},
+        headers={**_idem(h), "If-Match": src["runtime"]["etag"]},
+    )
+    assert r.status_code == 200, r.text
+    det = httpx.post(f"{base}/authentik/detect", headers=_idem(h)).json()
+    assert det["version"] == "2026.8.5" and det["status"] == "healthy"
+    for group, role in (("hub-beheerders", "admin"), ("hub-lezers", "viewer")):
+        m = httpx.post(
+            f"{base}/role-mappings",
+            json={"app_id": "ai-server-manager", "authentik_group": group, "role": role},
+            headers=_idem(h),
+        )
+        assert m.status_code == 201
+    p = httpx.post(
+        f"{stack.hch}/connector/v1/propose",
+        json={"action_id": "sso.oidc.hub.register", "parameters": {"redirect_uris": ["https://hub.lan.invalid/cb"]}},
+        headers=_idem(h),
+    )
+    assert p.status_code == 201 and p.json()["apply_status"] == "nog_niet_toepasbaar", p.text
+    a = httpx.post(f"{stack.hch}/connector/v1/apply", json={"proposal_id": p.json()["proposal_id"]}, headers=h)
+    assert a.status_code == 501
+    assert httpx.get(f"{stack.authentik}/sim/writes").json() == []  # nooit naar Authentik geschreven
+    exp = httpx.post(f"{base}/authentik/config-exports", headers=_idem(h)).json()
+    assert exp["complete"] is True
+    gate = httpx.post(f"{base}/authentik/upgrade-gate", json={"target_version": "2026.8.5"}, headers=_idem(h)).json()
+    assert gate["outcome"] == "rood"  # zelfde versie / geen bevestigde back-up: nooit groen
+    rc = httpx.post(f"{base}/authentik/restore-check", json={"export_id": exp["id"]}, headers=_idem(h)).json()
+    assert rc["outcome"] == "ok"
+    for _ in range(5):
+        httpx.post(f"{stack.authentik}/sim/events", json={"action": "login_failed", "username": "bram"})
+
+    def anomaly_in_hub() -> bool:
+        inbox = httpx.get(f"{stack.hub}/sim/inbox").json()
+        return any(
+            e["event_type"] == "sso.anomaly.detected" and e["payload"]["rule_id"] == "mislukte_logins_reeks"
+            for e in inbox
+        )
+
+    assert _wait(anomaly_in_hub, timeout=40), "worker las Authentik niet of pushte de afwijking niet naar de Hub"
+    reused = {**h, "Idempotency-Key": str(uuid.uuid4())}
+    first = httpx.post(f"{base}/authentik/sync", headers=reused)
+    second = httpx.post(f"{base}/authentik/sync", headers={**h, "Idempotency-Key": str(uuid.uuid4())})
+    assert first.status_code == 200 and second.status_code == 401  # zelfde JWT voor een tweede wijziging: replay
 
 
 def test_06_fail_closed_when_hub_disappears(stack: Stack) -> None:

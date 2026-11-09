@@ -162,6 +162,58 @@
         "title": "ActivationIn",
         "type": "object"
       },
+      "AppSettingIn": {
+        "additionalProperties": false,
+        "properties": {
+          "login_mode": {
+            "enum": [
+              "native",
+              "oidc"
+            ],
+            "title": "Login Mode",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "login_mode"
+        ],
+        "title": "AppSettingIn",
+        "type": "object"
+      },
+      "BackupCheckpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "taken_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taken At"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "BackupCheckpoint",
+        "type": "object"
+      },
       "DrillIn": {
         "additionalProperties": false,
         "properties": {
@@ -318,6 +370,30 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InstallationCheckIn": {
+        "additionalProperties": false,
+        "properties": {
+          "notes": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Notes",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "handmatig_bevestigd",
+              "mislukt"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "InstallationCheckIn",
+        "type": "object"
+      },
       "KitExportIn": {
         "additionalProperties": false,
         "properties": {
@@ -355,6 +431,36 @@
           "kit"
         ],
         "title": "KitVerifyIn",
+        "type": "object"
+      },
+      "MappingIn": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "App Id",
+            "type": "string"
+          },
+          "authentik_group": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Authentik Group",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 30,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "authentik_group",
+          "role"
+        ],
+        "title": "MappingIn",
         "type": "object"
       },
       "MethodCreate": {
@@ -425,6 +531,135 @@
         "title": "MfaAttestation",
         "type": "object"
       },
+      "ProposeIn": {
+        "additionalProperties": false,
+        "description": "ActionProposal (contract §8). ``risk_claim`` is informatief en wordt **genegeerd** voor de beslissing (EX18).",
+        "properties": {
+          "action_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "expires_in_seconds": {
+            "anyOf": [
+              {
+                "maximum": 3600.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Seconds"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Reason",
+            "type": "string"
+          },
+          "risk_claim": {
+            "anyOf": [
+              {
+                "enum": [
+                  "R0",
+                  "R1",
+                  "R2",
+                  "R3"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Claim"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "title": "ProposeIn",
+        "type": "object"
+      },
+      "RestoreCheckIn": {
+        "additionalProperties": false,
+        "properties": {
+          "export_id": {
+            "format": "uuid",
+            "title": "Export Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "export_id"
+        ],
+        "title": "RestoreCheckIn",
+        "type": "object"
+      },
       "Scope": {
         "additionalProperties": false,
         "properties": {
@@ -493,6 +728,32 @@
         "title": "SourceConfig",
         "type": "object"
       },
+      "UpgradeGateIn": {
+        "additionalProperties": false,
+        "properties": {
+          "backup_checkpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupCheckpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_version": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Target Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_version"
+        ],
+        "title": "UpgradeGateIn",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -558,7 +819,7 @@
             "description": "capability_unavailable"
           }
         },
-        "summary": "Uitvoeren (niet beschikbaar in deze versie)",
+        "summary": "Uitvoeren (niet beschikbaar in deze versie: vereist ondertekend ExecutionRequest, P2)",
         "tags": [
           "connector"
         ]
@@ -794,20 +1055,59 @@
     "/connector/v1/propose": {
       "post": {
         "operationId": "propose_connector_v1_propose_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeIn"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "title": "Response Propose Connector V1 Propose Post"
+                }
               }
             },
             "description": "Successful Response"
           },
-          "501": {
-            "description": "capability_unavailable"
+          "409": {
+            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd of resource_gewijzigd"
+          },
+          "422": {
+            "description": "onbekende_actie, validation_error of voorstel_geblokkeerd (met blokkades)"
+          },
+          "502": {
+            "description": "Authentik weigerde het token, mist rechten of gaf een ongeldig antwoord"
+          },
+          "503": {
+            "description": "Authentik onbereikbaar"
           }
         },
-        "summary": "Voorstel (niet beschikbaar in deze versie)",
+        "summary": "Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in Authentik)",
         "tags": [
           "connector"
         ]
@@ -1592,6 +1892,69 @@
         ]
       }
     },
+    "/integrations/v1/sso/anomalies": {
+      "get": {
+        "operationId": "list_anomalies_integrations_v1_sso_anomalies_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Anomalies Integrations V1 Sso Anomalies Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Afwijkingen uit Authentik-events en rechtenwijzigingen (nieuwste eerst)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
     "/integrations/v1/sso/app-coverage": {
       "get": {
         "operationId": "app_coverage_integrations_v1_sso_app_coverage_get",
@@ -1609,7 +1972,631 @@
             "description": "Successful Response"
           }
         },
-        "summary": "SSO-dekkingsmatrix (alles te verifiëren tot bewezen)",
+        "summary": "SSO-dekkingsmatrix per app (bron + verificatiestatus, loginroute, koppelingen)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/apps/{app_id}/installation-check": {
+      "post": {
+        "operationId": "post_installation_check_integrations_v1_sso_apps__app_id__installation_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallationCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Installation Check Integrations V1 Sso Apps  App Id  Installation Check Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Echte testlogin handmatig bevestigen of als mislukt melden",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/apps/{app_id}/setting": {
+      "put": {
+        "operationId": "put_app_setting_integrations_v1_sso_apps__app_id__setting_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppSettingIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put App Setting Integrations V1 Sso Apps  App Id  Setting Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Loginroute van een app kiezen (native/oidc; If-Match bij bestaand)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik": {
+      "get": {
+        "operationId": "authentik_status_integrations_v1_sso_authentik_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Authentik Status Integrations V1 Sso Authentik Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Authentik: bron, laatste detectie en synchronisatie (zonder externe call)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/config-exports": {
+      "get": {
+        "operationId": "list_config_exports_integrations_v1_sso_authentik_config_exports_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Config Exports Integrations V1 Sso Authentik Config Exports Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Configuratie-exports (alleen metadata)",
+        "tags": [
+          "sso"
+        ]
+      },
+      "post": {
+        "operationId": "create_config_export_integrations_v1_sso_authentik_config_exports_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Config Export Integrations V1 Sso Authentik Config Exports Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Geschoonde configuratie-export maken (API + blueprints)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/config-exports/{export_id}": {
+      "get": {
+        "operationId": "get_config_export_integrations_v1_sso_authentik_config_exports__export_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Config Export Integrations V1 Sso Authentik Config Exports  Export Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén configuratie-export (geschoond, zonder geheimen)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/detect": {
+      "post": {
+        "operationId": "authentik_detect_integrations_v1_sso_authentik_detect_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Authentik Detect Integrations V1 Sso Authentik Detect Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Authentik-versie, API-capabilities en tokenrechten nu bepalen",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/events": {
+      "get": {
+        "operationId": "list_auth_events_integrations_v1_sso_authentik_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Auth Events Integrations V1 Sso Authentik Events Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gelezen Authentik-events (minimaal, nieuwste eerst)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/restore-check": {
+      "post": {
+        "operationId": "restore_check_integrations_v1_sso_authentik_restore_check_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Restore Check Integrations V1 Sso Authentik Restore Check Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Herstelcheck: klopt Authentik weer met een eerdere export?",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/sync": {
+      "post": {
+        "operationId": "authentik_sync_integrations_v1_sso_authentik_sync_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Authentik Sync Integrations V1 Sso Authentik Sync Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Events en rechtenkaart nu uit Authentik lezen (anders doet de worker het)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/authentik/upgrade-gate": {
+      "post": {
+        "operationId": "upgrade_gate_integrations_v1_sso_authentik_upgrade_gate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeGateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Upgrade Gate Integrations V1 Sso Authentik Upgrade Gate Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pre-upgrade-gate voor Authentik (nooit 'groen' op aannames)",
         "tags": [
           "sso"
         ]
@@ -1771,6 +2758,180 @@
           }
         },
         "summary": "Mag dit noodaccount vanaf dit adres? (raadpleegt Authentik nooit)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/oidc/hub/check": {
+      "get": {
+        "operationId": "oidc_hub_check_integrations_v1_sso_oidc_hub_check_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "slug",
+            "required": false,
+            "schema": {
+              "default": "hub",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,48}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "redirect_uri",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 5,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Redirect Uri"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Oidc Hub Check Integrations V1 Sso Oidc Hub Check Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bestaande Hub-client in Authentik controleren (alleen lezen)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/proposals": {
+      "get": {
+        "operationId": "list_proposals_integrations_v1_sso_proposals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Proposals Integrations V1 Sso Proposals Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voorstellen (nieuwste eerst; alleen preview, niet toepasbaar)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/proposals/{proposal_id}": {
+      "get": {
+        "operationId": "get_proposal_integrations_v1_sso_proposals__proposal_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Proposal Integrations V1 Sso Proposals  Proposal Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén voorstel met diff en preview_hash",
         "tags": [
           "sso"
         ]
@@ -2822,6 +3983,212 @@
           }
         },
         "summary": "Totale herstelstatus (zonder accountnamen)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/rights": {
+      "get": {
+        "operationId": "rights_integrations_v1_sso_rights_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rights Integrations V1 Sso Rights Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rechtenkaart (gebruiker → groepen → rol per app) met verschillen t.o.v. de vorige",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/role-mappings": {
+      "get": {
+        "operationId": "list_mappings_integrations_v1_sso_role_mappings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "App Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Mappings Integrations V1 Sso Role Mappings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Authentik-groep → rol per app (ook voor de Hub)",
+        "tags": [
+          "sso"
+        ]
+      },
+      "post": {
+        "operationId": "create_mapping_integrations_v1_sso_role_mappings_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Mapping Integrations V1 Sso Role Mappings Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Groep aan een rol koppelen (alleen admin)",
+        "tags": [
+          "sso"
+        ]
+      }
+    },
+    "/integrations/v1/sso/role-mappings/{mapping_id}": {
+      "delete": {
+        "operationId": "delete_mapping_integrations_v1_sso_role_mappings__mapping_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mapping_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Mapping Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Delete Mapping Integrations V1 Sso Role Mappings  Mapping Id  Delete"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Koppeling verwijderen (If-Match verplicht)",
         "tags": [
           "sso"
         ]

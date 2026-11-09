@@ -170,8 +170,12 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
     d = c.get("/connector/v1/discover", headers=h).json()
     assert d["app_id"] == "home-control-hub" and d["schema_version"] == "1.0"
-    assert set(d["capabilities"]) == {"read", "stream"}
-    assert {"propose", "apply", "rollback"} == set(d["unavailable_capabilities"])
+    assert set(d["capabilities"]) == {"read", "propose", "stream"}
+    assert set(d["unavailable_capabilities"]) == {"apply", "rollback"}
+    assert {a["action_id"]: a["apply_status"] for a in d["actions"]} == {
+        "sso.oidc.hub.register": "nog_niet_toepasbaar",
+        "sso.sessions.revoke": "nog_niet_toepasbaar",
+    }
     assert set(d["domains"]) == {"network", "automation", "sso", "energy"} and d["timestamp_utc"].endswith("Z")
     health = c.get("/connector/v1/health", headers=h).json()
     assert health["status"] in ("healthy", "degraded", "down", "unknown")
@@ -193,7 +197,7 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     assert r.status_code == 403
 
 
-@pytest.mark.parametrize("path", ["/connector/v1/propose", "/connector/v1/apply", "/connector/v1/rollback"])
+@pytest.mark.parametrize("path", ["/connector/v1/apply", "/connector/v1/rollback"])
 def test_connector_mutations_honestly_unavailable(paired_client: Any, auth: Any, path: str) -> None:
     r = paired_client.post(path, json={}, headers=auth("admin"))
     assert r.status_code == 501 and r.json()["code"] == "capability_unavailable"
@@ -238,8 +242,14 @@ def test_domain_structures(paired_client: Any, auth: Any) -> None:
         "cloudflared",
         "router",
     }
-    apps = c.get("/integrations/v1/sso/app-coverage", headers=h).json()["items"]
-    assert all(a["oidc_support"] in ("te_verifieren", "gepland") for a in apps)
+    apps = {a["app_id"]: a for a in c.get("/integrations/v1/sso/app-coverage", headers=h).json()["items"]}
+    # B13-003: eigen apps niet aannemen (in de broncode gecontroleerd), standaard overal de eigen login
+    assert {apps[x]["oidc_support"] for x in ("mediaguard", "media-source-optimizer", "my_house")} == {
+        "niet_ondersteund"
+    }
+    assert all(
+        a["setting"]["login_mode"] == "native" and a["trusted_header_sso"] == "niet_toegestaan" for a in apps.values()
+    )
 
 
 def test_source_config_vault_and_probe(paired_client: Any, auth: Any, fake_hub: FakeHub) -> None:

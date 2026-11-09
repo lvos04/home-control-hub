@@ -146,6 +146,26 @@ class AuditEvent(Base):
     __table_args__ = (Index("ix_audit_event_at", "at"), Index("ix_audit_event_entity", "entity_type", "entity_id"))
 
 
+class JwtJtiUse(Base):
+    """Replaybescherming voor Hub-JWT's (B13-002, verenigbaar met contract 1.2 'jti + korte cache').
+
+    Een JWT (``jti``) mag voor hooguit één mutatie gebruikt worden; een herhaling met dezelfde ``Idempotency-Key``
+    (netwerk-retry) blijft toegestaan en geeft het opgeslagen resultaat. Lezen mag binnen de levensduur vaker.
+    Rijen vervallen na ``expires_at`` (worker ruimt op).
+    """
+
+    __tablename__ = "jwt_jti_use"
+    jti: Mapped[str] = mapped_column(String(200), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    method: Mapped[str] = mapped_column(String(10), nullable=False)
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_jwt_jti_use_expires_at", "expires_at"),)
+
+
 def all_models() -> type[Base]:
     """Importeert alle domeinmodellen (voor Alembic en drifttests) en geeft de Base terug."""
     from .domains.automation import models as _automation  # noqa: F401

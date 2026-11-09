@@ -1,7 +1,9 @@
 """Connectorcontract ``/connector/v1/*`` (contract §6).
 
-Deze dienst levert in P0 alleen ``read``. ``propose``/``apply``/``rollback`` geven eerlijk ``501
-capability_unavailable`` (nooit gesimuleerd succes); ``stream`` bestaat als polling-outbox via ``/events``.
+- ``read`` en ``stream`` (polling-outbox via ``/events``).
+- ``propose`` (P1, B13): voorstellen voor Authentik met preview/diff/``preview_hash`` (R2). Alleen lezen in Authentik.
+- ``apply``/``rollback`` geven eerlijk ``501 capability_unavailable``: toepassen vereist een door de Hub ondertekend
+  ``ExecutionRequest`` (contract §8) en komt in P2. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
 """
 
 from __future__ import annotations
@@ -14,14 +16,26 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import APP_ID, CONNECTOR_PREFIX, SCHEMA_VERSION, __version__
-from .deps import get_session
+from .deps import get_session, trace_id
 from .domains.energy.router import coverage_payload as energy_coverage
+from .domains.sso import proposals as sso_proposals
 from .domains.sso import service as sso_service
-from .domains.sso.catalog import APP_COVERAGE
-from .domains.sso.models import SsoAdminAccount, SsoBreakGlassDrill
+from .domains.sso.authentik_router import ProposeIn, anomaly_dict, validate_parameters
+from .domains.sso.backup import export_meta
+from .domains.sso.mapping import coverage as sso_coverage
+from .domains.sso.mapping import mapping_dict
+from .domains.sso.models import (
+    SsoAdminAccount,
+    SsoAnomaly,
+    SsoAuthentikSnapshot,
+    SsoBreakGlassDrill,
+    SsoGroupRoleMapping,
+    SsoProposal,
+)
 from .errors import ApiError, capability_unavailable, forbidden, not_found
 from .events import envelope
 from .health import connector_health
+from .idempotency import idempotency_key, run_idempotent
 from .models import AuditEvent, OutboxEvent
 from .pagination import MAX_LIMIT, decode_cursor, encode_cursor
 from .redact import redact
@@ -37,6 +51,12 @@ ITEM_TYPES: dict[str, dict[str, Any]] = {
     "sso.recovery_status": {"roles": {"admin", "operator", "service"}, "title_nl": "Herstelstatus (totaal)"},
     "sso.admin_account": {"roles": {"admin"}, "title_nl": "Beheeraccounts (herstelregister)"},
     "energy.coverage": {"roles": {"admin", "operator", "viewer", "service"}, "title_nl": "Energie-dekkingsmatrix"},
+    "sso.role_mapping": {
+        "roles": {"admin", "operator", "viewer", "service"},
+        "title_nl": "Authentik-groep → rol per app",
+    },
+    "sso.proposal": {"roles": {"admin", "operator", "service"}, "title_nl": "Voorstellen (preview, niet toepasbaar)"},
+    "sso.anomaly": {"roles": {"admin", "operator", "service"}, "title_nl": "Afwijkingen uit Authentik"},
 }
 UNBUILT_ITEM_TYPES = {
     "network.device": "network.devices.read",
@@ -55,15 +75,31 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
         "app_id": APP_ID,
         "source_version": __version__,
         "schema_version": SCHEMA_VERSION,
-        "capabilities": ["read", "stream"],
-        "unavailable_capabilities": ["propose", "apply", "rollback"],
+        "capabilities": ["read", "propose", "stream"],
+        "unavailable_capabilities": ["apply", "rollback"],
         "stream_mode": "polling via /connector/v1/events en push naar de Hub-inbox",
+        "actions": [
+            {
+                "action_id": a.action_id,
+                "title_nl": a.title_nl,
+                "task_id": a.task_id,
+                "risk_class_min": a.risk_class,
+                "apply_status": a.apply_status,
+            }
+            for a in sso_proposals.ACTIONS.values()
+        ],
+        "apply_status_nl": sso_proposals.APPLY_UNAVAILABLE_NL,
         "permissions": [
             "read:sources",
             "read:sso.app_coverage",
             "read:sso.recovery_status",
             "read:sso.admin_account (alleen admin)",
             "read:energy.coverage",
+            "read:sso.role_mapping",
+            "read:sso.proposal",
+            "read:sso.anomaly",
+            "propose:sso.oidc.hub.register (admin of Hub)",
+            "propose:sso.sessions.revoke (admin of Hub)",
             "read:events",
             "read:evidence",
         ],
@@ -113,7 +149,24 @@ def items(
     if type == "source":
         data = [source_view(session, s) for s in ALL_SOURCES.values()]
     elif type == "sso.app_coverage":
-        data = [c.to_dict() for c in APP_COVERAGE]
+        data = sso_coverage(session)
+    elif type == "sso.role_mapping":
+        data = [
+            mapping_dict(m)
+            for m in session.scalars(
+                select(SsoGroupRoleMapping).order_by(SsoGroupRoleMapping.app_id, SsoGroupRoleMapping.authentik_group)
+            )
+        ]
+    elif type == "sso.proposal":
+        data = [
+            sso_proposals.proposal_view(p)
+            for p in session.scalars(select(SsoProposal).order_by(SsoProposal.created_at.desc()).limit(MAX_LIMIT * 5))
+        ]
+    elif type == "sso.anomaly":
+        data = [
+            anomaly_dict(a)
+            for a in session.scalars(select(SsoAnomaly).order_by(SsoAnomaly.detected_at.desc()).limit(MAX_LIMIT * 5))
+        ]
     elif type == "sso.recovery_status":
         st = sso_service.overall(session, request.app.state.settings.break_glass_test_max_age_days)
         st.pop("accounts", None)
@@ -131,20 +184,56 @@ def items(
 
 @router.post(
     "/propose",
-    summary="Voorstel (niet beschikbaar in deze versie)",
-    responses={501: {"description": "capability_unavailable"}},
+    status_code=201,
+    summary="Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in Authentik)",
+    responses={
+        409: {"description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd of resource_gewijzigd"},
+        422: {"description": "onbekende_actie, validation_error of voorstel_geblokkeerd (met blokkades)"},
+        502: {"description": "Authentik weigerde het token, mist rechten of gaf een ongeldig antwoord"},
+        503: {"description": "Authentik onbereikbaar"},
+    },
 )
-def propose(_p: Principal = Depends(require_admin_or_service)) -> None:
-    raise capability_unavailable("propose")
+def propose(
+    body: ProposeIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_admin_or_service),
+    key: uuid.UUID = Depends(idempotency_key),
+    tid: str = Depends(trace_id),
+) -> Any:
+    params = validate_parameters(body.action_id, body.parameters)
+
+    def action() -> tuple[int, Any, dict[str, str]]:
+        view = sso_proposals.create_proposal(request, session, principal, tid, body.action_id, params)
+        if body.expected_version and body.expected_version != view["resource_etag"]:
+            raise ApiError(
+                409,
+                "resource_gewijzigd",
+                "De toestand in Authentik is gewijzigd sinds de vorige preview; bekijk het nieuwe voorstel.",
+                {"expected_version": body.expected_version, "resource_etag": view["resource_etag"]},
+            )
+        return 201, view, {"ETag": f'"{view["preview_hash"]}"'}
+
+    return run_idempotent(request, session, principal, key, body.model_dump(mode="json"), action)
 
 
 @router.post(
     "/apply",
-    summary="Uitvoeren (niet beschikbaar in deze versie)",
+    summary="Uitvoeren (niet beschikbaar in deze versie: vereist ondertekend ExecutionRequest, P2)",
     responses={501: {"description": "capability_unavailable"}},
 )
 def apply(_p: Principal = Depends(require_admin_or_service)) -> None:
-    raise capability_unavailable("apply", "Uitvoeren is in deze versie niet beschikbaar; er wordt niets uitgevoerd.")
+    raise ApiError(
+        501,
+        "capability_unavailable",
+        "Uitvoeren is in deze versie niet beschikbaar; er wordt niets uitgevoerd. "
+        + sso_proposals.APPLY_UNAVAILABLE_NL,
+        {
+            "capability": "apply",
+            "reden": "nog_niet_toepasbaar",
+            "vereist": "door de Hub ondertekend ExecutionRequest (§8)",
+        },
+    )
 
 
 @router.post(
@@ -181,6 +270,12 @@ def evidence(
     drill = session.get(SsoBreakGlassDrill, eid)
     if drill is not None:
         return {"id": evidence_id, "kind": "sso_break_glass_drill", "record": redact(sso_service.drill_dict(drill))}
+    prop = session.get(SsoProposal, eid)
+    if prop is not None:
+        return {"id": evidence_id, "kind": "sso_proposal", "record": sso_proposals.proposal_view(prop)}
+    snap = session.get(SsoAuthentikSnapshot, eid)
+    if snap is not None and snap.kind == "config_export":
+        return {"id": evidence_id, "kind": "sso_config_export", "record": export_meta(snap)}
     raise not_found("Bewijs")
 
 

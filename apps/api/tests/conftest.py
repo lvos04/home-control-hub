@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, text
 
 from integrations.config import Settings
 from integrations.security.secrets import public_jwk
+from tests.fakes.authentik_fake import AuthentikFake
 
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 TEST_DB_NAME = os.environ.get("HCH_TEST_DB_NAME", "hch_test_api")
@@ -91,11 +92,12 @@ class HubKeys:
 
 @dataclass
 class FakeHub:
-    """Nep-Hub + nep-Authentik voor httpx.MockTransport."""
+    """Nep-Hub + nep-Authentik (``tests/fakes/authentik_fake.py``) voor httpx.MockTransport."""
 
     keys: HubKeys
     up: bool = True
     authentik_up: bool = True
+    authentik: AuthentikFake = field(default_factory=AuthentikFake)
     issued_token: str = field(default_factory=lambda: "svc-" + uuid.uuid4().hex + uuid.uuid4().hex)
     used: set[str] = field(default_factory=set)
     enroll_requests: list[dict[str, Any]] = field(default_factory=list)
@@ -109,9 +111,7 @@ class FakeHub:
         if url.host == "authentik.test":
             if not self.authentik_up:
                 raise httpx.ConnectError("verbinding geweigerd", request=request)
-            if url.path == "/-/health/live/":
-                return httpx.Response(200, text="")
-            return httpx.Response(404)
+            return self.authentik.handle(request)
         if url.host != "hub.test":
             raise httpx.ConnectError("onbekende host", request=request)
         if not self.up:
@@ -158,6 +158,11 @@ def fake_hub(hub_keys: HubKeys) -> FakeHub:
 
 
 @pytest.fixture
+def authentik_fake(fake_hub: FakeHub) -> AuthentikFake:
+    return fake_hub.authentik
+
+
+@pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     d = tmp_path / "appdata"
     d.mkdir()
@@ -185,16 +190,35 @@ def database_url() -> Iterator[str]:
 TRUNCATE = (
     "TRUNCATE service_state, idempotency_record, outbox_event, vault_secret, integration_source, audit_event, "
     "sso_admin_account, sso_recovery_method, sso_emergency_access, sso_break_glass_activation, sso_break_glass_drill, "
-    "sso_recovery_kit_export RESTART IDENTITY CASCADE"
+    "sso_recovery_kit_export, jwt_jti_use, sso_app_setting, sso_group_role_mapping, sso_proposal, "
+    "sso_authentik_snapshot, sso_auth_event, sso_anomaly RESTART IDENTITY CASCADE"
 )
+
+
+CLEAN_TABLES = [
+    t.strip() for t in TRUNCATE.removeprefix("TRUNCATE ").removesuffix(" RESTART IDENTITY CASCADE").split(",")
+]
+
+
+def _clean(url: str) -> None:
+    """Snel leegmaken: DELETE (zonder FK-triggers) is ~50x sneller dan TRUNCATE op kleine tabellen; anders TRUNCATE."""
+    eng = create_engine(url)
+    try:
+        with eng.begin() as c:
+            c.execute(text("SET LOCAL session_replication_role = replica"))
+            for table in CLEAN_TABLES:
+                c.execute(text(f"DELETE FROM {table}"))  # noqa: S608 - vaste tabelnamen uit deze module
+            c.execute(text("ALTER TABLE outbox_event ALTER COLUMN seq RESTART"))
+    except Exception:  # geen superuser: dan de langzame, altijd werkende weg
+        with eng.begin() as c:
+            c.execute(text(TRUNCATE))
+    finally:
+        eng.dispose()
 
 
 @pytest.fixture
 def clean_db(database_url: str) -> Iterator[str]:
-    eng = create_engine(database_url)
-    with eng.begin() as c:
-        c.execute(text(TRUNCATE))
-    eng.dispose()
+    _clean(database_url)
     yield database_url
 
 
@@ -252,13 +276,25 @@ def paired_client(client: Any) -> Any:
     return client
 
 
+class TokenHeaders(dict[str, str]):
+    """Authorization-header die voor elke mutatie (via ``idem``) een **nieuwe** JWT maakt, zoals de Hub dat doet:
+    een JWT (``jti``) mag voor hooguit één wijziging gebruikt worden (B13-002, replaybescherming)."""
+
+    def __init__(self, mint: Callable[[], str]) -> None:
+        super().__init__({"Authorization": f"Bearer {mint()}"})
+        self.mint = mint
+
+
 @pytest.fixture
 def auth(hub_keys: HubKeys) -> Callable[..., dict[str, str]]:
     def _auth(*roles: str, sub: str = "user-1") -> dict[str, str]:
-        return {"Authorization": f"Bearer {hub_keys.token(list(roles), sub=sub)}"}
+        return TokenHeaders(lambda: hub_keys.token(list(roles), sub=sub))
 
     return _auth
 
 
 def idem(headers: dict[str, str] | None = None, key: str | None = None, **extra: str) -> dict[str, str]:
-    return {**(headers or {}), "Idempotency-Key": key or str(uuid.uuid4()), **extra}
+    base = dict(headers or {})
+    if isinstance(headers, TokenHeaders):
+        base["Authorization"] = f"Bearer {headers.mint()}"
+    return {**base, "Idempotency-Key": key or str(uuid.uuid4()), **extra}

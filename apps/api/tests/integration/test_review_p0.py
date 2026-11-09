@@ -27,7 +27,7 @@ from sqlalchemy import create_engine, text
 from integrations.cli import cmd_migrate
 from integrations.config import Settings
 from integrations.domains.sso.kit import encrypt_kit
-from integrations.migrations import alembic_dir, upgrade
+from integrations.migrations import alembic_dir, head_revision, upgrade
 from integrations.worker import Worker
 from tests.conftest import ENV_TOKEN, HUB_URL, REPO_ROOT, FakeHub, idem, recreate_database
 
@@ -41,7 +41,7 @@ NON_MUTATING_POSTS = {
     "/integrations/v1/sso/break-glass/evaluate",
     "/integrations/v1/sso/recovery/kit/verify",
 }
-UNAVAILABLE = {"/connector/v1/propose", "/connector/v1/apply", "/connector/v1/rollback"}
+UNAVAILABLE = {"/connector/v1/apply", "/connector/v1/rollback"}
 PATH_VALUES = {"source_id": "authentik"}
 
 
@@ -260,7 +260,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "9999"
-down_revision = "0001"
+down_revision = "{head}"
 branch_labels = None
 depends_on = None
 
@@ -279,10 +279,11 @@ def two_step_migrations(tmp_path: Path) -> Settings:
     src = alembic_dir(Settings())
     dst = tmp_path / "alembic"
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__"))
-    (dst / "versions" / "9999_review_test.py").write_text(NOOP_REVISION, encoding="utf-8")
+    head = head_revision(Settings())
+    (dst / "versions" / "9999_review_test.py").write_text(NOOP_REVISION.replace("{head}", str(head)), encoding="utf-8")
     url = recreate_database("hch_test_backup")
     settings = Settings(database_url=url, alembic_dir=dst, data_dir=tmp_path / "appdata")
-    upgrade(settings, "0001")
+    upgrade(settings, str(head))
     return settings
 
 
@@ -303,14 +304,14 @@ def test_migration_refused_when_backup_fails(
 
     monkeypatch.setattr(mig.shutil, "which", lambda _name: None)  # pg_dump ontbreekt
     assert cmd_migrate(settings, str(backups), None) == 3
-    assert _revision(settings.database_url) == "0001"
+    assert _revision(settings.database_url) == head_revision(Settings())
 
     monkeypatch.setattr(mig.shutil, "which", lambda _name: "/usr/bin/pg_dump")
     monkeypatch.setattr(
         mig.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "schijf vol")
     )  # pg_dump mislukt
     assert cmd_migrate(settings, str(backups), None) == 3
-    assert _revision(settings.database_url) == "0001"
+    assert _revision(settings.database_url) == head_revision(Settings())
     assert not list(backups.glob("*.dump"))  # geen half bestand achtergelaten
     # zonder back-upmap (ontwikkeling/CI) migreert het commando wel
     assert cmd_migrate(settings, None, None) == 0
@@ -342,7 +343,7 @@ def test_backup_before_migration_with_real_pg_dump(two_step_migrations: Settings
     settings = two_step_migrations
     backups = tmp_path / "backups"
     assert cmd_migrate(settings, str(backups), None) == 0
-    dumps = list(backups.glob("voor-upgrade-0001-*.dump"))
+    dumps = list(backups.glob(f"voor-upgrade-{head_revision(Settings())}-*.dump"))
     assert len(dumps) == 1 and dumps[0].stat().st_size > 0
     assert _revision(settings.database_url) == "9999"
     # de dump is een geldig pg_dump-archief met het schema van vóór de migratie

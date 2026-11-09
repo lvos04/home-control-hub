@@ -66,6 +66,8 @@ class SourceSpec:
     probe_path: str | None = None  # alleen als er een gezondheids-endpoint bekend is (te verifiëren)
     notes_nl: str = ""
     forbidden_nl: tuple[str, ...] = field(default_factory=tuple)
+    api_verification_ref: str | None = None  # waar de verificatie staat (alleen bij geverifieerd_*)
+    probe_path_verified: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,9 +81,12 @@ class SourceSpec:
             "upstream": self.upstream,
             "required_decisions": list(self.required_decisions),
             "api_verification": self.api_verification,
+            "api_verification_ref": self.api_verification_ref,
             "capabilities": [c.to_dict() for c in self.capabilities],
             "probe_path": self.probe_path,
-            "probe_path_verification": "te_verifieren" if self.probe_path else None,
+            "probe_path_verification": (
+                ("geverifieerd_docs" if self.probe_path_verified else "te_verifieren") if self.probe_path else None
+            ),
             "notes_nl": self.notes_nl,
             "forbidden_nl": list(self.forbidden_nl),
         }

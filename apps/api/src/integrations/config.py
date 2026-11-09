@@ -58,6 +58,8 @@ class Settings:
     http_max_attempts: int = 3
     # B13-001
     break_glass_test_max_age_days: int = 90
+    # B13-004: hoe vaak de worker events en de rechtenkaart uit Authentik leest (0 = uit)
+    authentik_sync_interval_s: int = 300
     # Bewust GEEN instelling voor vertrouwde proxies: X-Forwarded-*-headers worden nooit gebruikt (uvicorn met
     # proxy_headers=False; B13-003: geen toegang via X-Forwarded-User of vergelijkbare headers).
     worker_interval_s: float = 10.0
@@ -84,6 +86,7 @@ class Settings:
             jwks_ttl_s=_int("HCH_JWKS_TTL_S", 300),
             jwks_max_stale_s=_int("HCH_JWKS_MAX_STALE_S", 900),
             break_glass_test_max_age_days=_int("HCH_BREAK_GLASS_MAX_AGE_DAYS", 90),
+            authentik_sync_interval_s=_int("HCH_AUTHENTIK_SYNC_INTERVAL_S", 300),
             worker_interval_s=float(_int("HCH_WORKER_INTERVAL_S", 10)),
             allow_loopback_hub=_bool("HCH_ALLOW_LOOPBACK_HUB"),
         )

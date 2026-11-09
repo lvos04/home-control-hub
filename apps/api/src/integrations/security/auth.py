@@ -35,6 +35,7 @@ class Principal:
     subject: str
     roles: frozenset[str] = field(default_factory=frozenset)
     token_id: str | None = None
+    expires_at: float | None = None
 
     @property
     def audit_id(self) -> str:
@@ -107,7 +108,13 @@ def validate_jwt(token: str, cache: JwksCache, policy: JwtPolicy) -> Principal:
         else frozenset()
     )
     jti = claims.get("jti")
-    return Principal(kind="user", subject=sub, roles=roles, token_id=jti if isinstance(jti, str) else None)
+    return Principal(
+        kind="user",
+        subject=sub,
+        roles=roles,
+        token_id=jti if isinstance(jti, str) and jti else None,
+        expires_at=float(exp),
+    )
 
 
 class Authenticator:
@@ -139,6 +146,13 @@ class Authenticator:
 def current_principal(request: Request) -> Principal:
     auth: Authenticator = request.app.state.auth
     principal = auth.authenticate(request.headers.get("Authorization"))
+    guard = getattr(request.app.state, "replay_guard", None)
+    if guard is not None and principal.kind == "user" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        from .replay import valid_idempotency_key
+
+        key = valid_idempotency_key(request.headers.get("Idempotency-Key"))
+        if key is not None:  # alleen echte mutaties (zonder geldige key weigert de route zelf met 400)
+            guard.check(principal, request.method, request.url.path, key)
     request.state.principal = principal
     return principal
 
@@ -160,3 +174,4 @@ require_admin_or_operator = require_roles("admin", "operator")
 require_reader = require_roles("admin", "operator", "viewer")
 require_connector_reader = require_roles("admin", "operator", "viewer", SERVICE_ROLE)
 require_admin_or_service = require_roles("admin", SERVICE_ROLE)
+require_admin_operator_or_service = require_roles("admin", "operator", SERVICE_ROLE)

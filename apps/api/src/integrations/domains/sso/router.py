@@ -28,11 +28,9 @@ from ...security.auth import (
     require_admin,
     require_admin_or_operator,
     require_admin_or_service,
-    require_reader,
 )
 from ...timeutil import iso, utcnow
 from . import recovery, service
-from .catalog import APP_COVERAGE
 from .kit import KitError, check_passphrase, decrypt_kit, encrypt_kit
 from .models import (
     SSO_INDEPENDENT_METHODS,
@@ -270,15 +268,6 @@ def _account_detail(request: Request, session: Session, acc: SsoAdminAccount) ->
 
 
 # ------------------------------------------------------------------ lezen
-@router.get("/app-coverage", summary="SSO-dekkingsmatrix (alles te verifiëren tot bewezen)")
-def app_coverage(_p: Principal = Depends(require_reader)) -> dict[str, Any]:
-    return {
-        "items": [c.to_dict() for c in APP_COVERAGE],
-        "next_cursor": None,
-        "note_nl": "Geen app geldt als 'ondersteunt OIDC' zonder officiële documentatie én test op een echte installatie.",
-    }
-
-
 @router.get("/recovery/status", summary="Totale herstelstatus (zonder accountnamen)")
 def recovery_status(
     request: Request, session: Session = Depends(get_session), _p: Principal = Depends(require_admin_or_operator)

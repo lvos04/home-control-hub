@@ -24,6 +24,7 @@ from .deps import get_session, trace_id
 from .domains.automation.router import router as automation_router
 from .domains.energy.router import router as energy_router
 from .domains.network.router import router as network_router
+from .domains.sso.authentik_router import router as sso_authentik_router
 from .domains.sso.router import router as sso_router
 from .enrollment import JWKS_PATH, EnrollmentService, stored_jwks
 from .errors import TRACE_HEADER, install_handlers, trace_id_for
@@ -33,6 +34,7 @@ from .idempotency import idempotency_key, run_idempotent
 from .migrations import head_revision
 from .security.auth import Authenticator, JwtPolicy, Principal, require_admin
 from .security.jwks import JwksCache
+from .security.replay import ReplayGuard
 from .security.secrets import ensure_secrets, load_identity, load_vault_key, public_jwk
 from .security.vault import Vault
 from .sources import router as sources_router
@@ -184,6 +186,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
     app.state.jwks = jwks
     app.state.link = link
     app.state.auth = Authenticator(jwks, policy, link.service_token_hash)
+    app.state.replay_guard = ReplayGuard(db, settings.jwt_leeway_s)
     app.state.http_transport = transport
     app.state.alembic_head = head_revision(settings)
     app.state.unpair_code_sha256 = hashlib.sha256(unpair_code.encode()).hexdigest()
@@ -211,6 +214,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
         _enrollment_router(),
         sources_router,
         sso_router,
+        sso_authentik_router,
         network_router,
         automation_router,
         energy_router,

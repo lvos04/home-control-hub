@@ -45,16 +45,32 @@ def wait_http(url: str, timeout: float = 30) -> None:
     raise RuntimeError(f"{url} kwam niet op")
 
 
+class TokenHeaders(dict[str, str]):
+    """Authorization-header; ``fresh()`` haalt een nieuwe JWT bij de Hub-simulator. Een JWT mag voor hooguit één
+    wijziging gebruikt worden (replaybescherming B13-002), dus de tests vragen per mutatie een nieuwe, zoals de Hub."""
+
+    def __init__(self, stack: Stack, roles: tuple[str, ...]) -> None:
+        self.stack, self.roles = stack, roles
+        super().__init__(stack.mint(roles))
+
+    def fresh(self) -> dict[str, str]:
+        return self.stack.mint(self.roles)
+
+
 @dataclass
 class Stack:
     hch: str
     hub: str
     hub_proc: subprocess.Popen[bytes]
     procs: list[subprocess.Popen[bytes]]
+    authentik: str = ""
 
-    def token(self, *roles: str) -> dict[str, str]:
+    def mint(self, roles: tuple[str, ...]) -> dict[str, str]:
         r = httpx.post(f"{self.hub}/sim/token", json={"roles": list(roles)}, timeout=5)
         return {"Authorization": f"Bearer {r.json()['token']}"}
+
+    def token(self, *roles: str) -> TokenHeaders:
+        return TokenHeaders(self, roles)
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +86,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
             pytest.fail(f"PostgreSQL niet beschikbaar in CI: {type(exc).__name__} (E2E mag niet stil vervallen)")
         pytest.skip(f"PostgreSQL niet beschikbaar: {type(exc).__name__}")
     db_url = ADMIN_DB_URL.rsplit("/", 1)[0] + "/" + E2E_DB
-    hub_port, hch_port = free_port(), free_port()
+    hub_port, hch_port, ak_port = free_port(), free_port(), free_port()
     hub_url, hch_url = f"http://127.0.0.1:{hub_port}", f"http://127.0.0.1:{hch_port}"
     data = tmp_path_factory.mktemp("appdata")
     logs = tmp_path_factory.mktemp("logs")
@@ -95,6 +111,26 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         stderr=subprocess.STDOUT,
     )
     wait_http(f"{hub_url}/api/v1/auth/jwks")
+    ak_url = f"http://127.0.0.1:{ak_port}"
+    ak_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "sim_authentik:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(ak_port),
+            "--log-level",
+            "warning",
+        ],
+        env={**base_env, "PYTHONPATH": str(HERE)},
+        cwd=HERE,
+        stdout=open(logs / "authentik.log", "wb"),
+        stderr=subprocess.STDOUT,
+    )
+    wait_http(f"{ak_url}/-/health/live/")
     env = {
         **base_env,
         "HCH_DATA_DIR": str(data),
@@ -105,6 +141,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         "HCH_WORKER_INTERVAL_S": "1",
         "HCH_JWKS_TTL_S": "2",
         "HCH_JWKS_MAX_STALE_S": "1",
+        "HCH_AUTHENTIK_SYNC_INTERVAL_S": "2",
     }
     subprocess.run([sys.executable, "-m", "integrations", "init"], env=env, check=True, capture_output=True)
     subprocess.run([sys.executable, "-m", "integrations", "migrate"], env=env, check=True, capture_output=True)
@@ -123,9 +160,9 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         ),
     ]
     wait_http(f"{hch_url}/healthz")
-    st = Stack(hch_url, hub_url, hub_proc, procs)
+    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url)
     yield st
-    for p in [*procs, hub_proc]:
+    for p in [*procs, hub_proc, ak_proc]:
         if p.poll() is None:
             p.terminate()
             try:
