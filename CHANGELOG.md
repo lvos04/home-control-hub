@@ -1,5 +1,32 @@
 # Wijzigingen
 
+## 0.1.0 — P1-aanvulling B13-002…005 (nog niet uitgebracht)
+
+**Nieuw**
+- Authentik via de officiële API (`/api/v3`), **alleen lezen**: versiedetectie, API-capabilities per versie
+  (gecontroleerd tegen de officiële `schema.yml` van 2024.10 t/m 2026.8), least-privilege-controle van het token,
+  geschoonde toestand (whitelist; nooit `client_secret`, sleutels, e-mail of attributen).
+- B13-002: `POST /connector/v1/propose` met `sso.oidc.hub.register` — OIDC-provider + applicatie voor de Hub als
+  R2-voorstel met diff, exacte verzoeken, `resource_etag`, `preview_hash`, rollbackrecept; `expected_version`-drift →
+  409. Toepassen eerlijk `501 nog_niet_toepasbaar` (in de database afgedwongen). Alleen-lezen controle van een
+  bestaande Hub-client (`GET /integrations/v1/sso/oidc/hub/check`).
+- B13-002: replaybescherming — een Hub-JWT (`jti`) mag voor één wijziging gebruikt worden (retry met dezelfde
+  `Idempotency-Key` blijft mogen); wijziging zonder `jti` geweigerd.
+- B13-003: SSO-dekkingsmatrix met bron (docs-URL/broncode + datum + verificatiestatus) per app, loginroute
+  native/oidc met handmatige installatiecontrole, groep → rol per app.
+- B13-004: Authentik-events (logins, wijzigingen) met watermerk, afwijkingsregels als events naar de Hub,
+  rechtenkaart met verschillen en `sso.access.revoked`; worker elke 300 s (`HCH_AUTHENTIK_SYNC_INTERVAL_S`).
+- B13-005: configuratie-export (API + geredigeerde flow-blueprints + MFA-apparaten van beheerders), pre-upgrade-gate
+  volgens de officiële upgraderegels (nooit "groen" op aannames), herstelcheck, voorstel `sso.sessions.revoke`.
+- Migratie `0002` (alleen nieuwe tabellen). Nep-Authentik voor unit-, integratie- en dienst-E2E-tests.
+
+**Nulmeting/omgeving**
+- Rooktest leest geheimen en de back-upmap via een wegwerpcontainer (werkte alleen als root); test met verkeerde
+  rechten deterministisch. Back-uptest kiest de nieuwste `pg_restore` (machines met meerdere PostgreSQL-clients).
+- Integratietests maken de database ~50× sneller leeg (DELETE i.p.v. TRUNCATE).
+
+**Validatie:** Sim-getest (nep-Hub, nep-Authentik). NIET GEVALIDEERD met een echte Authentik, domeinnaam (D17) of NAS.
+
 ## 0.1.0 — P0 (nog niet uitgebracht)
 
 **Nieuw**

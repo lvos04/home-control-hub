@@ -83,14 +83,17 @@ dependencies:
   - app_id: ai-server-manager
     kind: hub
     required: false  # zonder Hub draait de app en toont eerlijk 'niet gekoppeld'
-sso: none  # eigen gebruikers heeft de app niet; gebruikerscontext komt als Hub-JWT
+  - app_id: authentik
+    kind: catalog_app  # officiële TrueNAS-catalogusapp (trein community); 'Mount Docker Socket' moet uit blijven
+    required: false  # zonder Authentik werken B13-001 en de rest; B13-002…005 tonen dan 'niet ingesteld'
+sso: none  # eigen gebruikers heeft de app niet; gebruikerscontext komt als Hub-JWT (één JWT per wijziging)
 risk:
   install: R2
   update: R2
   uninstall: R2
 upgrade:
-  migrations: alembic (automatisch bij start, met back-up vooraf)
-  tag_only_rollback_safe: false  # 0.1.0 is het eerste schema; terug naar 'niets' = dataset/snapshot
+  migrations: alembic (automatisch bij start, met back-up vooraf; 0001 basisschema, 0002 B13 P1)
+  tag_only_rollback_safe: false  # schema gewijzigd; terug = back-up uit /appdata/backups of dataset-snapshot
 decisions_required: [D01, D02, D03, D17]
 docs:
   - deploy/truenas/CUSTOM_APP.md

@@ -82,9 +82,19 @@ ontkoppelcode** die bij elke start in de app-log staat (**Apps** → `home-contr
 | `HUB_URL` | Hub-adres als je het koppeltoken handmatig meegeeft (normaal zet het platform dit) |
 | `HUB_ENROLLMENT_TOKEN` | eenmalig koppeltoken uit de Hub (vervalt na 60 min of na gebruik; geen blijvend geheim) |
 | `HCH_PUBLIC_URL` | adres waarop de Hub deze app bereikt, als dat afwijkt van wat de Hub zelf weet |
+| `HCH_AUTHENTIK_SYNC_INTERVAL_S` | hoe vaak (seconden) logins en rechten uit Authentik gelezen worden; standaard `300`, `0` = uit |
 
 Zet hier **nooit** wachtwoorden of API-sleutels. Credentials van andere apps (bv. Authentik) voer je in de Hub-UI in;
 de app bewaart ze versleuteld in `/appdata` (`vault.key` in `/appdata/secrets`).
+
+## Authentik koppelen (B13, optioneel)
+
+Authentik zelf installeer je als **officiële TrueNAS-catalogusapp** `authentik` (niet met dit formulier); laat daar
+**Mount Docker Socket uit**. Daarna in de Hub-UI bij de bron *Authentik*: het LAN-adres van Authentik en een
+**API-token van een serviceaccount met alleen leesrechten** (geen superuser — de app meldt een te ruim token als
+waarschuwing). Deze app leest alleen; wijzigingen in Authentik zijn voorstellen die pas met een door de Hub
+ondertekende opdracht kunnen worden uitgevoerd (nog niet beschikbaar). Back-up en upgrade: zie
+`docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
 
 ## Updaten en terugdraaien
 
@@ -93,6 +103,8 @@ de app bewaart ze versleuteld in `/appdata` (`vault.key` in `/appdata/secrets`).
   **Mislukt de back-up, dan migreert de app niet** en stopt hij met een melding in de log (bijv. te weinig vrije
   ruimte op de dataset). Mislukt een migratie, dan blijft de oude database ongewijzigd en meldt de log dat ook. Een
   ZFS-snapshot vooraf blijft verstandig.
+- **Let op (deze ontwikkelversie):** de database kreeg in P1 nieuwe tabellen (migratie `0002`); terug naar een image
+  zonder die migratie kan alleen met de back-up of ZFS-snapshot van vóór de update.
 - **Terugdraaien:** zolang een release geen databasewijziging heeft (zie de releasenotes, veld
   `tag_only_rollback_safe`), kun je de Tag terugzetten. Bij een schemawijziging: zet de ZFS-snapshot van vóór de
   update terug, of gebruik de back-up uit `/appdata/backups`.
