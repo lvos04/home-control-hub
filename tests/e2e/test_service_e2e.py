@@ -1,12 +1,17 @@
-"""Dienst-E2E (Sim-getest): koppelen met eenmalig token, B13-001 met Authentik offline, events naar de Hub-inbox,
-B13-002…005 tegen een nep-Authentik over HTTP (voorstel zonder schrijven, sync met afwijking naar de Hub, export,
-gate, herstelcheck), eerlijke 501's, fail-closed als de Hub wegvalt, geen header-SSO en een grens op de
-verzoekgrootte. Volgorde van de tests is bewust (module-scope stack)."""
+"""Dienst-E2E (Sim-getest): echte processen (API + worker) tegen de Hub-simulator volgens contract 1.2.
+
+Koppelen met het eenmalige env-token + ``HUB_KEY_FINGERPRINT`` (exact verzoek §3.3, bevestigen met services/self),
+inkomend alleen Hub-JWT's (gebruikers- en dienst-JWT, nooit het service-token), B13-001 met Authentik offline,
+events naar de Hub-inbox, B13-002…005 tegen een nep-Authentik, ondertekende sleutelrotatie, tokenrotatie op verzoek
+van de Hub, een Hub-storing (gepinde sleutels blijven werken, geen intrekking), geen header-SSO en de 1 MiB-grens
+(ook chunked), geen tokens in de logs, intrekken → opnieuw koppelen met een nieuw env-token → ontkoppelen door de Hub.
+Volgorde van de tests is bewust (module-scope stack)."""
 
 from __future__ import annotations
 
 import time
 import uuid
+from typing import Any
 
 import httpx
 
@@ -31,15 +36,35 @@ def _wait(cond, timeout: float = 30, step: float = 0.5) -> bool:  # type: ignore
 
 def test_01_ready_and_enrolled_with_one_time_token(stack: Stack) -> None:
     assert httpx.get(f"{stack.hch}/readyz").json()["status"] == "ready"
-    assert _wait(lambda: "Gekoppeld met de Hub" in httpx.get(f"{stack.hch}/").text), "worker koppelde niet"
-    reqs = httpx.get(f"{stack.hub}/sim/enroll-requests").json()
-    assert len(reqs) == 1 and reqs[0]["app_id"] == "home-control-hub" and reqs[0]["kind"] == "token"
+
+    def linked() -> bool:
+        link = httpx.get(f"{stack.hch}/readyz").json()["hub_link"]
+        return bool(link["state"] == "gekoppeld" and stack.link_file().get("confirmed_at"))
+
+    assert _wait(linked), "worker koppelde niet of bevestigde niet met services/self"
+    state = httpx.get(f"{stack.hub}/sim/state").json()
+    reqs = state["enroll_requests"]
+    assert len(reqs) == 1 and set(reqs[0]) == {"app_id", "version", "base_url", "public_key_jwk"}  # + token
+    assert reqs[0]["app_id"] == "home-control-hub" and set(reqs[0]["public_key_jwk"]) == {"kty", "crv", "x", "kid"}
+    assert ["GET", "/api/v1/services/self"] in state["calls"]
+    link = stack.link_file()
+    assert link["schema_version"] == "1.2" and link["via"] == "token" and link["pending"] is None
+    assert link["pins"]["keyset_fingerprint"] == state["fingerprint"] and link["service_id"] == state["service_id"]
     page = httpx.get(f"{stack.hch}/").text
-    assert "e2e-eenmalig-token" not in page
+    assert stack.enroll_tokens[0] not in page and link["service_token"] not in page
+    assert state["fingerprint"] in page and 'action="/koppelen"' not in page  # na koppelen geen formulier meer
+    assert "Ontkoppelen of opnieuw koppelen gaat via de Hub" in page
 
 
 def test_02_auth_and_roles_over_http(stack: Stack) -> None:
-    assert httpx.get(f"{stack.hch}/connector/v1/discover").status_code == 401
+    r = httpx.get(f"{stack.hch}/connector/v1/discover")
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "invalid_token"
+    svc_token = stack.link_file()["service_token"]
+    r = httpx.get(f"{stack.hch}/connector/v1/discover", headers={"Authorization": f"Bearer {svc_token}"})
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "service_token_not_accepted"
+    hub_link = httpx.get(f"{stack.hch}/connector/v1/hub-link", headers=stack.service())
+    assert hub_link.status_code == 200 and hub_link.json()["state"] == "gekoppeld"
+    assert svc_token not in hub_link.text
     d = httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("viewer"))
     assert d.status_code == 200 and d.json()["app_id"] == "home-control-hub"
     r = httpx.get(f"{stack.hch}/integrations/v1/sso/recovery/overview", headers=stack.token("viewer"))
@@ -160,7 +185,7 @@ def test_05b_b13_authentik_over_http(stack: Stack) -> None:
     first = httpx.post(f"{base}/authentik/sync", headers=reused)
     second = httpx.post(f"{base}/authentik/sync", headers={**h, "Idempotency-Key": str(uuid.uuid4())})
     assert first.status_code == 200, first.text
-    assert second.status_code == 401 and second.json()["details"]["reason"] == "token_hergebruikt", second.text
+    assert second.status_code == 401 and second.json()["details"]["reason"] == "token_replayed", second.text
 
 
 def test_05c_hub_accepted_every_event(stack: Stack) -> None:
@@ -170,17 +195,49 @@ def test_05c_hub_accepted_every_event(stack: Stack) -> None:
     assert len(httpx.get(f"{stack.hub}/sim/inbox").json()) >= 5
 
 
-def test_06_fail_closed_when_hub_disappears(stack: Stack) -> None:
-    token = stack.token("admin")
-    ok = httpx.get(f"{stack.hch}/connector/v1/discover", headers=token)
-    assert ok.status_code == 200, ok.text
-    stack.hub_proc.terminate()
-    stack.hub_proc.wait(10)
-    time.sleep(4)  # JWKS-ttl (2 s) + max. oud (1 s) voorbij
-    r = httpx.get(f"{stack.hch}/connector/v1/discover", headers=token)
-    assert r.status_code == 401 and r.json()["details"]["reason"] == "jwks_niet_beschikbaar"
-    assert httpx.get(f"{stack.hch}/readyz").status_code == 200  # de dienst zelf blijft gezond en bereikbaar
-    assert "Home Control Hub" in httpx.get(f"{stack.hch}/").text
+def test_05d_signed_key_rotation_over_http(stack: Stack) -> None:
+    """§4.5: de Hub publiceert een met de gepinde sleutel ondertekende rotatie; een JWT met de nieuwe sleutel krijgt
+    eerst direct 401 ``unknown_key`` (poll op de achtergrond) en wordt daarna geaccepteerd."""
+    rot = httpx.post(f"{stack.hub}/sim/key-rotation").json()  # de Hub ondertekent vanaf nu met de nieuwe sleutel
+    first = httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("viewer"))
+    assert first.status_code in (200, 401)
+    if first.status_code == 401:
+        assert first.json()["details"]["reason"] == "unknown_key"
+    assert _wait(
+        lambda: httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("viewer")).status_code == 200
+    )
+    view = httpx.get(f"{stack.hch}/connector/v1/hub-link", headers=stack.token("viewer")).json()
+    assert view["rotation_sequence"] == 1 and rot["kid"] in view["pinned_kids"]["jwt"]
+    assert view["keyset_fingerprint"] == rot["fingerprint"]
+
+
+def test_05e_token_rotation_on_hub_request(stack: Stack) -> None:
+    """§3.8: rotatie aanvragen in de Hub → ``Hub-Token-Rotation: required`` → de dienst roteert zelf (≤ 5 min; hier
+    met een korte bevestigingscyclus) en bevestigt het nieuwe token."""
+    before = stack.link_file()["service_token_last4"]
+    httpx.post(f"{stack.hub}/sim/request-rotation")
+
+    def rotated() -> bool:
+        link = stack.link_file()
+        return bool(link["service_token_last4"] != before and link["confirmed_at"])
+
+    assert _wait(rotated), "de dienst roteerde zijn service-token niet"
+    assert ["POST", "/api/v1/services/self/rotate"] in httpx.get(f"{stack.hub}/sim/state").json()["calls"]
+
+
+def test_06_pinned_keys_keep_working_during_hub_outage(stack: Stack) -> None:
+    """De vertrouwensset zijn de gepinde sleutels; een storing bij de Hub (5xx) is nooit een intrekking."""
+    httpx.post(f"{stack.hub}/sim/outage", json={"on": True})
+    try:
+        time.sleep(3)  # enkele bevestigingsrondes van de worker tegen een Hub die 503 geeft
+        r = httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("admin"))
+        assert r.status_code == 200, r.text
+        assert stack.link_file()["state"] == "gekoppeld"
+        assert httpx.get(f"{stack.hch}/readyz").status_code == 200  # de dienst zelf blijft gezond
+    finally:
+        httpx.post(f"{stack.hub}/sim/outage", json={"on": False})
+    calls = httpx.get(f"{stack.hub}/sim/state").json()["calls"]
+    assert ["GET", "/api/v1/auth/jwks"] not in calls  # de JWKS via HTTP wordt nooit opgehaald (voegt niets toe)
 
 
 def test_07_no_header_sso_and_body_limit_over_http(stack: Stack) -> None:
@@ -194,15 +251,22 @@ def test_07_no_header_sso_and_body_limit_over_http(stack: Stack) -> None:
         headers={**headers, "Content-Type": "application/json"},
     )
     assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
+
+    def chunks() -> Any:
+        for _ in range(40):
+            yield b"a" * 32768  # 1,25 MiB zonder Content-Length (chunked), vóór de authenticatie
+
+    r = httpx.post(f"{stack.hch}/connector/v1/hub-link/unlink", content=chunks(), headers=_idem(stack.service()))
+    assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
+    assert stack.link_file()["state"] == "gekoppeld"
     assert httpx.get(f"{stack.hch}/healthz").status_code == 200
 
 
 def test_08_no_tokens_in_process_logs(stack: Stack) -> None:
     """Review P1: het Authentik-API-token en het eenmalige koppeltoken staan nooit in de logs van API of worker
     (de worker heeft dan al vele keren met het token gesynchroniseerd, ook terwijl de Hub weg was)."""
-    from tests.e2e.conftest import ENROLL_TOKEN
-
     assert stack.logs is not None
+    service_token = stack.link_file()["service_token"]
     ak_token = httpx.get(f"{stack.authentik}/sim/token").json()["token"]
     assert len(ak_token) >= 20
     for name in ("api.log", "worker.log"):
@@ -211,4 +275,46 @@ def test_08_no_tokens_in_process_logs(stack: Stack) -> None:
         text = (stack.logs / name).read_text(encoding="utf-8", errors="replace")
         assert text.strip(), f"{name} is leeg; de controle zou niets bewijzen"
         assert ak_token not in text, f"Authentik-token in {name}"
-        assert ENROLL_TOKEN not in text, f"koppeltoken in {name}"
+        for token in stack.enroll_tokens:
+            assert token not in text, f"koppeltoken in {name}"
+        assert service_token not in text, f"service-token in {name}"
+        assert "ontkoppelcode" not in text.lower(), f"lokale ontkoppelcode in {name} (bestaat niet meer)"
+
+
+def test_09_revoke_relink_with_new_env_token_then_unlink_by_hub(stack: Stack) -> None:
+    """§3.8: intrekken in de Hub (services/self 401) → ``ingetrokken``; opnieuw koppelen alleen via de Hub (nieuw
+    env-token, zoals ``app.update``); daarna ontkoppelt de Hub met een dienst-JWT; een herhaalde unlink geeft 401
+    ``not_linked`` (telt voor de Hub als gelukt)."""
+    httpx.post(f"{stack.hub}/sim/revoke")
+    assert _wait(lambda: stack.link_file()["state"] == "ingetrokken"), "intrekking niet gezien"
+    r = httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("admin"))
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "revoked"
+    assert 'action="/koppelen"' not in httpx.get(f"{stack.hch}/").text
+    grant = stack.grant()
+    stack.restart_worker(HUB_ENROLLMENT_TOKEN=grant["secret"], HUB_KEY_FINGERPRINT=grant["fingerprint"])
+    assert _wait(lambda: stack.link_file()["state"] == "gekoppeld" and bool(stack.link_file()["confirmed_at"]))
+    assert len(stack.link_file()["used_enrollment_token_sha256"]) == 2
+    assert httpx.get(f"{stack.hch}/connector/v1/discover", headers=stack.token("admin")).status_code == 200
+    key = str(uuid.uuid4())
+    r = httpx.post(
+        f"{stack.hch}/connector/v1/hub-link/unlink", headers={**stack.service().fresh(), "Idempotency-Key": key}
+    )
+    assert r.status_code == 200 and r.json()["state"] == "ontkoppeld", r.text
+    again = httpx.post(
+        f"{stack.hch}/connector/v1/hub-link/unlink", headers={**stack.service().fresh(), "Idempotency-Key": key}
+    )
+    assert again.status_code == 401 and again.json()["details"]["reason"] == "not_linked"
+    link = stack.link_file()
+    assert link["service_token"] is None and link["pins"] is None and link["previous_pins"] is not None
+    page = httpx.get(f"{stack.hch}/").text
+    assert "ontkoppeld" in page and 'action="/koppelen"' not in page
+
+
+def test_10_hub_gone_service_stays_up(stack: Stack) -> None:
+    stack.hub_proc.terminate()
+    stack.hub_proc.wait(10)
+    time.sleep(2)
+    assert httpx.get(f"{stack.hch}/readyz").status_code == 200
+    assert "Home Control Hub" in httpx.get(f"{stack.hch}/").text
+    for p in stack.procs:
+        assert p.poll() is None
