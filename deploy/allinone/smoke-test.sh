@@ -2,8 +2,10 @@
 # Rooktest van de alles-in-één image (ALLEEN ontwikkeling/CI; geen installatiemethode).
 #   deploy/allinone/smoke-test.sh [image]   (standaard home-control-hub:dev)
 # Controleert: start als root → processen als 568, healthcheck 'healthy', /healthz, /readyz, statuspagina
-# 'niet gekoppeld', geheimen 0600/568 en blijvend na herstart, herstel na harde kill, start als 568, duidelijke fout
-# bij verkeerde maprechten.
+# 'niet gekoppeld', geheimen 0600/568 en blijvend na herstart, databasegegevens blijvend na herstart én harde kill,
+# start als 568, duidelijke fout bij verkeerde maprechten, te grote verzoeken geweigerd (413).
+# De containers draaien met no-new-privileges en ALLEEN de capabilities die de eigenaarswissel van /appdata nodig
+# heeft (cap-drop ALL + CHOWN/DAC_OVERRIDE/FOWNER/SETUID/SETGID), zoals een strak ingestelde Custom App.
 set -euo pipefail
 
 IMAGE="${1:-home-control-hub:dev}"
@@ -44,7 +46,22 @@ log_has() { docker logs "$1" > "$WORK/log.txt" 2>&1; grep -q -- "$2" "$WORK/log.
 run() { # naam, datamap, extra args
   local n="$1" d="$2"; shift 2
   docker run -d --name "$n" -p "127.0.0.1:$PORT:30420" -v "$d:/appdata" \
-    --security-opt no-new-privileges:true --health-interval 3s --health-start-period 60s "$@" "$IMAGE" >/dev/null
+    --security-opt no-new-privileges:true --cap-drop ALL \
+    --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
+    --health-interval 3s --health-start-period 60s "$@" "$IMAGE" >/dev/null
+}
+# SQL in de ingebouwde database (als 568, via de unix-socket; alleen voor deze test)
+sql() { docker exec --user 568:568 "$1" psql -h /tmp/hch-pg -U hch -d hch -tAc "$2"; }
+marker_write() {
+  [ "$(sql "$NAME" "INSERT INTO service_state (key, value, updated_at) VALUES ('rooktest', '{}'::jsonb, now()) RETURNING key" | head -1)" = rooktest ]
+}
+marker_present() { [ "$(sql "$NAME" "SELECT count(*) FROM service_state WHERE key='rooktest'")" = 1 ]; }
+pg_dump_works() { # zonder werkende pg_dump weigert elke latere update te migreren (back-up vooraf is verplicht)
+  docker exec --user 568:568 "$NAME" sh -c 'pg_dump -Fc -h /tmp/hch-pg -U hch -f /tmp/rooktest.dump hch && test -s /tmp/rooktest.dump && rm -f /tmp/rooktest.dump'
+}
+too_large() { # > 1 MiB zonder token: de grens geldt vóór de authenticatie
+  [ "$(head -c 1100000 /dev/zero | curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data-binary @- "http://127.0.0.1:$PORT/integrations/v1/sso/recovery/accounts")" = 413 ]
 }
 
 mkdir -p "$WORK/root" "$WORK/u568" "$WORK/bad"
@@ -70,17 +87,23 @@ check "geheimen 0600 en eigenaar 568" \
 check "ontkoppelcode staat in de app-log" "log_has $NAME 'Lokale ontkoppelcode'"
 check "geen setuid/setgid-bestanden in de image" \
   "[ -z \"\$(docker exec $NAME sh -c 'find / -xdev -perm /6000 -type f 2>/dev/null')\" ]"
+check "te groot verzoek zonder login geeft 413" too_large
+check "markeerrij in de database geschreven" marker_write
+check "pg_dump werkt in de image (back-up vóór migratie)" pg_dump_works
 SUM1="$(sha256sum "$WORK/root/secrets/vault.key" | cut -d' ' -f1)"
 
 echo "== 2. herstart: data en geheimen blijven"
 docker restart "$NAME" >/dev/null
 check "na herstart weer healthy" "wait_healthy $NAME"
 check "vault.key ongewijzigd na herstart" "[ \"\$(sha256sum $WORK/root/secrets/vault.key | cut -d' ' -f1)\" = '$SUM1' ]"
+check "databasegegevens behouden na herstart" marker_present
 
 echo "== 3. harde kill (stroomuitval) en opnieuw starten"
 docker kill "$NAME" >/dev/null
 docker start "$NAME" >/dev/null
 check "na harde kill weer healthy" "wait_healthy $NAME"
+check "databasegegevens behouden na harde kill" marker_present
+check "geen back-up nodig zonder openstaande migratie" "[ -z \"\$(ls -A $WORK/root/backups 2>/dev/null)\" ]"
 docker rm -f "$NAME" >/dev/null
 
 echo "== 4. start direct als 568 op een 568-map"
