@@ -1,12 +1,16 @@
-"""Home Control Hub — procesbewaker van de alles-in-één image (kind van dumb-init).
+"""Home Control Hub — procesbewaker van de alles-in-één image; is zelf PID 1 van de container (geen dumb-init).
 
 Eén container draait alles: PostgreSQL 16 (alleen unix-socket, geen netwerk, geen wachtwoord), migraties, de API
 met statuspagina en de worker. Eén datamap (/appdata) en één poort (30420): zo installeert de app als gewone
 TrueNAS Custom App zonder YAML.
 
-Regels (gebaseerd op het werkende MSO-voorbeeld):
-- Start als root alleen om /appdata (en alleen de eigen submappen) aan 568:568 te geven; daarna draait elk proces
-  als 568 (PostgreSQL weigert root).
+Regels (gebaseerd op het werkende MSO-voorbeeld, contract 1.2 §2.2/§10, ADR-0010):
+- Start als root alleen om /appdata (en alleen de eigen submappen) aan 568:568 te geven. Daarna laat de bewaker
+  alle capabilities uit de bounding set vallen, wordt volledig 568 (``setgroups([])``, ``setgid``, ``setuid``; geen
+  ambient capabilities) en zet ``PR_SET_NO_NEW_PRIVS`` vóór de eerste ``execve`` van een dienstproces: het standaard
+  Custom App-formulier zet geen no-new-privileges en geen cap_drop. Dat geldt ook voor PID 1: de bewaker ís PID 1,
+  ruimt verweesde processen (zombies) zelf op en draait na de wissel als 568 zonder capabilities. Start de container
+  als 568 ("Custom User"), dan is er geen eigenaarschapsstap en wordt alleen no-new-privileges gezet.
 - First-start-init: ontbrekende geheimen in /appdata/secrets (0600, nooit overschrijven).
 - Duidelijke Nederlandse fout (en even wachten) als /appdata ontbreekt of niet schrijfbaar is, i.p.v. een crashloop.
 - Oude postmaster.pid na een harde stop wordt opgeruimd.
@@ -18,6 +22,8 @@ Regels (gebaseerd op het werkende MSO-voorbeeld):
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import grp
 import os
 import pwd
@@ -38,6 +44,8 @@ PORT = os.environ.get("HCH_PORT", "30420")
 DB_URL = f"postgresql+psycopg://hch@/hch?host={SOCKET_DIR}"
 MANAGED = ("postgres", "secrets", "backups", "logs")
 STOP = threading.Event()
+PR_SET_NO_NEW_PRIVS = 38
+PR_CAPBSET_DROP = 24
 
 
 def log(msg: str) -> None:
@@ -51,10 +59,40 @@ def fail(msg: str, code: int = 78) -> None:
 
 
 def demote() -> None:
-    if os.getuid() == 0:
+    """Volledig naar 568:568 zonder capabilities en met no-new-privileges (ook in kindprocessen vóór hun execve)."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if os.getuid() == 0 or os.geteuid() == 0:
+        for cap in range(64):  # bounding set leeg (CAP_SETPCAP zit in de Docker-standaardset)
+            if libc.prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0:
+                break  # einde van de bekende capabilities
         os.setgroups([])
         os.setgid(GID)
-        os.setuid(UID)
+        os.setuid(UID)  # wist permitted/effective capabilities (geen keepcaps, geen ambient)
+    if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "PR_SET_NO_NEW_PRIVS mislukt")
+    if 0 in (os.getuid(), os.geteuid(), os.getgid(), os.getegid()):
+        raise PermissionError("rechten konden niet worden verlaagd")
+
+
+def reap_orphans(known: set[int]) -> int:
+    """Als PID 1: verweesde kindprocessen (zombies met PPID 1) opruimen, zonder de exitstatus van eigen kinderen
+    (``known``, die ``Child.alive()`` zelf ophaalt) weg te nemen. Geeft het aantal opgeruimde processen."""
+    if os.getpid() != 1:
+        return 0
+    reaped = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) in known:
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", encoding="utf-8", errors="replace") as fh:
+                fields = fh.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if len(fields) > 1 and fields[0] == "Z" and fields[1] == "1":
+            with contextlib.suppress(ChildProcessError, OSError):
+                os.waitpid(int(entry), os.WNOHANG)
+                reaped += 1
+    return reaped
 
 
 def _chown_tree(path: Path) -> None:
@@ -253,10 +291,22 @@ def wait_for_db(pg: Child, timeout: float = 90) -> None:
         fail("database 'hch' aanmaken mislukt")
 
 
+def shutdown(signum: int, _frame: object) -> None:
+    log(f"signaal {signum}: netjes stoppen")
+    STOP.set()
+
+
 def main() -> None:
+    # als PID 1 negeert de kernel signalen zonder handler: daarom meteen (ook tijdens init) afhandelen
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
     log(f"Home Control Hub (alles-in-één) · versie {os.environ.get('HCH_VERSION', '?')} · data {DATA} · poort {PORT}")
     prepare_dirs()
-    demote()  # vanaf hier draait niets meer als root
+    try:
+        demote()  # vanaf hier draait niets meer als root: geen capabilities, no-new-privileges
+    except OSError as exc:
+        fail(f"rechten verlagen mislukt ({exc}); de app weigert als root of zonder no-new-privileges te draaien")
+    log(f"draait als {os.getuid()}:{os.getgid()} zonder capabilities, no-new-privileges aan (PID {os.getpid()})")
     py = sys.executable
     if run_once("geheimen controleren (first-start-init)", [py, "-m", "integrations", "init"]) != 0:
         fail("geheimen aanmaken in /appdata/secrets mislukt")
@@ -284,15 +334,9 @@ def main() -> None:
     for c in children:
         c.start()
 
-    def shutdown(signum: int, _frame: object) -> None:
-        log(f"signaal {signum}: netjes stoppen")
-        STOP.set()
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
-
     backoff: dict[str, float] = {}
     while not STOP.is_set():
+        reap_orphans({c.proc.pid for c in [pg, *children] if c.proc is not None})
         if not pg.alive():
             log("database gestopt; opnieuw starten")
             for c in children:

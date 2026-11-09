@@ -15,12 +15,11 @@ services:
     volumes:
       - hch-appdata:/appdata
     environment:
-      # optioneel voor lokaal testen met een Hub; standaard leeg = eerlijk 'niet gekoppeld'
+      # optioneel voor lokaal testen met een Hub; standaard leeg = eerlijk 'nooit gekoppeld'
       HUB_URL: ${HUB_URL:-}
       HUB_ENROLLMENT_TOKEN: ${HUB_ENROLLMENT_TOKEN:-}
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]  # alleen voor de eigenaarswissel van /appdata bij start
+      HUB_KEY_FINGERPRINT: ${HUB_KEY_FINGERPRINT:-}
+    # Bewust geen security_opt/cap_drop: zo start het standaard TrueNAS Custom App-formulier de container ook
+    # (contract 1.2 §2.2). De image wisselt zelf naar 568 zonder capabilities en zet no-new-privileges.
 volumes:
   hch-appdata:
