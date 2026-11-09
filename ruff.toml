@@ -7,3 +7,5 @@ extend = "apps/api/pyproject.toml"
 "deploy/allinone/*.py" = ["S603", "S607", "S108", "SIM105"]
 "tests/e2e/*.py" = ["S101", "S105", "S603", "SIM115"]
 "tests/interop/*.py" = ["S101", "S105", "S603", "SIM115"]
+# ontwerpreview: start de echte dienst, de Hub-simulator en node (vaste argumentlijsten, geen invoer van buiten)
+"tests/ui/ontwerpreview.py" = ["S603", "S607", "SIM115"]

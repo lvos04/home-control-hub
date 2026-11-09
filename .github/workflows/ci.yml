@@ -72,7 +72,7 @@ jobs:
     # (PostgreSQL); Chromium toetst axe-core = 0, geen overloop op 320–1440 px, CSP zonder JS, doelen ≥ 44 px,
     # tekst ≥ 14 px, focusring, eerste signaal nooit groen als niet gereed; schermafdrukken als artefact
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
@@ -103,6 +103,8 @@ jobs:
         env:
           SCHERMAFDRUKKEN: "1"
         run: npx playwright test
+      - name: Ontwerpreview tegen de draaiende dienst (14 toestanden × 320–1440 × licht/donker; ADR-0012)
+        run: python tests/ui/ontwerpreview.py --uit tests/ui/review-uit
       - name: Schermafdrukken en toestanden bewaren
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -111,6 +113,7 @@ jobs:
           path: |
             docs/screenshots/peil/statuspagina/*.png
             tests/ui/uit/
+            tests/ui/review-uit/
           retention-days: 14
 
   image:
