@@ -111,9 +111,16 @@ class Dienst:
         return httpx.get(self.url + "/", timeout=10).text
 
 
+#: thema's die ontwerpreview.mjs per toestand en breedte meet (licht en donker)
+THEMAS = 2
+
+
 class Review:
     def __init__(self, uit: Path, breedtes: str) -> None:
-        self.uit, self.breedtes = uit, breedtes
+        # absoluut: ontwerpreview.mjs draait met cwd tests/ui; een relatief pad (zoals in CI) kwam anders op een andere
+        # plek terecht dan waar beoordeel() leest, en dan werd er 0 gemeten en toch "geslaagd" gemeld (review 1.2)
+        self.uit, self.breedtes = uit.resolve(), breedtes
+        self.verwacht = 0  # aantal metingen dat beoordeel() moet terugvinden
         self.tmp = Path(tempfile.mkdtemp(prefix="hch-review-"))
         self.logs = self.tmp / "logs"
         self.logs.mkdir()
@@ -236,6 +243,7 @@ class Review:
         r = subprocess.run(["node", str(HIER / "ontwerpreview.mjs"), str(pad)], cwd=HIER)
         if r.returncode != 0:
             raise SystemExit(f"{d.naam}: browserstap mislukt (exit {r.returncode}); logs in {self.logs}")
+        self.verwacht += len(plan["breedtes"]) * THEMAS
 
     def opruimen(self) -> None:
         if self.hub_proc.poll() is None:
@@ -444,8 +452,11 @@ VEROUDERD = {"gekoppeld-met-bronnen": ["Authentik en toegangsbeheer (B13)"]}
 NOOIT_GROEN = re.compile(r"^(Onbekend|Verouderd|Niet |Ontkoppeld|Ingetrokken|Koppelen bezig|Onleesbaar|Onvolledig)")
 
 
-def beoordeel(uit: Path) -> int:
-    """Harde eisen over alle metingen; schrijft ``samenvatting.json`` en geeft het aantal overtredingen terug."""
+def beoordeel(uit: Path, verwacht: int | None = None) -> int:
+    """Harde eisen over alle metingen; schrijft ``samenvatting.json`` en geeft het aantal overtredingen terug.
+
+    ``verwacht`` = het aantal metingen dat de browser heeft gedaan. Wijkt het gevonden aantal af (of is het 0), dan is
+    dat zelf een overtreding: een review die niets meet, mag nooit slagen."""
     fouten: list[str] = []
     rijen: list[dict[str, Any]] = []
     for pad in sorted(uit.glob("*.json")):
@@ -511,8 +522,11 @@ def beoordeel(uit: Path) -> int:
                     "overloop": run["overloop"],
                 }
             )
+    if not rijen or (verwacht is not None and len(rijen) != verwacht):
+        fouten.insert(0, f"aantal metingen klopt niet: verwacht {verwacht}, gevonden {len(rijen)} in {uit}")
     samenvatting = {
         "metingen": len(rijen),
+        "verwacht": verwacht,
         "overtredingen": fouten,
         "laagste": {
             k: min((r[k] for r in rijen), default=None) for k in ("tekst_min", "rand_min", "icoon_min", "focus_min")
@@ -532,6 +546,7 @@ def main() -> int:
     p.add_argument("--breedtes", default="320,360,390,768,1440")
     p.add_argument("--alleen", default="", help="komma-gescheiden namen (zoals niet-gekoppeld)")
     args = p.parse_args()
+    args.uit = args.uit.resolve()
     if args.uit.exists():
         shutil.rmtree(args.uit)
     (args.uit / "afdrukken").mkdir(parents=True)
@@ -546,7 +561,7 @@ def main() -> int:
             stap(r)
     finally:
         r.opruimen()
-    return 1 if beoordeel(args.uit) else 0
+    return 1 if beoordeel(args.uit, r.verwacht) else 0
 
 
 if __name__ == "__main__":
