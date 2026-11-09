@@ -92,7 +92,7 @@ zijn simulators (`tests/e2e/sim_hub.py`, `apps/api/tests/fakes/authentik_fake.py
 | `docker buildx build … -t home-control-hub:nulmeting .` | gebouwd |
 | `deploy/allinone/smoke-test.sh home-control-hub:nulmeting` | **mislukt** (afgebroken na "geheimen 0600 en eigenaar 568") — *echte fout in de rooktest*: die las bestanden van uid 568 (0600, map 0700) vanaf de host; dat kan alleen als root (de oude sandbox) en ook niet op een GitHub-runner. Na reparatie (commit b27cd88): 24 geslaagd, 0 mislukt op dezelfde image. |
 
-### Na P1 (commit 0f38e1d)
+### Na P1 (commit 0f38e1d; JWKS-reparatie b81d2e5: 305 unit+integratie, E2E 8 geslaagd 4×)
 
 | Commando | Uitkomst |
 |---|---|
@@ -109,6 +109,13 @@ zijn simulators (`tests/e2e/sim_hub.py`, `apps/api/tests/fakes/authentik_fake.py
 | `deploy/allinone/smoke-test.sh home-control-hub:p1` | **24 geslaagd, 0 mislukt** |
 | Upgradetest (handmatig, named volume): P0-image (revisie 0001) → P1-image op dezelfde data | back-up `voor-upgrade-0001-*.dump` (0600, map 0700) gemaakt, migratie 0001→0002, markeerrij behouden, `/readyz` ready |
 | Terugzettest: P0-image op de gemigreerde database | weigert te starten zonder iets te wijzigen (verbeterde melding zit in P1: `migrate` code 4 "database nieuwer dan deze image") |
+
+### GitHub Actions (echte CI-runs op GitHub, branch `ccr-c133d7a0-kuz1cv`)
+| Run | Uitkomst |
+|---|---|
+| 42595905753, 42599009643 (P0) | **mislukt** in de job `image`: rooktest "geheimen 0600 en eigenaar 568" (`stat: Permission denied`, niet-root runner) — dezelfde fout als in de nulmeting |
+| 42613295750 (P1, commit be89e22) | **mislukt** in de dienst-E2E: JWKS-gat (TTL 2 s + vaste ophaalbegrenzing 30 s) → 401; gerepareerd in b81d2e5 |
+| 42613907117 (commit b81d2e5) | **geslaagd**: job `python` (ruff, mypy, pytest, migraties, OpenAPI-drift, E2E, pip-audit) en job `image` (bouwen + rooktest) |
 
 ### Wat B13 P1 aantoont (Sim-getest)
 - Er wordt nooit naar Authentik geschreven (nep-Authentik registreert elke niet-GET; overal leeg).
