@@ -52,6 +52,8 @@ COPY --from=core /install /usr/local
 COPY apps/api/alembic /usr/local/lib/hch/alembic
 COPY deploy/allinone/supervisor.py /usr/local/lib/hch/supervisor.py
 COPY deploy/allinone/healthcheck.py /usr/local/lib/hch/healthcheck.py
+# statuspagina (GET /): versie-gepinde kopie van het Peil-sjabloon (ONTWERPTAAL §13.2, O-14; tools/peil_kopie.py)
+COPY design/ontwerptaal/statuspagina.html /usr/local/lib/hch/ontwerptaal/statuspagina.html
 RUN set -eu; \
     for b in postgres initdb pg_ctl pg_isready psql pg_dump pg_restore; do \
       printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/pglibs exec /usr/lib/postgresql/16/bin/%s "$@"\n' "$b" > /usr/local/bin/$b; \
@@ -61,9 +63,13 @@ RUN set -eu; \
     groupadd -g 568 apps; useradd -u 568 -g 568 -M -d /tmp -s /usr/sbin/nologin apps; \
     mkdir -p /appdata; chown 568:568 /appdata; \
     find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true; \
-    python -c "import integrations.app, psycopg, uvicorn, cryptography"
+    python -c "import integrations.app, psycopg, uvicorn, cryptography"; \
+    python -c "import pathlib, sys; from integrations.peil import lees; \
+t = lees(pathlib.Path('/usr/local/lib/hch/ontwerptaal/statuspagina.html')); \
+sys.exit(0 if t.intact else 'Peil-sjabloon wijkt af van de herkomstkop (sha256)')"
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     HCH_DATA_DIR=/appdata HCH_PORT=30420 HCH_ALEMBIC_DIR=/usr/local/lib/hch/alembic \
+    HCH_PEIL_DIR=/usr/local/lib/hch/ontwerptaal \
     HCH_DATABASE_URL="postgresql+psycopg://hch@/hch?host=/tmp/hch-pg" HCH_VERSION=${VERSION}
 VOLUME ["/appdata"]
 EXPOSE 30420

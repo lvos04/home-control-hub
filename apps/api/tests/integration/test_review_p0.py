@@ -188,7 +188,8 @@ def test_status_page_shows_only_recovery_level(paired_client: Any, auth: Any) ->
     )
     assert r.status_code == 201
     page = c.get("/").text
-    assert "Beheerherstel" in page and "risico" in page
+    # alleen het totaalniveau (risico → Peil-woord 'Beperkt'), geen accountnamen of aandachtspunten
+    assert re.search(r'Beheerherstel \(B13-001\)</span><span class="pil pil-beperkt">.*?</svg>Beperkt</span>', page)
     for leak in ("akadmin-review", "geen_noodaccount", "minder_dan_twee_herstelmethodes", "beheeraccount(s)"):
         assert leak not in page, leak
 

@@ -2,9 +2,10 @@
 # Rooktest van de alles-in-één image (ALLEEN ontwikkeling/CI; geen installatiemethode).
 #   deploy/allinone/smoke-test.sh [image]   (standaard home-control-hub:dev)
 # Controleert: start als root → ELK proces (ook PID 1) Uid 568, CapEff 0 en NoNewPrivs 1, zombies worden door PID 1
-# opgeruimd, healthcheck 'healthy', /healthz, /readyz, statuspagina 'nooit gekoppeld' met koppelformulier, geheimen
-# 0600/568 en blijvend na herstart, databasegegevens blijvend na herstart én harde kill, start als 568 (Custom User),
-# duidelijke fout bij verkeerde maprechten, te grote verzoeken geweigerd (413, ook chunked).
+# opgeruimd, healthcheck 'healthy', /healthz, /readyz, statuspagina in Peil ('Niet gekoppeld' met koppelformulier,
+# eerste signaal niet groen), geheimen 0600/568 en blijvend na herstart, databasegegevens blijvend na herstart én
+# harde kill, start als 568 (Custom User), duidelijke fout bij verkeerde maprechten, te grote verzoeken geweigerd
+# (413, ook chunked).
 # De containers draaien zoals het standaard TrueNAS Custom App-formulier (ix-app): ZONDER --security-opt
 # no-new-privileges en ZONDER --cap-drop, dus met de standaard Docker-capabilities (contract 1.2 §2.2, A6).
 set -euo pipefail
@@ -129,7 +130,9 @@ run "$NAME" "$WORK/root"
 check "healthcheck wordt healthy" "wait_healthy $NAME"
 check "/healthz geeft 200" "http_has /healthz '\"status\":\"ok\"'"
 check "/readyz geeft ready" "http_has /readyz '\"ready\"'"
-check "statuspagina toont 'nooit gekoppeld' met koppelformulier" "http_has / 'nooit gekoppeld' && http_has / 'Hub-vingerafdruk'"
+check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingerafdrukveld" \
+  "http_has / 'Peil statuspagina-sjabloon 1.1.0' && http_has / 'Niet gekoppeld' && http_has / 'name=\"hub_vingerafdruk\"'"
+check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"
 check "API zonder token geeft 401 unauthorized (not_linked)" \
   "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"
 check "elk proces: Uid 568, CapEff 0, NoNewPrivs 1 (ook PID 1)" "procs_ok $NAME"

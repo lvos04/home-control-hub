@@ -49,6 +49,9 @@ class Settings:
     enrollment_token_legacy_name: bool = False
     public_url: str | None = None
     alembic_dir: Path | None = None
+    # map met de versie-gepinde kopie van het Peil-statuspaginasjabloon (image: /usr/local/lib/hch/ontwerptaal);
+    # leeg = ``design/ontwerptaal`` in de broncode (ontwikkeling en tests)
+    peil_dir: Path | None = None
     # Hub-JWT (contract 1.2 §4): iss=hub, aud=home-control-hub, exp - iat <= 120 s, 30 s klokspeling. Vertrouwd worden
     # alleen de bij het koppelen gepinde sleutels uit hub-link.json (§4.5); er is geen JWKS-cache via HTTP meer.
     jwt_issuer: str = "hub"
@@ -92,6 +95,7 @@ class Settings:
             hub_key_fingerprint=_opt("HUB_KEY_FINGERPRINT"),
             public_url=_normalize_url(_opt("HCH_PUBLIC_URL")),
             alembic_dir=Path(alembic_dir) if alembic_dir else None,
+            peil_dir=Path(peil_dir) if (peil_dir := _opt("HCH_PEIL_DIR")) else None,
             hub_heartbeat_interval_s=float(_int("HCH_HUB_HEARTBEAT_S", 240)),
             hub_key_poll_interval_s=float(min(900, max(1, _int("HCH_HUB_KEY_POLL_S", 900)))),
             break_glass_test_max_age_days=_int("HCH_BREAK_GLASS_MAX_AGE_DAYS", 90),

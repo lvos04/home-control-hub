@@ -293,6 +293,8 @@ def test_status_page_not_paired(client: Any) -> None:
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     html = r.text
-    assert 'lang="nl"' in html and "nooit gekoppeld" in html and "Koppelcode" in html and "Hub-vingerafdruk" in html
+    assert (
+        'lang="nl"' in html and "Niet gekoppeld" in html and "Koppelcode" in html and "Vingerafdruk van de Hub" in html
+    )
     assert "default-src 'none'" in r.headers["Content-Security-Policy"] and "<script" not in html
     assert r.cookies.get("hch_csrf")

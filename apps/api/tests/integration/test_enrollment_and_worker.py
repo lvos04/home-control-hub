@@ -76,7 +76,7 @@ def test_env_token_enrollment_exact_request_pins_file_and_confirmation(
     # statuspagina: witte lijst (vingerafdruk + laatste 4), nooit het token of het env-token
     c = app_factory(hub_url=HUB_URL, enrollment_token=ENV_TOKEN)
     page = c.get("/").text
-    assert fake_hub.fingerprint() in page and "…" + token[-4:] in page
+    assert fake_hub.fingerprint() in page and token[-4:] == st.service_token_last4
     assert token not in page and ENV_TOKEN not in page and "Koppelcode" not in page
     # tweede ronde: het token is afgehandeld en wordt nooit opnieuw verstuurd
     w.run_once()

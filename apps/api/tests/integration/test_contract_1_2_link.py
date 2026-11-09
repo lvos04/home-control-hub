@@ -26,11 +26,22 @@ def _csrf(client: Any) -> str:
     return m.group(1)
 
 
+_VELD = {"hub_url": "hub_adres", "code": "koppelcode", "fingerprint": "hub_vingerafdruk"}
+
+
+def _code(r: Any) -> str:
+    """Geslaagd → ``gekoppeld`` (303); mislukt → de vaste code op de foutpagina (HC11: direct, met trace-ID)."""
+    if r.status_code == 303:
+        return str(r.headers["location"]).removeprefix("/?melding=")
+    m = re.search(r"Code <code>([a-z_]+)</code>", r.text)
+    assert m and r.status_code >= 400, r.status_code
+    return m.group(1)
+
+
 def _post(client: Any, csrf: str, **form: str) -> str:
-    data = {"csrf": csrf, "hub_url": HUB_URL, "code": PAIR_CODE, "fingerprint": "", **form}
-    r = client.post("/koppelen", data=data, follow_redirects=False)
-    assert r.status_code == 303
-    return str(r.headers["location"]).removeprefix("/?melding=")
+    data = {"csrf": csrf, "hub_adres": HUB_URL, "koppelcode": PAIR_CODE, "hub_vingerafdruk": ""}
+    data.update({_VELD.get(k, k): v for k, v in form.items()})
+    return _code(client.post("/koppelen", data=data, follow_redirects=False))
 
 
 def _client_from(client: Any, ip: str) -> TestClient:
@@ -44,16 +55,16 @@ def _client_from(client: Any, ip: str) -> TestClient:
 def test_pairing_via_status_page_requires_fingerprint_and_csrf(client: Any, fake_hub: FakeHub, data_dir: Path) -> None:
     c, fp = client, fake_hub.fingerprint()
     page = c.get("/").text
-    assert "nooit gekoppeld" in page and 'name="fingerprint"' in page and "ontkoppelcode" not in page.lower()
+    assert "Niet gekoppeld" in page and 'name="hub_vingerafdruk"' in page and "ontkoppelcode" not in page.lower()
     csrf = _csrf(c)
     assert _post(c, "fout", fingerprint=fp) == "ongeldig_formulier"
     r = c.post(
         "/koppelen",
-        data={"csrf": csrf, "hub_url": HUB_URL, "code": PAIR_CODE, "fingerprint": fp},
+        data={"csrf": csrf, "hub_adres": HUB_URL, "koppelcode": PAIR_CODE, "hub_vingerafdruk": fp},
         headers={"Origin": "http://kwaadaardig.example"},
         follow_redirects=False,
     )
-    assert r.headers["location"].endswith("ongeldig_formulier")  # cross-site formulier geweigerd
+    assert _code(r) == "ongeldig_formulier"  # cross-site formulier geweigerd
     assert _post(c, csrf, fingerprint="") == "ongeldige_vingerafdruk"  # verplicht veld
     assert _post(c, csrf, fingerprint=fp, code="KORT") == "ongeldige_koppelcode"
     # elke poging telt mee voor de rate-limit (5 per bron-IP); voor de rest van deze test een verse teller
@@ -111,11 +122,11 @@ def test_status_page_rate_limit_per_source_ip_and_per_service(client: Any, fake_
     # vervalste X-Forwarded-For telt niet als ander adres
     r = a.post(
         "/koppelen",
-        data={"csrf": csrf, "hub_url": HUB_URL, "code": "AAAA-BBBB-CCCC", "fingerprint": wrong},
+        data={"csrf": csrf, "hub_adres": HUB_URL, "koppelcode": "AAAA-BBBB-CCCC", "hub_vingerafdruk": wrong},
         headers={"X-Forwarded-For": "198.51.100.7", "X-Real-IP": "198.51.100.7"},
         follow_redirects=False,
     )
-    assert r.headers["location"].endswith("te_veel_pogingen") and len(fake_hub.enroll_requests) == sent
+    assert _code(r) == "te_veel_pogingen" and len(fake_hub.enroll_requests) == sent
     # een ander bron-IP mag wel, tot de dienstbrede grens van 20
     outcomes = []
     for i in range(4):
@@ -131,8 +142,12 @@ def test_hub_rate_limit_shown_on_status_page(client: Any, fake_hub: FakeHub) -> 
 
     fake_hub.sim.failures[fake_hub.client_ip] = [_time.time()] * 10
     csrf = _csrf(client)
-    assert _post(client, csrf, fingerprint=fake_hub.fingerprint()) == "rate_limited"
-    assert "te veel mislukte pogingen" in client.get("/?melding=rate_limited").text
+    r = client.post(
+        "/koppelen",
+        data={"csrf": csrf, "hub_adres": HUB_URL, "koppelcode": PAIR_CODE, "hub_vingerafdruk": fake_hub.fingerprint()},
+        follow_redirects=False,
+    )
+    assert r.status_code == 429 and _code(r) == "rate_limited" and "te veel mislukte pogingen" in r.text
 
 
 # ------------------------------------------------------------------ hub-link (§6) en ontkoppelen (§3.8)
