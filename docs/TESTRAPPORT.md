@@ -201,3 +201,66 @@ Alle stappen groen — maar de review vond inhoudelijke fouten die de tests niet
 Echte Authentik (catalogusapp) en de rolrechten van het serviceaccount, domeinnaam/HTTPS (D17), de OIDC-login in de
 Hub, uitvoeren van voorstellen (P2), echte testlogins per app, echte back-up/restore van Authentik, installatie via
 het TrueNAS-formulier, ontvangst van de events door de echte Hub (alleen de validatieregels zijn overgenomen).
+
+## Contract 1.2 (2026-11-09, Ubuntu 26.04-bouwmachine)
+
+Uitgevoerd: `CONTRACT_1.2_CONFORMITEIT.md` §0 (A2, A4–A7) en §2 (HC1–HC10); keuzes in ADR-0010. Python 3.12.16
+(venv), PostgreSQL 16 op 127.0.0.1:5432 (`PATH=/usr/lib/postgresql/16/bin:$PATH`), Docker + buildx. Geen echte NAS,
+Hub, Authentik of accounts: de Hub is `tests/e2e/sim_hub.py` (§3.3 exact; ook de nep-Hub van de integratietests).
+
+### Nulmeting (HEAD 02204c5, vóór wijzigingen)
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && pytest -q` | 323 geslaagd |
+
+### Eindstand
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && ruff check . && ruff format --check . && mypy` | geen bevindingen (62 bronbestanden) |
+| `ruff check tests/e2e deploy/allinone tools && ruff format --check tests/e2e deploy/allinone tools` | geen bevindingen |
+| `cd apps/api && pytest -q tests/unit` | **261 geslaagd** (o.a. testvectoren §4.5, exact enroll-verzoek, §4.7-reasons en volgorde, sleutelrotatie, contractkopie byte-gelijk, EVIDENCE §11) |
+| `cd apps/api && pytest -q tests/integration` (PostgreSQL) | **223 geslaagd** |
+| `pytest -q tests/e2e -p no:cacheprovider` (API + worker als echte processen, Hub-simulator, kapotte proxy-env) | **14 geslaagd** |
+| `python -m integrations migrate` → `--down 0002` → `--down base` → `migrate` (database `hch_ci_mig`) | op/neer/op zonder fouten (revisie 0003) |
+| `python -m integrations openapi --out …` + `git diff --exit-code docs/openapi/` | geen drift |
+| `pip-audit -r apps/api/requirements.lock` | geen bekende kwetsbaarheden |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load -f deploy/allinone/Dockerfile -t home-control-hub:dev .` | gebouwd |
+| `deploy/allinone/smoke-test.sh home-control-hub:dev` (zonder `--security-opt`/`--cap-drop`) | **29 geslaagd, 0 mislukt** |
+| `jl-manifest validate deploy/manifest/home-control-hub.manifest.yaml` (validator van appstore-en-fork, alleen gelezen/uitgevoerd) | geldig, 0 fouten, 1 verwachte waarschuwing (`digest_pending_release`) |
+
+| `HCH_REAL_HUB_PYTHON=<venv met hub> pytest -q tests/interop -p no:cacheprovider` — **echte Hub-API** van ai-server-manager (`git archive` van `b4c7a0e`, eigen venv en database) | **1 geslaagd** (volledige levenscyclus, zie hieronder) |
+
+GitHub Actions: run `42658212431` (commit `a872e7f`, jobs `python` en `image`): **geslaagd**. De run daarvoor
+(`42657826250`, commit `8c10d1f`) faalde op `ruff format --check` van één testbestand; gerepareerd in `91625f6`.
+
+Interop met de echte Hub (lokaal, niet in CI): verkeerde `HUB_KEY_FINGERPRINT` → niets opgeslagen; koppelen met
+token + vingerafdruk en bevestigen met `services/self`; gepinde `kid`'s gelijk aan de JWKS van de Hub; gebruikers-JWT
+van de Hub geaccepteerd en `jti`-hergebruik geweigerd; het echte service-token inkomend geweigerd; lege
+`key-rotations`; rotatie op verzoek van de beheerder; dienst-JWT van de Hub leest `hub-link` en ontkoppelt (herhaling
+401 `not_linked`); opnieuw koppelen met een nieuw token (zelfde `service_id`); intrekken → 401 `revoked`.
+
+Controle van de rooktest zelf: met een extra `docker exec -d … sleep 60` (root, met capabilities) in een draaiende
+container meldt de procescontrole precies dat proces (`uid=['0','0','0','0'] capeff=00000000a80425fb nnp=0`).
+
+### Negatieve scenario's (Sim-getest)
+- Verlopen enrollment-token en een al gebruikt token (andere sleutel) → 401 `invalid_enrollment` → definitief,
+  nooit opnieuw; toegestane herhaling na een verloren antwoord → `enrollment_replayed` en het ongebruikte token
+  ingetrokken (`test_enrollment_and_worker.py`).
+- Verkeerde of vervalste sleutelset-vingerafdruk, ontbrekende/ongeldige antwoordvelden, aliassen → niets opgeslagen;
+  422/404/413 definitief; 429 wacht op `Retry-After`; 5xx/3xx backoff ≥ 5 s, redirect nooit gevolgd, stoppen na 60 min.
+- JWT met niet-gepinde `kid` → 401 `unknown_key` (+ achtergrondpoll), gepinde `kid` met een gewisselde sleutel →
+  401 `invalid_token`, een sleutel die alleen via de HTTP-JWKS bekend is → `unknown_key` (`test_security.py`);
+  ondertekende rotatie met een niet-gepinde of verkeerd-doel-sleutel, gat in volgnummers of vervalste inhoud →
+  geweigerd, gestopt, health `degraded`.
+- `jti`-replay op mutaties (gebruikers- én dienst-JWT) → 401 `token_replayed`; `jti` ontbreekt → `jti_missing`;
+  replaycache weg → 503.
+- Inkomend `Bearer svc_…` (ook het echte eigen token) → 401 `service_token_not_accepted`.
+- > 1 MiB → 413 vóór auth, ook chunked (integratie, E2E, rooktest).
+- Koppelen via de statuspagina na de eerste koppeling (ook na ontkoppelen of intrekking) → geweigerd zonder verzoek
+  naar de Hub; 5 pogingen per 15 min per bron-IP (X-Forwarded-For telt niet), 20 voor de dienst.
+- Intrekken: alleen na 401 op `services/self`; 5xx/429/netwerk nooit.
+
+### Nog steeds NIET GEVALIDEERD
+Koppelen met de echte Hub op een echte NAS; het TrueNAS-formulier (o.a. of het tagveld `versie@sha256:…` accepteert);
+het bron-IP dat de container achter de Docker-portpublicatie van TrueNAS ziet (rate-limit per bron-IP); echte
+Authentik.

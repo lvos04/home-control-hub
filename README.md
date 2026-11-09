@@ -4,7 +4,9 @@ Integratiedienst van **TrueNAS Home Platform V2**: B10 netwerk/privacy, B11 Node
 beheerherstel B13-001) en B14 energie/resources. Een zelfstandige API-dienst met alleen een kleine Nederlandse
 statuspagina; alle schermen staan in de Hub (`ai-server-manager`).
 
-**Status (fase P1):** kern volgens de platformcontracten 1.1 + B13-001 (accountrecovery en admin-toegang) en
+**Status (fase P1, platformcontract 1.2):** kern volgens `contracts 1.2` (`docs/platform-v2/PLATFORM_CONTRACTEN.md`;
+koppelen met de Hub volgens §3.3–§3.8, alleen Hub-JWT's tegen gepinde sleutels, image zonder enig rootproces; ADR-0010)
++ B13-001 (accountrecovery en admin-toegang; de noodlogin zelf zit in de Hub) en
 B13-002…005 (Authentik via de officiële API: versiedetectie, OIDC-client voor de Hub als R2-voorstel, SSO-dekking per
 app met bron, audit/afwijkingen, configuratie-export, pre-upgrade-gate en herstelcheck) gebouwd en met simulators
 getest. **Wijzigingen in Authentik worden alleen voorgesteld, nooit uitgevoerd** (toepassen vereist een door de Hub
@@ -24,14 +26,15 @@ compose, geen terminal. Normaal installeert het platform deze app via de TrueNAS
 | Onderdeel | Waar |
 |---|---|
 | API (`/integrations/v1`), connectorcontract (`/connector/v1`), `/healthz`, `/readyz`, statuspagina `GET /` | `apps/api/src/integrations/` |
-| Auth: Hub-JWT (EdDSA) via JWKS-cache, fail-closed; service-token uit de enrollment | `security/auth.py`, `security/jwks.py` |
-| Koppelen met de Hub: eenmalig token (worker) of koppelcode op de statuspagina | `enrollment.py`, `status_page.py` |
+| Auth (§4): alleen Hub-JWT's (gebruiker of dienst-JWT) tegen de gepinde sleutels, vaste `reason`-waarden, `jti` + replaycache | `security/auth.py`, `security/replay.py`, `security/hubkeys.py` |
+| Koppelen (§3): env-token (worker) of koppelcode + vingerafdruk op de statuspagina (alleen vóór de eerste koppeling); `/appdata/secrets/hub-link.json`; bevestigen, intrekken, token- en sleutelrotatie; `GET /connector/v1/hub-link` en `POST …/unlink` | `enrollment.py`, `hublink_store.py`, `status_page.py`, `connector.py` |
+| Hub-simulator volgens §3.3 (ook de nep-Hub van de integratietests) | `tests/e2e/sim_hub.py` |
 | B13-001: herstelregister, noodtoegang LAN/VPN, zelftest met Authentik offline, versleutelde herstelkit | `domains/sso/` |
 | B13-002…005: Authentik-client (alleen lezen, gecontroleerd tegen de officiële schema's), voorstellen, SSO-mapping, audit, export/gate/herstelcheck | `domains/sso/authentik/`, `oidc_hub.py`, `proposals.py`, `mapping.py`, `authaudit.py`, `backup.py` |
 | Nep-Authentik voor tests (vorm van de officiële API) en schemacontrole | `apps/api/tests/fakes/authentik_fake.py`, `tools/authentik_schema_check.py` |
 | B10/B11/B14: datamodellen met database-invarianten en inventaris (alles *te verifiëren*) | `domains/network`, `automation`, `energy` |
 | Migraties (Alembic) | `apps/api/alembic/` |
-| Alles-in-één image (PostgreSQL 16 via unix-socket + API + worker, procesbewaker, root → 568) | `deploy/allinone/` |
+| Alles-in-één image (PostgreSQL 16 via unix-socket + API + worker; de procesbewaker is PID 1, wisselt naar 568 zonder capabilities en zet no-new-privileges) | `deploy/allinone/` |
 | OpenAPI | `docs/openapi/home-control-hub.openapi.json` |
 | Besluiten | `docs/adr/` |
 | Noodprocedure (gebruikers) | `docs/runbooks/NOODTOEGANG.md`, `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md` |
@@ -41,7 +44,7 @@ compose, geen terminal. Normaal installeert het platform deze app via de TrueNAS
 ```sh
 python3.12 -m venv .venv && .venv/bin/pip install -e 'apps/api[dev]'
 make lint test e2e          # ruff, mypy, unit + integratie (PostgreSQL), dienst-E2E met simulator
-make image smoke            # alles-in-één image bouwen en rooktest (start, healthcheck, herstart, kill, rechten)
+make image smoke            # image bouwen en rooktest zoals het formulier (elk proces 568, CapEff 0, NoNewPrivs 1)
 make openapi                # OpenAPI opnieuw exporteren (CI faalt bij drift)
 ```
 

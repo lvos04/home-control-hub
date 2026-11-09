@@ -1,5 +1,37 @@
 # Wijzigingen
 
+## 0.1.0 — platformcontract 1.2 (nog niet uitgebracht)
+
+**Breaking (contract 1.2, ADR-0010)**
+- Koppelen volgens §3.3: enroll-verzoek met `enrollment_token` of `pairing_code` (geen `kind`/`secret`/prefixes meer),
+  `public_key_jwk` alleen `{kty, crv, x, kid}`; het antwoord wordt volledig gecontroleerd en de
+  sleutelset-vingerafdruk zelf berekend (`HUB_KEY_FINGERPRINT` of het veld op de statuspagina moet kloppen).
+- De koppeling staat in `/appdata/secrets/hub-link.json` (0600, atomair, gedeeld door API en worker) in plaats van in
+  de database; een oude koppeling wordt bij de eerste start eenmalig overgezet en daarna uit de database verwijderd.
+- Inkomend alleen Hub-JWT's: gebruikers-JWT (`token_use: user`) of dienst-JWT (`token_use: hub_service`). Een
+  `Bearer`-service-token wordt geweigerd (`service_token_not_accepted`). Vaste Engelse `reason`-waarden (§4.7);
+  `jti` op elke JWT; replaycache op `(iss, jti)` voor elke mutatie (migratie `0003`).
+- Hub-sleutels worden gepind; de JWKS wordt niet meer via HTTP opgehaald. Nieuwe sleutels alleen via een
+  ondertekende rotatie (`/api/v1/auth/key-rotations`) of opnieuw koppelen. Instellingen `HCH_JWKS_*` vervallen.
+- Routes `GET /integrations/v1/enrollment` en `POST /integrations/v1/enrollment/unpair` vervangen door
+  `GET /connector/v1/hub-link` en `POST /connector/v1/hub-link/unlink`. De lokale ontkoppelcode en het formulier
+  `/ontkoppelen` bestaan niet meer.
+- Statuspagina: koppelformulier alleen zolang de dienst nog nooit gekoppeld is, met verplichte Hub-vingerafdruk;
+  rate-limit 5 pogingen per 15 min per bron-IP en 20 per dienst.
+
+**Nieuw**
+- Bevestigen met `services/self` (ook periodiek), intrekking pas na 401 op `services/self`, tokenrotatie op
+  `Hub-Token-Rotation: required` (ook na een onderbroken rotatie), herhaling na herstart halverwege (§3.6).
+- `HUB_KEY_FINGERPRINT`; `ENROLLMENT_TOKEN` wordt nog één release gelezen met een waarschuwing.
+- Alle uitgaande calls negeren proxy-omgevingsvariabelen en volgen geen redirects.
+- Image: geen `dumb-init` meer; de bewaker is PID 1, ruimt zombies op, draait als 568 zonder capabilities en zet zelf
+  `PR_SET_NO_NEW_PRIVS`. De rooktest draait zoals het TrueNAS-formulier (zonder no-new-privileges en cap-drop) en
+  controleert elk proces.
+- Manifest volgens §9 (geldig volgens de validator van appstore-en-fork); `CUSTOM_APP.md` met tag + digest en
+  registry-login alleen als terugval.
+- Kopie van `PLATFORM_CONTRACTEN.md` en `CONTRACT_1.2_CONFORMITEIT.md` met een test op byte-gelijkheid;
+  `EVIDENCE.json` volgens §11 (alleen vaste validatiewaarden).
+
 ## 0.1.0 — P1-aanvulling B13-002…005 (nog niet uitgebracht)
 
 **Nieuw**
