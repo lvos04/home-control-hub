@@ -20,5 +20,14 @@
 - Alles-in-één image met procesbewaker, first-start-init van `/appdata/secrets`, back-up vóór migraties en
   healthcheck; installatie-instructie voor het standaard TrueNAS Custom App-formulier; manifest; CI en release.
 
+**Aangescherpt na de onafhankelijke P0-review** (ADR-0006)
+- Geen migratie zonder geslaagde back-up vooraf (was: migratie ging door als `pg_dump` mislukte).
+- Verzoeken > 1 MiB worden vóór de authenticatie geweigerd (`413 payload_too_large`).
+- Herstelkit openen begrensd (geheugen van de sleutelafleiding, nonce, formaat); geen 500 meer bij vreemde kits.
+- Statuspagina toont alleen het totaalniveau van het herstelregister.
+- Ongebruikte instellingen `HCH_TRUSTED_PROXIES` en `HCH_EMERGENCY_ADMIN_MAX_DAYS` verwijderd.
+- Extra tests: auth/rollen/Idempotency-Key op elke route, JWT-randgevallen, B13-003 (geen header-SSO), B10-002 in
+  het datamodel, back-up vóór migratie; rooktest met minimale capabilities en controle op dataverlies.
+
 **Validatie:** Unit-, integratie- (PostgreSQL) en dienst-E2E-tests met simulators; image-rooktest in Docker.
 NIET GEVALIDEERD op een echte NAS, met echte Authentik of met echte accounts.
