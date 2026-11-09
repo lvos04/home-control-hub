@@ -1,5 +1,6 @@
 """Dienst-E2E (Sim-getest): koppelen met eenmalig token, B13-001 met Authentik offline, events naar de Hub-inbox,
-eerlijke 501's, en fail-closed als de Hub wegvalt. Volgorde van de tests is bewust (module-scope stack)."""
+eerlijke 501's, fail-closed als de Hub wegvalt, geen header-SSO en een grens op de verzoekgrootte.
+Volgorde van de tests is bewust (module-scope stack)."""
 
 from __future__ import annotations
 
@@ -117,3 +118,17 @@ def test_06_fail_closed_when_hub_disappears(stack: Stack) -> None:
     assert r.status_code == 401 and r.json()["details"]["reason"] == "jwks_niet_beschikbaar"
     assert httpx.get(f"{stack.hch}/readyz").status_code == 200  # de dienst zelf blijft gezond en bereikbaar
     assert "Home Control Hub" in httpx.get(f"{stack.hch}/").text
+
+
+def test_07_no_header_sso_and_body_limit_over_http(stack: Stack) -> None:
+    """B13-003 en de grens op de verzoekgrootte via een echte uvicorn-server (geen auth nodig om te weigeren)."""
+    headers = {"X-Forwarded-User": "admin", "X-Authentik-Username": "akadmin", "Remote-User": "admin"}
+    r = httpx.get(f"{stack.hch}/integrations/v1/sso/recovery/overview", headers=headers)
+    assert r.status_code == 401 and r.json()["code"] == "unauthorized"
+    r = httpx.post(
+        f"{stack.hch}/integrations/v1/sso/recovery/accounts",
+        content=b"x" * (1024 * 1024 + 1),
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
+    assert httpx.get(f"{stack.hch}/healthz").status_code == 200

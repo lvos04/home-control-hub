@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -237,3 +238,24 @@ def test_kit_roundtrip_and_failures() -> None:
 def test_kit_weak_passphrase(weak: str) -> None:
     with pytest.raises(KitError):
         encrypt_kit({}, weak)
+
+
+def test_kit_decrypt_bounds_are_checked_before_key_derivation() -> None:
+    """Een kit van buiten mag geen gigabytes geheugen (scrypt) of een 500-fout veroorzaken."""
+    kit = encrypt_kit({"register": {"accounts": []}}, PASS)
+    hostile = [
+        {**kit, "kdf": {**kit["kdf"], "n": 2**20, "r": 16}},
+        {**kit, "kdf": {**kit["kdf"], "n": 2**17, "r": 16}},
+        {**kit, "kdf": {**kit["kdf"], "n": 3 * 2**14}},
+        {**kit, "kdf": {**kit["kdf"], "p": 3}},
+        {**kit, "kdf": {**kit["kdf"], "n": True}},
+        {**kit, "cipher": {**kit["cipher"], "nonce": "AAAA"}},
+        {**kit, "kdf": None},
+        {**kit, "cipher": "AES-256-GCM"},
+    ]
+    started = time.monotonic()
+    for bad in hostile:
+        with pytest.raises(KitError):
+            decrypt_kit(bad, PASS)
+    assert time.monotonic() - started < 2  # geweigerd vóór de (dure) sleutelafleiding
+    assert decrypt_kit(kit, PASS)["register"] == {"accounts": []}

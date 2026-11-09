@@ -65,7 +65,9 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
             c.execute(text(f'DROP DATABASE IF EXISTS "{E2E_DB}" WITH (FORCE)'))
             c.execute(text(f'CREATE DATABASE "{E2E_DB}"'))
         eng.dispose()
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover - lokaal overslaan, in CI hard falen
+        if os.environ.get("CI"):
+            pytest.fail(f"PostgreSQL niet beschikbaar in CI: {type(exc).__name__} (E2E mag niet stil vervallen)")
         pytest.skip(f"PostgreSQL niet beschikbaar: {type(exc).__name__}")
     db_url = ADMIN_DB_URL.rsplit("/", 1)[0] + "/" + E2E_DB
     hub_port, hch_port = free_port(), free_port()

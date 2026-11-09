@@ -125,6 +125,51 @@ def test_jwt_rejections(hub_keys: HubKeys, cache: JwksCache, kwargs: dict, reaso
     assert exc.value.status_code == 401 and _reason(exc) == reason
 
 
+def _encode(hub_keys: HubKeys, claims: dict) -> str:
+    return jwt.encode(claims, hub_keys.private, algorithm="EdDSA", headers={"kid": hub_keys.kid})
+
+
+def test_jwt_missing_or_future_claims_rejected(hub_keys: HubKeys, cache: JwksCache) -> None:
+    """Fail-closed: ontbrekende verplichte claims of tijden in de toekomst worden geweigerd (ook met speling)."""
+    now = int(time.time())
+    base = {"iss": "hub", "aud": "home-control-hub", "sub": "u", "roles": ["admin"], "iat": now, "exp": now + 60}
+    cases = [
+        {k: v for k, v in base.items() if k != "exp"},
+        {k: v for k, v in base.items() if k != "iat"},
+        {k: v for k, v in base.items() if k != "sub"},
+        {k: v for k, v in base.items() if k != "aud"},
+        {k: v for k, v in base.items() if k != "iss"},
+        {**base, "sub": ""},
+        {**base, "iat": now + 600, "exp": now + 660},  # uitgegeven in de toekomst
+        {**base, "nbf": now + 600},  # nog niet geldig
+        {**base, "iat": "nu"},
+    ]
+    for claims in cases:
+        with pytest.raises(ApiError) as exc:
+            validate_jwt(_encode(hub_keys, claims), cache, JwtPolicy())
+        assert exc.value.status_code == 401, claims
+
+
+def test_jwt_roles_are_filtered(hub_keys: HubKeys, cache: JwksCache) -> None:
+    """Alleen bekende gebruikersrollen; 'service' (dienst-naar-dienst) kan nooit via een JWT worden geclaimd."""
+    p = validate_jwt(hub_keys.token(["service", "admin", "root"]), cache, JwtPolicy())
+    assert p.roles == frozenset({"admin"}) and p.kind == "user"
+    assert validate_jwt(hub_keys.token(["service"]), cache, JwtPolicy()).roles == frozenset()
+    now = int(time.time())
+    claims = {"iss": "hub", "aud": "home-control-hub", "sub": "u", "roles": "admin", "iat": now, "exp": now + 60}
+    assert validate_jwt(_encode(hub_keys, claims), cache, JwtPolicy()).roles == frozenset()
+
+
+def test_jwt_rejected_when_jwks_cache_is_empty_or_unreachable(hub_keys: HubKeys) -> None:
+    def down() -> dict:
+        raise OSError("hub onbereikbaar")
+
+    for cache in (JwksCache(None), JwksCache(down), JwksCache(lambda: {"keys": []})):
+        with pytest.raises(ApiError) as exc:
+            validate_jwt(hub_keys.token(["admin"]), cache, JwtPolicy())
+        assert exc.value.status_code == 401 and _reason(exc) == "jwks_niet_beschikbaar"
+
+
 def test_jwt_algorithm_confusion_rejected(hub_keys: HubKeys, cache: JwksCache) -> None:
     now = int(time.time())
     claims = {"iss": "hub", "aud": "home-control-hub", "sub": "x", "roles": ["admin"], "iat": now, "exp": now + 60}

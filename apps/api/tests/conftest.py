@@ -169,7 +169,11 @@ def data_dir(tmp_path: Path) -> Path:
 def database_url() -> Iterator[str]:
     try:
         url = recreate_database(TEST_DB_NAME)
-    except Exception as exc:  # pragma: no cover - zonder Postgres worden integratietests overgeslagen
+    except Exception as exc:  # pragma: no cover - lokaal overslaan, in CI hard falen
+        if os.environ.get("CI"):
+            pytest.fail(
+                f"PostgreSQL niet beschikbaar in CI: {type(exc).__name__} (integratietests mogen niet stil vervallen)"
+            )
         pytest.skip(f"PostgreSQL niet beschikbaar: {type(exc).__name__}")
     settings = Settings(database_url=url)
     from integrations.migrations import upgrade
