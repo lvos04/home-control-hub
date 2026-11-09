@@ -15,3 +15,7 @@ geen echte NAS, geen echte telefoon of schermlezer.
 Thema's `licht` en `donker` (`prefers-color-scheme`), breedtes 360, 768 en 1440 px. De UI-tests draaien daarnaast
 ook 320, 390 en 1024 px en vier extra toestanden (ongeldige invoer, te veel pogingen, ontkoppeld, onleesbaar
 koppelbestand). CI bewaart dezelfde afdrukken als artefact `statuspagina-peil`.
+
+Opnieuw gemaakt na de onafhankelijke ontwerpreview (ADR-0012, `docs/ontwerp/PEIL_REVIEW.md`) en verkleind met
+`pngquant --quality=80-95` (kleurenpalet; verschil niet zichtbaar). De afdrukken van de ontwerpreview zelf (14
+toestanden uit de draaiende dienst) staan in `docs/ontwerp/peil-review/`.
