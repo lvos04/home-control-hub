@@ -1,5 +1,29 @@
 # Wijzigingen
 
+## 0.1.0 — onafhankelijke ontwerpreview van de statuspagina (ADR-0012, nog niet uitgebracht)
+
+**Gewijzigd (alleen woorden, redenen en meldingen op `GET /`; het Peil-sjabloon is ongewijzigd)**
+- Een bronmeting ouder dan 15 minuten telt in "Wat deze dienst doet" als **Onbekend** ("1 verouderd (laatst bekend …).
+  Metingen ouder dan 15 minuten tellen als onbekend."), nooit meer als de laatst bekende stand. Vroeger stond een meting
+  van dagen oud als Gezond.
+- De pil van een controle draagt altijd het vaste Peil-woord bij het icoon (Onbekend/Storing). De precieze
+  koppeltoestand ("Niet gekoppeld", "Ingetrokken door de Hub", "Koppelen bezig", …) opent de reden.
+- Beheerherstel heeft per niveau een reden (Onbekend: "Het herstelregister is nog niet volledig ingevuld of getest.").
+- "Koppelen bezig" noemt waarmee gekoppeld wordt en de laatste melding, en zegt dat het formulier pas weer werkt als de
+  poging klaar is (geen "over een minuut" meer).
+- Na een mislukte poging zegt de melding dat alle velden opnieuw moeten (waarden worden bewust niet teruggezet).
+- De kop is korter. Het totaal noemt "Wat deze dienst doet" en "Sleutels van de Hub" krijgt geen kleine letters meer.
+  "1 van 1 bron" staat in het enkelvoud. De variabelenaam `HUB_ENROLLMENT_TOKEN` staat niet meer in de melding (op
+  320 px gaf hij overloop met de tekstafstand van WCAG 1.4.12), maar in de controle.
+
+**Nieuw**
+- `make ontwerpreview` (`tests/ui/ontwerpreview.py` + `.mjs`) draait ook in CI (job `statuspagina-ui`). Het start de
+  echte dienst als proces tegen de Hub-simulator en zet 14 toestanden klaar. Chromium meet elke toestand op
+  320/360/390/768/1440 px in licht en donker: axe (WCAG 2.2 AA), contrast in de pagina, doelen, focus, tekstafstand en
+  de Peil-statusregels.
+- `docs/ontwerp/PEIL_REVIEW.md` met bevindingen, reparaties en een overdracht aan Peil (S-1…S-8), en
+  `docs/ontwerp/peil-review/` met de schermafdrukken.
+
 ## 0.1.0 — statuspagina in Peil (HC11, nog niet uitgebracht)
 
 **Gewijzigd (ADR-0011)**

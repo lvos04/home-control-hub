@@ -307,3 +307,44 @@ lokale vergelijking met `../ai-server-manager` bestaat in CI niet; Peil-drift on
 De pagina op een echte NAS achter de Docker-portpublicatie van TrueNAS; koppelen met de echte Hub via deze pagina;
 echte schermlezer (NVDA/TalkBack) en echte telefoon in fel licht; de ontwerpreview is een zelfreview van de bouwer,
 geen onafhankelijke review door de ontwerpagent.
+
+## Onafhankelijke ontwerpreview van de statuspagina (2026-11-09, Ubuntu 26.04-bouwmachine)
+
+Uitgevoerd door de ontwerpagent (contract §13; ADR-0012). Bevindingen en reparaties staan in
+`docs/ontwerp/PEIL_REVIEW.md`. Het Peil-sjabloon is ongewijzigd: kopie 1.1.0 van `lvos04/ai-server-manager@172ee87`.
+Er waren geen echte NAS, Hub, telefoon of schermlezer: de Hub is `tests/e2e/sim_hub.py` en de browser is Chromium
+(Playwright 1.65, axe-core 4.14).
+
+| Commando | Uitkomst |
+|---|---|
+| `python tests/ui/ontwerpreview.py` vóór de reparaties (draaiende API + worker per toestand, Hub-simulator via uvicorn, eigen database `hch_review_<n>`) | 140 metingen (14 toestanden × 320/360/390/768/1440 × licht/donker): axe 0, tekst ≥ 8,34:1, randen ≥ 4,86:1, iconen ≥ 5,71:1, focus ≥ 7,79:1, overloop 0, doelen 0; **10 metingen met een overtreding**: in alle 10 metingen van `gekoppeld-met-bronnen` stond de Authentik-meting van 3 dagen oud als Gezond |
+| idem, met de tekstafstandcontrole (WCAG 1.4.12) erbij | **1 overtreding**: `onleesbaar` 9 px overloop op 320 px (woord "(HUB_ENROLLMENT_TOKEN)." in de melding) |
+| `python tests/ui/ontwerpreview.py` na de reparaties (`make ontwerpreview`) | **140 metingen, 0 overtredingen**; laagste waarde licht/donker: tekst 8,34/9,32, rand 4,86/5,69, icoon 5,71/7,58, focus 7,79/8,04; tekstafstand op 320 px in elke toestand 0 px overloop; best-practice 0; geen CSP- of paginafouten |
+| `cd apps/api && ruff check . && ruff format --check . && mypy` | geen bevindingen (63 bronbestanden) |
+| `ruff check tests/e2e tests/interop tests/ui deploy/allinone tools && ruff format --check …` | geen bevindingen |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q -p no:cacheprovider` | **552 geslaagd** (was 544; 8 nieuwe unit-tests in `test_statuspagina_peil.py`) |
+| `pytest -q tests/e2e -p no:cacheprovider` | **14 geslaagd** |
+| `make schermafdrukken` (genereer_toestanden + `SCHERMAFDRUKKEN=1 npx playwright test`) | **18 geslaagd**; 30 afdrukken opnieuw gemaakt en met pngquant verkleind |
+| `python3 tools/peil_kopie.py controleer` en `vergelijk --bron ../ai-server-manager` | in orde (sjabloon niet gewijzigd) |
+| `python -m integrations openapi` en vergelijken met `docs/openapi/` | geen drift |
+| `actionlint .github/workflows/*.yml` | geen bevindingen |
+
+### Wat de review aantoont (Sim-getest)
+- In geen enkele toestand, breedte of thema is onbekend of verouderd groen. Een meting ouder dan 15 minuten telt als
+  Onbekend, met "laatst bekend <tijd>".
+- Elke pil heeft het vaste Peil-woord bij zijn icoon. De precieze koppeltoestand staat in de reden.
+- WCAG 2.2 AA:
+  - axe 0;
+  - tekst haalt zelfs AAA;
+  - randen, iconen en de focusring halen ≥ 3:1;
+  - 44 px-doelen;
+  - geen overloop op 320 px, ook niet met de tekstafstand van 1.4.12;
+  - de focus is zichtbaar en niet bedekt.
+- De browser kan echt koppelen via het formulier, met CSRF-cookie, Origin en 303. Mislukte pogingen geven de juiste
+  HTTP-status, code en trace-ID.
+
+### Nog steeds NIET GEVALIDEERD
+- Een echte schermlezer (NVDA/TalkBack) en een echte telefoon in fel licht.
+- De pagina op een echte NAS achter de portpublicatie van TrueNAS.
+- Koppelen met de echte Hub via deze pagina.
+- De sjabloonpunten S-1…S-8 vragen een nieuwe Peil-versie in ai-server-manager.

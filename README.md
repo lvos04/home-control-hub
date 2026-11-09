@@ -30,6 +30,7 @@ compose, geen terminal. Normaal installeert het platform deze app via de TrueNAS
 | Koppelen (§3): env-token (worker) of koppelcode + vingerafdruk op de statuspagina (alleen vóór de eerste koppeling); `/appdata/secrets/hub-link.json`; bevestigen, intrekken, token- en sleutelrotatie; `GET /connector/v1/hub-link` en `POST …/unlink` | `enrollment.py`, `hublink_store.py`, `status_page.py`, `connector.py` |
 | Statuspagina `GET /` in de ontwerptaal Peil (versie-gepinde kopie van het sjabloon, geen JavaScript; ADR-0011) | `status_page.py`, `peil.py`, `design/ontwerptaal/`, `tools/peil_kopie.py` |
 | UI-tests van de statuspagina (Playwright + axe-core, 320–1440 px, licht/donker) en schermafdrukken | `tests/ui/`, `docs/screenshots/peil/statuspagina/` |
+| Onafhankelijke ontwerpreview van de statuspagina tegen de draaiende dienst (14 toestanden; ADR-0012) | `tests/ui/ontwerpreview.py`/`.mjs`, `docs/ontwerp/PEIL_REVIEW.md`, `docs/ontwerp/peil-review/` |
 | Hub-simulator volgens §3.3 (ook de nep-Hub van de integratietests) | `tests/e2e/sim_hub.py` |
 | B13-001: herstelregister, noodtoegang LAN/VPN, zelftest met Authentik offline, versleutelde herstelkit | `domains/sso/` |
 | B13-002…005: Authentik-client (alleen lezen, gecontroleerd tegen de officiële schema's), voorstellen, SSO-mapping, audit, export/gate/herstelcheck | `domains/sso/authentik/`, `oidc_hub.py`, `proposals.py`, `mapping.py`, `authaudit.py`, `backup.py` |
@@ -52,6 +53,8 @@ make test-ui                # statuspagina in Chromium: axe-core, overloop, CSP,
                             # 'cd tests/ui && npx playwright install chromium')
 make schermafdrukken        # idem + afdrukken naar docs/screenshots/peil/statuspagina/
 make peil-drift             # Peil-kopie offline en tegen ai-server-manager op GitHub
+make ontwerpreview          # draaiende dienst + Hub-simulator: 14 toestanden × 320–1440 × licht/donker (axe WCAG 2.2 AA,
+                            # contrast, doelen, focus, tekstafstand, Peil-statusregels) → tests/ui/review-uit/
 ```
 
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met
