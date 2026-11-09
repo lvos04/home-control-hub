@@ -4,12 +4,17 @@
 - Credentials alleen write-only in de vault (``vault://source/<id>``); de API toont alleen of er één is + laatste 4.
 - Een probe bestaat alleen waar een gezondheids-endpoint in de catalogus staat (te verifiëren); anders
   ``capability_unavailable``. Een probe zegt alleen "endpoint antwoordde", niets over de volledige werking.
+- Een meting ouder dan :data:`PROBE_MAX_AGE` (15 min, gelijk aan de inventaris-TTL van de Hub) is verouderd: de API
+  geeft dan ``unknown`` met ``reason_code: meting_verouderd`` en de tijd van de laatste meting, nooit de laatst bekende
+  stand ("nooit healthy op stale cache", 05_OPERATIES; ADR-0012/ADR-0013). Statuspagina en connector-health gebruiken
+  dezelfde regel.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -31,11 +36,35 @@ from .idempotency import idempotency_key, run_idempotent
 from .models import IntegrationSource
 from .redact import looks_like_secret
 from .security.auth import Principal, require_admin, require_reader
-from .timeutil import iso, utcnow
+from .timeutil import ensure_aware, iso, utcnow
 
 ALL_SOURCES: dict[str, SourceSpec] = {
     s.source_id: s for s in (*NETWORK_SOURCES, *AUTOMATION_SOURCES, *SSO_SOURCES, *ENERGY_SOURCES)
 }
+
+
+#: een bronmeting ouder dan dit telt als onbekend (nooit de laatst bekende stand); ADR-0012/ADR-0013
+PROBE_MAX_AGE = timedelta(minutes=15)
+
+
+def probe_is_stale(measured_at: datetime | None, now: datetime | None = None) -> bool:
+    """``True`` als er geen meting is of de meting ouder is dan :data:`PROBE_MAX_AGE`."""
+    return measured_at is None or (now or utcnow()) - ensure_aware(measured_at) > PROBE_MAX_AGE
+
+
+def effective_probe(row: IntegrationSource | None, now: datetime | None = None) -> tuple[str, str]:
+    """(status, reason_code) zoals die nu naar buiten gaat: uit/niet ingesteld en verouderd zijn ``unknown``."""
+    if row is None:
+        return "unknown", "niet_geconfigureerd"
+    if not row.enabled:
+        return "unknown", "uitgeschakeld"
+    if not row.base_url:
+        return "unknown", "niet_geconfigureerd"
+    if row.last_probe_at is None:
+        return "unknown", row.last_probe_reason or "nog_niet_gecontroleerd"
+    if probe_is_stale(row.last_probe_at, now):
+        return "unknown", "meting_verouderd"
+    return row.last_probe_status, row.last_probe_reason or "nog_niet_gecontroleerd"
 
 
 def source_ref(source_id: str) -> str:
@@ -60,17 +89,20 @@ def runtime_view(spec: SourceSpec, row: IntegrationSource | None, last4: str | N
         "base_url": row.base_url,
         "credential_present": row.credential_ref is not None,
         "credential_last4": last4,
-        "health": {
-            "status": row.last_probe_status if row.enabled else "unknown",
-            "reason_code": (row.last_probe_reason or "nog_niet_gecontroleerd") if row.enabled else "uitgeschakeld",
-            "observed_at": iso(row.last_probe_at),
-            "detail": row.last_probe_detail or {},
-        },
+        "health": _health_view(row),
         "version": row.version,
         "etag": etag(row.version),
         "updated_at": iso(row.updated_at),
         "updated_by": row.updated_by,
     }
+
+
+def _health_view(row: IntegrationSource) -> dict[str, Any]:
+    status, reason = effective_probe(row)
+    detail: dict[str, Any] = row.last_probe_detail or {}
+    if reason == "meting_verouderd":  # alleen de tijd van de laatste meting, niet de oude stand of details
+        detail = {"max_leeftijd_s": int(PROBE_MAX_AGE.total_seconds())}
+    return {"status": status, "reason_code": reason, "observed_at": iso(row.last_probe_at), "detail": detail}
 
 
 def _last4(session: Session, ref: str | None) -> str | None:

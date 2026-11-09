@@ -282,6 +282,49 @@ def test_source_config_vault_and_probe(paired_client: Any, auth: Any, fake_hub: 
         assert all("ak-api-token" not in (row[0] or "") for row in idem_rows)
 
 
+def test_stale_probe_is_never_shown_as_healthy(paired_client: Any, auth: Any, fake_hub: FakeHub) -> None:
+    """Review contract 1.2 (ADR-0013; 05_OPERATIES "nooit healthy op stale cache"): een 'healthy'-meting ouder dan
+    15 min is in de API, de connector-items, de connector-health en op de statuspagina 'unknown' (meting_verouderd),
+    nooit de laatst bekende stand. Eerder gold die grens alleen op de statuspagina."""
+    c, h = paired_client, auth("admin")
+    r = c.put("/integrations/v1/sources/authentik", json={"base_url": AUTHENTIK_URL, "enabled": True}, headers=idem(h))
+    assert r.status_code == 201
+    assert c.post("/integrations/v1/sources/authentik/probe", headers=idem(h)).json()["status"] == "healthy"
+
+    def view() -> dict[str, Any]:
+        return dict(c.get("/integrations/v1/sources/authentik", headers=h).json()["runtime"]["health"])
+
+    def connector() -> tuple[dict[str, Any], dict[str, Any]]:
+        items = c.get("/connector/v1/items", params={"type": "source"}, headers=fake_hub.service_auth()).json()
+        item = next(i for i in items["items"] if i["source_id"] == "authentik")["runtime"]["health"]
+        health = c.get("/connector/v1/health", headers=fake_hub.service_auth()).json()
+        return item, next(x for x in health["checks"] if x["name"] == "bronnen")
+
+    fresh_view = view()
+    assert (fresh_view["status"], fresh_view["reason_code"]) == ("healthy", "liveness_ok")
+    item, bronnen = connector()
+    assert item["status"] == "healthy" and bronnen["detail"]["healthy"] == 1 and bronnen["detail"]["verouderd"] == 0
+    with c.app.state.db.sessions() as s:  # de meting 16 minuten laten verouderen
+        s.execute(text("UPDATE integration_source SET last_probe_at = now() - interval '16 minutes'"))
+        s.commit()
+    stale = view()
+    assert (stale["status"], stale["reason_code"]) == ("unknown", "meting_verouderd")
+    assert stale["observed_at"] is not None and stale["detail"] == {"max_leeftijd_s": 900}
+    item, bronnen = connector()
+    assert (item["status"], item["reason_code"]) == ("unknown", "meting_verouderd")
+    assert bronnen["status"] == "unknown" and bronnen["reason_code"] == "meting_verouderd"
+    assert bronnen["detail"]["healthy"] == 0 and bronnen["detail"]["verouderd"] == 1
+    assert "laatst bekend" in c.get("/").text  # statuspagina: 'verouderd (laatst bekend …)', nooit Gezond
+    # uitgeschakeld blijft 'uitgeschakeld' (ook met een oude meting)
+    etag = c.get("/integrations/v1/sources/authentik", headers=h).json()["runtime"]["etag"]
+    r = c.put(
+        "/integrations/v1/sources/authentik",
+        json={"base_url": AUTHENTIK_URL, "enabled": False},
+        headers=idem(h, **{"If-Match": etag}),
+    )
+    assert r.status_code == 200 and r.json()["runtime"]["health"]["reason_code"] == "uitgeschakeld"
+
+
 # ------------------------------------------------------------------ gezondheid en statuspagina
 def test_healthz_readyz_without_auth(client: Any) -> None:
     assert client.get("/healthz").json()["status"] == "ok"

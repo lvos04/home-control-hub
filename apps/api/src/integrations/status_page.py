@@ -32,7 +32,7 @@ import time
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -46,7 +46,7 @@ from .errors import trace_id_for
 from .hublink_store import ERROR_MESSAGES, LinkState
 from .peil import MELDING_ICOON, TONEN, SjabloonOntbreekt, render, sjabloon
 from .security.secrets import secrets_present
-from .sources import ALL_SOURCES
+from .sources import ALL_SOURCES, PROBE_MAX_AGE
 
 log = logging.getLogger("integrations.statuspagina")
 router = APIRouter(include_in_schema=False)
@@ -62,8 +62,9 @@ KOPPELCODE_GELDIG = "60 minuten"
 VIA_HUB_NL = "Ontkoppelen of opnieuw koppelen gaat via de Hub."
 OPNIEUW_VIA_HUB_NL = "Opnieuw koppelen gaat via de Hub."
 #: een meting van een bron die ouder is, is verouderd: Onbekend, nooit de laatst bekende stand (Peil §4.1/§4.4;
-#: 05_OPERATIES "nooit healthy op stale cache"). Gelijk aan de inventaris-TTL van de Hub (15 min); ADR-0012.
-BRON_MAX_LEEFTIJD = timedelta(minutes=15)
+#: 05_OPERATIES "nooit healthy op stale cache"). Gelijk aan de inventaris-TTL van de Hub (15 min); ADR-0012. Dezelfde
+#: grens als in de API en de connector-health (sources.PROBE_MAX_AGE; ADR-0013).
+BRON_MAX_LEEFTIJD = PROBE_MAX_AGE
 #: wie na een mislukte poging het formulier opnieuw ziet: de velden zijn leeg (ingevulde waarden worden nooit
 #: teruggezet, ADR-0011 besluit 6); dat zeggen we erbij (WCAG 3.3.7, uitzondering voor veiligheid)
 OPNIEUW_INVULLEN_NL = "Ingevulde waarden bewaren we bewust niet: vul alle velden opnieuw in."

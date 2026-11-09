@@ -140,19 +140,23 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
     )
 
     rows = {r.source_id: r for r in session.scalars(select(IntegrationSource))}
-    from .sources import ALL_SOURCES
+    from .sources import ALL_SOURCES, effective_probe
 
+    # een meting ouder dan 15 min telt als 'unknown' (nooit de laatst bekende stand; sources.PROBE_MAX_AGE)
     counts = {"healthy": 0, "degraded": 0, "down": 0, "unknown": 0}
+    stale = 0
+    now = utcnow()
     for sid in ALL_SOURCES:
-        row = rows.get(sid)
-        st = row.last_probe_status if row is not None and row.enabled else "unknown"
+        st, why = effective_probe(rows.get(sid), now)
+        stale += why == "meting_verouderd"
         counts[st] = counts.get(st, 0) + 1
     src_status = (
         "down"
         if counts["down"]
         else ("degraded" if counts["degraded"] else ("healthy" if counts["unknown"] == 0 else "unknown"))
     )
-    checks.append(_check("bronnen", src_status, counts, "niet_geconfigureerd" if counts["unknown"] else None))
+    src_reason = "meting_verouderd" if stale else ("niet_geconfigureerd" if counts["unknown"] else None)
+    checks.append(_check("bronnen", src_status, {**counts, "verouderd": stale}, src_reason))
 
     service_checks = [c for c in checks if c["name"] in ("migraties", "hub_koppeling", "hub_sleutels", "outbox")]
     bad = [c for c in service_checks if c["status"] not in ("healthy", "unknown")]
