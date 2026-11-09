@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import re
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -21,6 +22,9 @@ import httpx
 
 from . import __version__
 from .config import Settings
+
+#: alleen cijfers, punten en hexadecimale delen: een IPv4-adres in welke vorm dan ook (geen geldige DNS-naam)
+_NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*")
 
 
 class HubUrlError(ValueError):
@@ -51,6 +55,18 @@ def validate_hub_url(
     host = (parts.hostname or "").lower()
     if not host:
         raise HubUrlError(f"{label} mist een hostnaam of IP-adres.")
+    # 'localhost.' en '127.0.0.1.' (punt achteraan) zijn dezelfde adressen; verkorte, decimale, octale of hexadecimale
+    # IPv4-vormen ('127.1', '2130706433', '0x7f000001', '0', '010.0.0.1') zet de resolver om naar bv. loopback of
+    # 0.0.0.0 en zouden de regels hieronder omzeilen: die worden geweigerd (alleen a.b.c.d; review contract 1.2)
+    host = host.rstrip(".")
+    if _NUMERIC_HOST.fullmatch(host):
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError as exc:
+            raise HubUrlError(
+                f"{label} bevat een IP-adres in een afwijkende vorm; schrijf het als vier getallen van 0 tot 255 met "
+                "punten ertussen."
+            ) from exc
     try:
         port = parts.port
     except ValueError as exc:

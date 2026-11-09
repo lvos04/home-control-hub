@@ -106,6 +106,16 @@ def test_safety_rules_in_catalog() -> None:
         "http://nas:99999",
         "http://nas .lan:30400",
         "",
+        # review contract 1.2: afwijkende IPv4-vormen en een punt achteraan omzeilen de regels hierboven niet
+        "http://127.1:30400",
+        "http://2130706433:30400",
+        "http://0x7f000001:30400",
+        "http://0:30400",
+        "http://010.0.0.1:30400",
+        "http://169.254.1:30400",
+        "http://localhost.:30400",
+        "http://127.0.0.1.:30400",
+        "http://[::ffff:127.0.0.1]:30400",
     ],
 )
 def test_hub_url_rejected(url: str) -> None:
@@ -116,6 +126,9 @@ def test_hub_url_rejected(url: str) -> None:
 def test_hub_url_ok_and_loopback_only_in_dev() -> None:
     assert validate_hub_url(" http://nas.lan:30400/ ") == "http://nas.lan:30400"
     assert validate_hub_url("http://127.0.0.1:30400", allow_loopback=True) == "http://127.0.0.1:30400"
+    # gewone namen die met cijfers of 0x beginnen en IPv6-ULA blijven geldig
+    for ok in ("http://1nas.lan:30400", "http://0xnas:30400", "http://[fd00::1]:30400", "http://nas.lan.:30400"):
+        assert validate_hub_url(ok) == ok
 
 
 def test_hub_client_never_follows_redirects_and_ignores_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
