@@ -76,6 +76,35 @@ def test_evidence_follows_section_11() -> None:
             assert item["status"] == "Niet gestart", (ident, "lege validatie alleen bij 'Niet gestart'")
 
 
+_TEST_REF = re.compile(r"((?:apps/api/tests|tests)/[\w/.-]+\.(?:py|ts|mjs|sh))|(?<![\w/])::(\w+)|(?<=\.py)::(\w+)")
+
+
+def test_evidence_references_existing_tests() -> None:
+    """§11/EERLIJKHEID: elk bewijs moet controleerbaar zijn. Elk genoemd testbestand bestaat en elke genoemde testfunctie
+    (``pad::naam``, of ``::naam`` na het vorige pad) staat in dat bestand; geen sjabloonresten zoals ``{T}``. Zo blijft
+    EVIDENCE.json niet wijzen naar tests die bij een contractwijziging zijn vervallen (review contract 1.2)."""
+    items = json.loads((PV2 / "EVIDENCE.json").read_text(encoding="utf-8"))
+    problems: list[str] = []
+    for item in items:
+        text = item["bewijs"]
+        if re.search(r"\{[A-Za-z_]*\}", text):
+            problems.append(f"{item['id']}: sjabloonrest in bewijs")
+        last: str | None = None
+        for m in _TEST_REF.finditer(text):
+            if m.group(1):
+                last = m.group(1)
+                if not (REPO_ROOT / last).is_file():
+                    problems.append(f"{item['id']}: {last} bestaat niet")
+                continue
+            name = m.group(2) or m.group(3)
+            if last is None or not (REPO_ROOT / last).is_file():
+                continue
+            source = (REPO_ROOT / last).read_text(encoding="utf-8")
+            if not re.search(rf"def {re.escape(name)}\b", source):
+                problems.append(f"{item['id']}: {last}::{name} bestaat niet")
+    assert not problems, "\n".join(problems)
+
+
 def test_no_session_links_in_docs() -> None:
     """§12 / A2: geen vaste sessielink meer in de eigen docs (de contractkopie zelf telt niet mee)."""
     own = [
