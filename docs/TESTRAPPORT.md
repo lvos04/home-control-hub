@@ -230,7 +230,8 @@ Hub, Authentik of accounts: de Hub is `tests/e2e/sim_hub.py` (§3.3 exact; ook d
 
 | `HCH_REAL_HUB_PYTHON=<venv met hub> pytest -q tests/interop -p no:cacheprovider` — **echte Hub-API** van ai-server-manager (`git archive` van `b4c7a0e`, eigen venv en database) | **1 geslaagd** (volledige levenscyclus, zie hieronder) |
 
-GitHub Actions: run `42658212431` (commit `a872e7f`, jobs `python` en `image`): **geslaagd**. De run daarvoor
+GitHub Actions: run `42658212431` (commit `a872e7f`, jobs `python` en `image`): **geslaagd**; run `42659058663`
+(commit `3e70db9`, met base_url-controle, interop-lint en dit bewijs): **geslaagd**. De run daarvoor
 (`42657826250`, commit `8c10d1f`) faalde op `ruff format --check` van één testbestand; gerepareerd in `91625f6`.
 
 Interop met de echte Hub (lokaal, niet in CI): verkeerde `HUB_KEY_FINGERPRINT` → niets opgeslagen; koppelen met
