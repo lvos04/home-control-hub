@@ -127,3 +127,76 @@ zijn simulators (`tests/e2e/sim_hub.py`, `apps/api/tests/fakes/authentik_fake.py
 ### Nog steeds NIET GEVALIDEERD
 Echte Authentik (catalogusapp), domeinnaam/HTTPS (D17), de OIDC-login in de Hub, uitvoeren van voorstellen (P2),
 echte testlogins per app, echte database-back-up/-restore van Authentik, installatie via het TrueNAS-formulier.
+
+## Onafhankelijke review P1 (2026-11-09, Ubuntu 26.04-bouwmachine)
+
+Reviewer/QA na de bouwers van B13-002…005. Eerst alle CI-stappen opnieuw gedraaid in een **verse venv**
+(`/usr/bin/python3.12 -m venv`, `pip install -r apps/api/requirements.lock` en `-e 'apps/api[dev]'`, zoals
+`.github/workflows/ci.yml`), daarna gerepareerd wat niet klopte. Validatieniveau ongewijzigd: **Sim-getest**; niets
+op een echte NAS of met een echte Authentik.
+
+### Nulmeting review (HEAD 9b6ec5d, vóór wijzigingen)
+| Commando | Uitkomst |
+|---|---|
+| `ruff check/format --check` (apps/api, tests/e2e, deploy/allinone, tools), `mypy` | geen bevindingen (61 bronbestanden) |
+| `cd apps/api && pytest -q` (HCH_TEST_ADMIN_URL=postgres@127.0.0.1:5432) | **305 geslaagd** |
+| `migrate` → `--down base` → `migrate` → `--down 0001` → `migrate` (database hch_qa_mig) | geslaagd |
+| OpenAPI-export + `git diff --exit-code docs/openapi/` | geen drift |
+| `pytest -q tests/e2e -p no:cacheprovider` | **8 geslaagd** |
+| `pip-audit -r apps/api/requirements.lock` | geen bekende kwetsbaarheden |
+| `actionlint .github/workflows/*.yml`, `shellcheck deploy/allinone/*.sh` | geen bevindingen |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load -f deploy/allinone/Dockerfile -t home-control-hub:qa-p1-base .` | gebouwd |
+| `deploy/allinone/smoke-test.sh home-control-hub:qa-p1-base` | **24 geslaagd, 0 mislukt** |
+| `gh run list` (GitHub Actions) | 42613907117 en 42614500432 (HEAD 9b6ec5d) **geslaagd** |
+
+Alle stappen groen — maar de review vond inhoudelijke fouten die de tests niet zagen.
+
+### Gevonden en gerepareerd (ADR-0009)
+1. **Eventtypen met vier segmenten** (`sso.authentik.sync.failed`, `sso.authentik.upgrade_gate.evaluated`,
+   `sso.authentik.restore_check.completed`): de inbox van de echte Hub (`ai-server-manager`, patroon
+   `<domein>.<object>.<gebeurtenis>`) weigert die met 422 → na 10 pogingen dead-letter en connector `degraded`.
+   De simulators accepteerden alles. Hernoemd; `events.emit` dwingt het Hub-patroon af; beide Hub-simulators
+   valideren nu de envelope als de echte Hub. Ook: `entity_id` > 120 tekens (Authentik-gebruikersnaam tot 150) gaf
+   een databasefout → afgekapt; payload > 16 KiB → ingekort met `_ingekort`.
+2. **Least privilege `ok` zonder grond**: elk niet-superuser-token heette `ok`, terwijl rolrechten via
+   `/core/users/me/` niet te zien zijn. Nu `te_ruim` / `onbekend` / `deels_gecontroleerd`; systeemrechten
+   (`system_permissions`) worden gecontroleerd. Schemacontrole opnieuw gedraaid (download van GitHub): alle 11
+   release-lijnen 2024.10.5–2026.8.5 ok, sha256 gelijk.
+3. **Rechtenkaart `ok` op oude gegevens**: na uitval of een ingetrokken token bleef `/sso/rights` `ok`. Nu
+   `verouderd` als de laatste volledige lezing ouder is dan max(15 min, 3 × sync-interval).
+4. **Hub-client-controle te mild**: uitgeschakelde of `negate`-bindingen telden als beperking; ontbrekende gekoppelde
+   groepen gaven `ok`.
+5. **Events-gat stil**: meer dan 500 nieuwe events per soort → watermerk schuift door, oudere events ontbreken; nu
+   een blijvende afwijking `events_onvolledig`.
+6. **B11-004 ontbrak in EVIDENCE.json**: toegevoegd als *Niet gestart*.
+
+### Extra afgedekt (nieuwe tests)
+- `apps/api/tests/integration/test_review_p1.py` (7 tests): Authentik-token nooit in logs (DEBUG + tracebacks),
+  API-antwoorden/headers, enige tabel buiten de versleutelde vault, outbox of idempotency-opslag — ook als de
+  nep-Authentik het token in foutantwoorden terugkaatst (500/403), bij time-out, uitval en via de worker; met twee
+  bewuste mutaties gecontroleerd dat de test een lek vangt. Geen wijziging zonder door de Hub ondertekend verzoek
+  (andere sleutel, HS256, `alg: none`, verkeerde aud/iss → 401, database byte-gelijk). `apply`/`rollback` met een
+  ExecutionRequest-achtige body → 501, niets gewijzigd. Rechtenkaart `verouderd`. Events-gat. Header-SSO op de
+  P1-routes en bron bij elke "ondersteund". Elk P1-eventtype komt door de Hub-validatie, niets dead-letter.
+- Unit: `test_token_privileges_never_claims_full_least_privilege` (8 gevallen),
+  `test_check_hub_client_access_is_never_ok_on_weak_bindings`, `test_every_event_type_follows_contract_7`,
+  `test_event_payload_and_ids_fit_the_hub_limits`.
+- E2E: `test_05c_hub_accepted_every_event`, `test_08_no_tokens_in_process_logs` (echte proceslogs van API en worker).
+- Bronvermeldingen in de SSO-dekkingsmatrix nagelezen in de zusterrepo's (media-guard-ultimate@8cd3175,
+  media-source-optimizer@4558ee4, my_house@210614b, ai-server-manager@40850dc): bestanden bestaan, geen OIDC/OAuth.
+
+### Eindstand review
+| Commando | Uitkomst |
+|---|---|
+| `ruff check/format --check` (alle mappen), `mypy` | geen bevindingen (61 bronbestanden) |
+| `cd apps/api && pytest -q` | **323 geslaagd** (± 40 s) |
+| `pytest -q tests/e2e -p no:cacheprovider` | **10 geslaagd** |
+| OpenAPI-export + `git diff --exit-code docs/openapi/` | alleen de bijgewerkte omschrijving van `/sso/rights` (gecommit), daarna geen drift |
+| `python tools/authentik_schema_check.py --out docs/b13/authentik-api-verificatie.json` (download) | 11/11 release-lijnen ok |
+| `flock … docker buildx build … -t home-control-hub:qa-p1b .` + `deploy/allinone/smoke-test.sh home-control-hub:qa-p1b` | gebouwd; **24 geslaagd, 0 mislukt** (lege /appdata, healthy, herstart en harde kill zonder dataverlies, start als 568, nette fout bij verkeerde rechten) |
+| Upgradetest (named volume): image van vóór de review (9b6ec5d) → gerepareerde image | healthy, markeerrij behouden, `vault.key` ongewijzigd, revisie 0002, `/readyz` ready, geen fout in de log |
+
+### Nog steeds NIET GEVALIDEERD
+Echte Authentik (catalogusapp) en de rolrechten van het serviceaccount, domeinnaam/HTTPS (D17), de OIDC-login in de
+Hub, uitvoeren van voorstellen (P2), echte testlogins per app, echte back-up/restore van Authentik, installatie via
+het TrueNAS-formulier, ontvangst van de events door de echte Hub (alleen de validatieregels zijn overgenomen).

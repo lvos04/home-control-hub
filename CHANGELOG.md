@@ -25,6 +25,19 @@
   rechten deterministisch. Back-uptest kiest de nieuwste `pg_restore` (machines met meerdere PostgreSQL-clients).
 - Integratietests maken de database ~50× sneller leeg (DELETE i.p.v. TRUNCATE).
 
+**Review P1 (onafhankelijke QA, ADR-0009)**
+- Eventtypen `sso.authentik.sync.failed`, `sso.authentik.upgrade_gate.evaluated` en
+  `sso.authentik.restore_check.completed` hernoemd naar `sso.authentik_sync.failed`,
+  `sso.authentik_upgrade_gate.evaluated` en `sso.authentik_restore_check.completed` (contract §7; de Hub-inbox weigerde
+  vier segmenten). `events.emit` dwingt het patroon af; lange id's afgekapt, te grote payload ingekort.
+- Least privilege van het Authentik-token nooit meer `ok`: `te_ruim` / `onbekend` / `deels_gecontroleerd`
+  (systeemrechten gecontroleerd, rolrechten niet via de API te zien).
+- `/sso/rights` wordt `verouderd` als Authentik niet meer volledig gelezen kan worden (velden `freshness`,
+  `snapshot_taken_at`).
+- Controle van een bestaande Hub-client: alleen actieve, niet-omgekeerde bindingen tellen; ontbrekende groepen →
+  afwijking.
+- Een gat in de Authentik-events wordt een blijvende afwijking `events_onvolledig`.
+
 **Validatie:** Sim-getest (nep-Hub, nep-Authentik). NIET GEVALIDEERD met een echte Authentik, domeinnaam (D17) of NAS.
 
 ## 0.1.0 — P0 (nog niet uitgebracht)
