@@ -1,6 +1,12 @@
 # ADR-0002 — Authenticatie, JWKS en koppelen met de Hub
 
-Status: aanvaard (met open punten voor de Hub) · Datum: 2026-11-09 · Fase: P0
+Status: **vervangen door contract 1.2** (zie ADR-0010) · Datum: 2026-11-09 · Fase: P0 · Bijgewerkt: 2026-11-09
+
+> **Contract 1.2 (ADR-0010):** de aannames hieronder zijn vervangen. Het enroll-verzoek en -antwoord volgen §3.3, de
+> koppeling staat in `/appdata/secrets/hub-link.json` (§3.5) in plaats van in de vault, de Hub authenticeert zich met
+> een dienst-JWT (§4.3; een inkomend service-token wordt geweigerd), de Hub-sleutels zijn gepind (§4.5), de lokale
+> ontkoppelcode is verwijderd (§3.7) en ontkoppelen gaat via `POST /connector/v1/hub-link/unlink`. Alle open punten
+> onderaan zijn daarmee gesloten. Deze ADR blijft staan als geschiedenis.
 
 ## Context
 Contract §3/§4 beschrijft enrollment (`POST {HUB_URL}/api/v1/services/enroll`), service-tokens, Hub-JWT's en de JWKS
@@ -30,9 +36,11 @@ een dienst authenticeert. De Hub-implementatie bestond nog niet toen deze dienst
 6. Hub-adressen: alleen http(s), geen inloggegevens/query, geen loopback (in de container wijst die naar zichzelf;
    alleen met `HCH_ALLOW_LOOPBACK_HUB` voor ontwikkeling).
 
-## Open punten (gemeld als contract_issue)
-- Het enroll-formaat moet door de Hub (`ai-server-manager`) worden bevestigd of aangepast.
-- JWKS over gewoon HTTP op het LAN kan worden vervalst door wie het LAN beheerst; het contract eist geen HTTPS of
-  sleutel-pinning. Voorstel: HTTPS of een door de policy-sleutel ondertekende JWKS-rotatie.
-- Vóór de eerste koppeling kan iemand op het LAN de dienst aan een eigen "Hub" koppelen. Mitigatie: de dienst heeft
-  dan nog geen data of rechten, de statuspagina toont het Hub-adres, en herkoppelen vereist de lokale ontkoppelcode.
+## Open punten (gemeld als contract_issue) — gesloten door contract 1.2
+- ~~Het enroll-formaat moet door de Hub worden bevestigd.~~ Vastgelegd in §3.3 en zo gebouwd (ADR-0010 besluit 1–3).
+- ~~JWKS over gewoon HTTP kan worden vervalst.~~ §4.5: sleutels worden bij het koppelen gepind en met de
+  sleutelset-vingerafdruk gecontroleerd; een via HTTP opgehaalde JWKS voegt nooit vertrouwen toe; nieuwe sleutels
+  alleen via een met een gepinde sleutel ondertekende rotatie of opnieuw koppelen.
+- ~~Koppelen vóór de eerste koppeling door iemand op het LAN.~~ §3.7: restrisico erkend; beperkt door env-enrollment
+  zonder wedloop (aanbevolen), de verplichte vingerafdruk, rate-limit per bron-IP en koppelen via de statuspagina
+  alleen zolang de dienst nog nooit gekoppeld was. De lokale ontkoppelcode bestaat niet meer.
