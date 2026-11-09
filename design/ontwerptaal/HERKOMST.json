@@ -1,0 +1,18 @@
+{
+  "ontwerptaal": "Peil",
+  "versie": "1.1.0",
+  "bron_repo": "lvos04/ai-server-manager",
+  "bron_commit": "172ee87f15406edbe1a72dda30908abde7488e94",
+  "bron_ref": "ccr-c133d7a0-kuz1cv",
+  "bestanden": {
+    "statuspagina.html": {
+      "bron_pad": "design/ontwerptaal/statuspagina.html",
+      "sha256": "be766cc4bf6962772a8dfc77996da34040fa94698403a9625e33545fa9ee62c8"
+    },
+    "statuspagina.css": {
+      "bron_pad": "design/ontwerptaal/statuspagina.css",
+      "sha256": "b1e3f789cbeaa2c928088cdac482cc8d6d11c7a5007c5d9b79005df66dd1b5af"
+    }
+  },
+  "toelichting": "Versie-gepinde kopie (ONTWERPTAAL §13.2/§14, O-14). Bijwerken alleen met 'python3 tools/peil_kopie.py bijwerken'; daarna tests, UI-tests en schermafdrukken opnieuw."
+}
