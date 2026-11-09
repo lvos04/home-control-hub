@@ -90,8 +90,9 @@ de app bewaart ze versleuteld in `/appdata` (`vault.key` in `/appdata/secrets`).
 
 - **Updaten:** app → **Edit** → Tag naar de nieuwe versie → **Update**. Bij openstaande databasewijzigingen maakt de
   app eerst een back-up (`/appdata/backups/voor-upgrade-*.dump`, de nieuwste 3 blijven) en voert dan de migraties uit.
-  Mislukt een migratie, dan blijft de oude database ongewijzigd en meldt de log dat. Een ZFS-snapshot vooraf blijft
-  verstandig.
+  **Mislukt de back-up, dan migreert de app niet** en stopt hij met een melding in de log (bijv. te weinig vrije
+  ruimte op de dataset). Mislukt een migratie, dan blijft de oude database ongewijzigd en meldt de log dat ook. Een
+  ZFS-snapshot vooraf blijft verstandig.
 - **Terugdraaien:** zolang een release geen databasewijziging heeft (zie de releasenotes, veld
   `tag_only_rollback_safe`), kun je de Tag terugzetten. Bij een schemawijziging: zet de ZFS-snapshot van vóór de
   update terug, of gebruik de back-up uit `/appdata/backups`.
@@ -103,6 +104,7 @@ de app bewaart ze versleuteld in `/appdata` (`vault.key` in `/appdata/secrets`).
 | `FOUT: /appdata bestaat niet` | Opslagregel ontbreekt of Mount Path is niet precies `/appdata`. |
 | `FOUT: geen schrijfrechten op /appdata/...` | *Custom User* staat aan met een andere gebruiker: zet het uit, of geef gebruiker 568 schrijfrechten. |
 | `oude postmaster.pid ... verwijderd` | Geen fout: de vorige stop was onverwacht (stroom/kill). |
+| `FOUT: back-up vóór de migratie mislukt` | Maak ruimte vrij op de dataset en start de app opnieuw, of zet de vorige Tag terug. Er is niets gewijzigd. |
 | Poort bezet bij opslaan | Kies een andere vrije **Host Port**; de Container Port blijft `30420`. |
 | Statuspagina: *Loopback-adressen ... wijzen naar deze container zelf* | Gebruik het LAN-adres van de NAS i.p.v. `localhost`. |
 | Image kan niet worden opgehaald (`denied`) | Het GHCR-pakket staat nog op privé (eenmalig openbaar maken in GitHub → Packages). |

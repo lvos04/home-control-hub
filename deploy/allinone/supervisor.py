@@ -10,8 +10,9 @@ Regels (gebaseerd op het werkende MSO-voorbeeld):
 - First-start-init: ontbrekende geheimen in /appdata/secrets (0600, nooit overschrijven).
 - Duidelijke Nederlandse fout (en even wachten) als /appdata ontbreekt of niet schrijfbaar is, i.p.v. een crashloop.
 - Oude postmaster.pid na een harde stop wordt opgeruimd.
-- Vóór openstaande migraties een pg_dump naar /appdata/backups (de nieuwste 3 blijven); mislukt die, dan start de
-  app gewoon door. Mislukt een migratie, dan blijft de vorige database ongewijzigd en stopt de app met een melding.
+- Vóór openstaande migraties een pg_dump naar /appdata/backups (de nieuwste 3 blijven). Mislukt die back-up, dan
+  wordt NIET gemigreerd (fail-closed, gate-matrix) en stopt de app met een melding. Mislukt een migratie, dan blijft
+  de vorige database ongewijzigd en stopt de app ook met een melding.
 - Crashende processen worden met backoff herstart; SIGTERM stopt worker → api → database netjes.
 """
 
@@ -271,7 +272,10 @@ def main() -> None:
         != 0
     ):
         pg.stop()
-        fail("databasemigratie mislukt; de vorige database is ongewijzigd. Zet de vorige image-tag terug.")
+        fail(
+            "back-up vóór de migratie of de migratie zelf mislukt (zie de log hierboven); de database is ongewijzigd. "
+            "Controleer de vrije ruimte op de dataset of zet de vorige image-tag terug."
+        )
 
     children = [
         Child("api", [py, "-m", "integrations", "api", "--host", "0.0.0.0", "--port", PORT]),  # noqa: S104

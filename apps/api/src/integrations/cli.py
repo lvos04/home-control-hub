@@ -29,7 +29,7 @@ def cmd_init(settings: Settings) -> int:
 
 def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) -> int:
     from .db import Database
-    from .migrations import downgrade, pre_upgrade_backup, upgrade
+    from .migrations import BackupError, downgrade, pre_upgrade_backup, upgrade
 
     if down:
         downgrade(settings, down)
@@ -38,7 +38,14 @@ def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) ->
     db = Database(settings.database_url)
     try:
         if backup_dir:
-            dump = pre_upgrade_backup(settings, db, Path(backup_dir))
+            try:
+                dump = pre_upgrade_backup(settings, db, Path(backup_dir))
+            except BackupError as exc:
+                print(
+                    f"FOUT: back-up vóór de migratie mislukt: {exc}. Er is NIET gemigreerd; de database is ongewijzigd.",
+                    file=sys.stderr,
+                )
+                return 3
             if dump:
                 print(f"back-up vóór upgrade: {dump}")
         upgrade(settings)

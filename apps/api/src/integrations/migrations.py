@@ -48,15 +48,26 @@ def pending(settings: Settings, db: Database) -> bool:
     return db.current_revision() != head_revision(settings)
 
 
+class BackupError(RuntimeError):
+    """De back-up vóór een migratie is mislukt; er wordt dan **niet** gemigreerd (fail-closed, gate-matrix)."""
+
+
 def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep: int = 3) -> Path | None:
-    """``pg_dump -Fc`` vóór openstaande migraties (alleen als er al een schema is). Faalt nooit hard."""
+    """``pg_dump -Fc`` vóór openstaande migraties op een bestaand schema.
+
+    Geeft ``None`` als er niets te back-uppen is (verse database of al op de nieuwste revisie). Mislukt de back-up,
+    dan volgt ``BackupError`` en mag de aanroeper niet migreren: een schemawijziging zonder database-export vooraf is
+    volgens de gate-matrix (``06_FASERING_EN_GATES``) niet toegestaan.
+    """
     current = db.current_revision()
     if current is None or current == head_revision(settings):
         return None
     if shutil.which("pg_dump") is None:
-        log.warning("pg_dump ontbreekt; geen back-up vóór upgrade")
-        return None
-    backup_dir.mkdir(parents=True, exist_ok=True)
+        raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     target = backup_dir / f"voor-upgrade-{current}-{stamp}.dump"
     parts = urlsplit(settings.database_url.replace("postgresql+psycopg://", "postgresql://"))
@@ -73,11 +84,11 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
         (parts.path or "/hch").lstrip("/"),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603 (vaste argumenten)
-    if result.returncode != 0:
-        log.warning("back-up vóór upgrade mislukt (code %s); migratie gaat door", result.returncode)
+    if result.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
         target.unlink(missing_ok=True)
-        return None
-    dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"))
+        raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
+    dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
     for old in dumps[:-keep]:
-        old.unlink(missing_ok=True)
+        if old != target:
+            old.unlink(missing_ok=True)
     return target
