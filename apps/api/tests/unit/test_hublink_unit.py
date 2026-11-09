@@ -325,3 +325,25 @@ def test_pair_throttle_per_ip_and_total() -> None:
 
     _t.sleep(0.02)
     assert t2.allow("a")  # venster voorbij
+
+
+@pytest.mark.parametrize(
+    ("public_url", "expected"),
+    [
+        (None, None),
+        ("http://nas.lan:30420", "http://nas.lan:30420"),
+        ("https://nas.lan/hch", "https://nas.lan/hch"),
+        ("http://nas.lan:30420/?x=1", None),  # zou de Hub met 422 laten weigeren en het token verbranden
+        ("ftp://nas.lan", None),
+        ("http://" + "a" * 600, None),
+    ],
+)
+def test_base_url_is_only_sent_when_valid(
+    tmp_path: Path, sim: Any, public_url: str | None, expected: str | None
+) -> None:
+    ensure_secrets(tmp_path)
+    s = Settings(data_dir=tmp_path.parent, public_url=public_url)
+    hl = HubLink(s, HubLinkStore(tmp_path), enroll_public_jwk(load_identity(tmp_path)), HubClient(s))
+    body = hl.enroll_body("enrollment_token", sim.new_enrollment_token())
+    assert body["base_url"] == expected
+    assert sim.enroll(json.dumps(body).encode(), "192.0.2.1").status == 200

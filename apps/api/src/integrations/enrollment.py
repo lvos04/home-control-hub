@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import threading
 import time
 import uuid
@@ -82,6 +83,7 @@ BACKOFF_START = 5.0
 BACKOFF_MAX = 15 * 60.0
 KEY_POLL_MIN_GAP = 30.0  # §4.5: extra poll bij een onbekende kid hooguit 1× per 30 s
 ROTATION_TYP = "hub-key-rotation+jws"
+BASE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[^\s?#]*)?$")  # §3.3 (zelfde regel als de Hub)
 WORKER_ACTOR = ("system", "home-control-hub:worker")
 RESPONSE_FIELDS: dict[str, type] = {
     "schema_version": str,
@@ -299,9 +301,20 @@ class HubLink:
             "app_id": APP_ID,
             credential_field: credential,
             "version": __version__,
-            "base_url": self.settings.public_url,
+            "base_url": self._base_url(),
             "public_key_jwk": dict(self.identity_jwk),
         }
+
+    def _base_url(self) -> str | None:
+        """``base_url`` is alleen informatief (§3.3). Een ongeldige ``HCH_PUBLIC_URL`` zou de Hub met 422 laten weigeren en
+        het token verbranden; daarom dan ``null`` sturen (met een waarschuwing)."""
+        url = self.settings.public_url
+        if url is None:
+            return None
+        if len(url) <= 512 and BASE_URL_RE.match(url):
+            return url
+        self._warn_once("base_url", "HCH_PUBLIC_URL past niet in http(s)://host[:poort][/pad]; base_url wordt null")
+        return None
 
     def _bearer(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
