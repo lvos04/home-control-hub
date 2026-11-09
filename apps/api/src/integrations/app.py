@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from sqlalchemy.orm import Session
 
 from . import API_PREFIX, APP_ID, __version__, audit
+from .bodylimit import BodyLimitMiddleware
 from .config import Settings
 from .connector import router as connector_router
 from .db import Database
@@ -190,6 +191,8 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
     app.state.app_id = APP_ID
 
     install_handlers(app)
+    # vóór alles (ook vóór de auth): te grote bodies worden niet ingelezen
+    app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware("http")
     async def trace_and_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:

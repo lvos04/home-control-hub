@@ -7,9 +7,8 @@ Het enrollment-token in de omgeving is eenmalig en na gebruik waardeloos (contra
 
 from __future__ import annotations
 
-import ipaddress
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_PORT = 30420
@@ -36,17 +35,6 @@ def _opt(name: str) -> str | None:
     return raw or None
 
 
-def _networks(raw: str | None) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
-    if not raw:
-        return ()
-    nets = []
-    for part in raw.split(","):
-        part = part.strip()
-        if part:
-            nets.append(ipaddress.ip_network(part, strict=False))
-    return tuple(nets)
-
-
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = Path(DEFAULT_DATA_DIR)
@@ -70,9 +58,8 @@ class Settings:
     http_max_attempts: int = 3
     # B13-001
     break_glass_test_max_age_days: int = 90
-    emergency_admin_max_days: int = 30
-    # alleen expliciet vertrouwde reverse proxies mogen X-Forwarded-For zetten (standaard: geen)
-    trusted_proxies: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = field(default_factory=tuple)
+    # Bewust GEEN instelling voor vertrouwde proxies: X-Forwarded-*-headers worden nooit gebruikt (uvicorn met
+    # proxy_headers=False; B13-003: geen toegang via X-Forwarded-User of vergelijkbare headers).
     worker_interval_s: float = 10.0
     # alleen voor ontwikkeling/tests: een Hub op 127.0.0.1 toestaan (in de container wijst loopback naar zichzelf)
     allow_loopback_hub: bool = False
@@ -97,8 +84,6 @@ class Settings:
             jwks_ttl_s=_int("HCH_JWKS_TTL_S", 300),
             jwks_max_stale_s=_int("HCH_JWKS_MAX_STALE_S", 900),
             break_glass_test_max_age_days=_int("HCH_BREAK_GLASS_MAX_AGE_DAYS", 90),
-            emergency_admin_max_days=_int("HCH_EMERGENCY_ADMIN_MAX_DAYS", 30),
-            trusted_proxies=_networks(_opt("HCH_TRUSTED_PROXIES")),
             worker_interval_s=float(_int("HCH_WORKER_INTERVAL_S", 10)),
             allow_loopback_hub=_bool("HCH_ALLOW_LOOPBACK_HUB"),
         )

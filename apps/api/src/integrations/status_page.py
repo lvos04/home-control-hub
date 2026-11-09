@@ -1,7 +1,8 @@
 """Kleine Nederlandse statuspagina op ``GET /`` (contract §1) + koppelen met koppelcode (contract §3).
 
 Veiligheid:
-- Geen geheimen of accountnamen op de pagina; alleen koppelstatus, versie, gezondheid en totaalniveaus.
+- Geen geheimen, accountnamen, aantallen of aandachtspunten op de pagina; alleen koppelstatus, versie, gezondheid
+  en totaalniveaus.
 - Formulieren: CSRF-token (double-submit-cookie, SameSite=Strict) + Origin-controle; geen JavaScript; strikte CSP.
 - Koppelen kan alleen als de dienst **niet** gekoppeld is. Ontkoppelen via deze pagina vereist de lokale
   ontkoppelcode die bij elke start in de app-log staat (TrueNAS → Apps → home-control-hub → Logs); zo kan alleen
@@ -209,12 +210,11 @@ def status_page(request: Request, melding: str | None = None) -> Response:
         + "</td></tr></table></div>"
     )
     if readiness_level is not None:
-        lvl = readiness_level["level"]
-        reasons = ", ".join(r["code"] for r in readiness_level["reasons"]) or "geen"
+        # alleen het totaalniveau: aantallen en aandachtspunten (bv. 'geen noodaccount') zijn beveiligingsinformatie
+        # en blijven achter de beheerdersrol in de Hub
         parts.append(
             '<div class="card"><h2>Beheerherstel (B13-001)</h2>'
-            f"<p>{_tag(lvl)} <small>{readiness_level['counts']['accounts']} beheeraccount(s) geregistreerd · "
-            f"aandachtspunten: {html.escape(reasons)}</small></p>"
+            f"<p>{_tag(readiness_level['level'])}</p>"
             '<p class="muted">Details en oefeningen staan in de Hub (alleen voor beheerders). '
             "Noodtoegang is niet afhankelijk van Authentik.</p></div>"
         )

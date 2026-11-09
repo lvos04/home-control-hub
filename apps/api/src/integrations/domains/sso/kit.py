@@ -21,6 +21,10 @@ KIT_FORMAT = "hch-herstelkit/1"
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**15, 8, 1
 MIN_PASSPHRASE = 16
 MAX_PASSPHRASE = 1024
+# Grens voor het openen van een (mogelijk vreemde) kit: scrypt gebruikt 128·n·r bytes geheugen. Zonder grens kan één
+# verzoek met n=2^20, r=16 ruim 2 GiB vragen. Onze eigen kits gebruiken 32 MiB.
+MAX_SCRYPT_MEMORY = 128 * 1024 * 1024
+NONCE_BYTES = 12
 
 PROCEDURE_NL: tuple[str, ...] = (
     "1. Zorg dat je op het thuisnetwerk (LAN) of via de VPN verbonden bent; noodtoegang werkt alleen binnen de "
@@ -86,21 +90,28 @@ def encrypt_kit(content: dict[str, Any], passphrase: str) -> dict[str, Any]:
 def decrypt_kit(kit: dict[str, Any], passphrase: str) -> dict[str, Any]:
     if kit.get("format") != KIT_FORMAT:
         raise KitError("Onbekend formaat van de herstelkit.")
-    kdf, cipher = kit.get("kdf") or {}, kit.get("cipher") or {}
+    kdf, cipher = kit.get("kdf"), kit.get("cipher")
+    if not isinstance(kdf, dict) or not isinstance(cipher, dict):
+        raise KitError("Onbekende versleuteling in de herstelkit.")
     if kdf.get("name") != "scrypt" or cipher.get("name") != "AES-256-GCM":
         raise KitError("Onbekende versleuteling in de herstelkit.")
     n, r, p = kdf.get("n"), kdf.get("r"), kdf.get("p")
     if not (isinstance(n, int) and isinstance(r, int) and isinstance(p, int)):
         raise KitError("Ongeldige sleutelafleiding in de herstelkit.")
-    if not (2**14 <= n <= 2**20 and 1 <= r <= 16 and 1 <= p <= 4):
+    if not (2**14 <= n <= 2**17 and n & (n - 1) == 0 and 1 <= r <= 16 and 1 <= p <= 2):
         raise KitError("Ongeldige sleutelafleiding in de herstelkit.")
+    if 128 * n * r > MAX_SCRYPT_MEMORY:
+        raise KitError("De sleutelafleiding van deze herstelkit vraagt te veel geheugen.")
+    nonce = _unb64(cipher.get("nonce"))
+    if len(nonce) != NONCE_BYTES:
+        raise KitError("Ongeldige nonce in de herstelkit.")
     ct = _unb64(kit.get("ciphertext"))
     expected = kit.get("ciphertext_sha256")
     if expected is not None and hashlib.sha256(ct).hexdigest() != expected:
         raise KitError("De herstelkit is beschadigd (controlesom klopt niet).")
     key = _derive(passphrase, _unb64(kdf.get("salt")), n, r, p)
     try:
-        plaintext = AESGCM(key).decrypt(_unb64(cipher.get("nonce")), ct, KIT_FORMAT.encode("ascii"))
+        plaintext = AESGCM(key).decrypt(nonce, ct, KIT_FORMAT.encode("ascii"))
     except InvalidTag as exc:
         raise KitError("De herstelkit kan niet worden geopend: verkeerde wachtwoordzin of beschadigd bestand.") from exc
     data: dict[str, Any] = json.loads(plaintext)
