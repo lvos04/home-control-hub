@@ -1,0 +1,182 @@
+[
+ {
+  "id": "B13-001",
+  "status": "Bezig",
+  "validatie": "Sim-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_b13_001_recovery.py::test_break_glass_testable_while_authenticator_offline; apps/api/tests/integration/test_b13_001_recovery.py::test_full_recovery_journey_and_readiness; apps/api/tests/integration/test_b13_001_recovery.py::test_recovery_kit_export_verify_without_secrets; apps/api/tests/integration/test_b13_001_recovery.py::test_register_refuses_secrets_and_sso_only_break_glass; apps/api/tests/integration/test_b13_001_recovery.py::test_emergency_access_rules; apps/api/tests/unit/test_recovery_rules.py; tests/e2e/test_service_e2e.py::test_03_b13_001_break_glass_with_authentik_offline",
+  "blokkade": "Echte acceptatie vereist: lokale noodlogin in de Hub (ai-server-manager; nog niet gebouwd), Authentik-installatie (I09, D17 onbekend) en een echte oefening op de NAS — NIET GEVALIDEERD (echte NAS/account).",
+  "opmerking": "Herstelregister zonder geheimen; minstens twee herstelmethodes waarvan één zonder SSO; noodaccount kan niet SSO-only zijn; noodtoegang alleen LAN/VPN-bereiken met sessieduur en herbevestiging; zelftest slaagt met Authentik offline; versleutelde herstelkit (geen sleutels); audit + events. MFA alleen als attestatie.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B13-003",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/unit/test_catalog_and_contracts.py::test_no_unverified_claims_about_external_apps",
+  "blokkade": "Capability-onderzoek per app vereist officiële docs van de gepinde versies en echte installaties.",
+  "opmerking": "Alleen de structuur van de SSO-dekkingsmatrix (GET /integrations/v1/sso/app-coverage); alle apps 'te verifiëren', geen enkele als 'ondersteunt OIDC'.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-001",
+  "status": "Bezig",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database; apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty",
+  "blokkade": "Discovery-adapter (NetAlertX, I11) niet gebouwd; LAN-gegevens D03/D11 onbekend — NIET GEVALIDEERD (echte NAS).",
+  "opmerking": "Inventaris (NetAlertX, AdGuard Home, Tailscale, Cloudflared, router; alles te verifiëren) en datamodel; apparaten standaard 'onbekend'; database weigert categorie 'malware' zonder bewijs.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-002",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_migrations_up_down_up_and_no_drift",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Eén apparaat per (bron, genormaliseerde MAC); IP-historie apart.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-003",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Blokregels met pilot-scope en rollback-TTL.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-004",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. DNS-aggregaten hebben verplicht een dekkingslabel (DNS ≠ al het verkeer).",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-005",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. VPN-peers en tunnel-health; tunnelgeheimen alleen als vault-referentie.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B10-006",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Netwerkwijzigingen minimaal R2 en altijd met onafhankelijke test.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B11-001",
+  "status": "Bezig",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_domain_structures; apps/api/tests/unit/test_catalog_and_contracts.py::test_safety_rules_in_catalog",
+  "blokkade": "Node-RED-installatie (I10), netwerkisolatie en editor-auth vereisen de echte NAS — NIET GEVALIDEERD (echte NAS).",
+  "opmerking": "Inventaris en verbodslijst (exec-node; typenaam te verifiëren tegen de Node-RED-docs), GET /integrations/v1/automation/policy, datamodel.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B11-002",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Triggers met schema-versie.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B11-003",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Actieverzoeken met unieke idempotency-key en oorsprongsketen; risk_claim informatief.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B11-005",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Onveranderlijke flowversies met checksum; credentials alleen als vault-referentie.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B14-001",
+  "status": "Bezig",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_domain_structures; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
+  "blokkade": "D14 (HomeWizard-meters) onbekend en readback van my_house niet gebouwd — NIET GEVALIDEERD (hardware).",
+  "opmerking": "Dekkingsmatrix-structuur (GET /integrations/v1/energy/coverage) met verwachte meterrollen, alles 'onbekend'; kwaliteitslabels gemeten/geschat/onbekend; database weigert CPU-schatting zonder kalibratie.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B14-002",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Intervallen in UTC met tellerreset-markering; 'geschat' vereist herkomst.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B14-003",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Werkloads met prioriteitsklasse en reserveringsvensters.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B14-004",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Kostenmodel vereist altijd een meter (geen verzonnen €-besparing).",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "B14-005",
+  "status": "Niet gestart",
+  "validatie": "Unit-getest",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
+  "blokkade": "",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Meters zijn in de database altijd alleen-lezen (boiler nooit schakelen).",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ },
+ {
+  "id": "EX16",
+  "status": "Bezig",
+  "validatie": "Sim-geslaagd",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_jwks_fail_closed_when_hub_down; apps/api/tests/integration/test_enrollment_and_worker.py::test_unpair_requires_local_code; tests/e2e/test_service_e2e.py::test_06_fail_closed_when_hub_disappears",
+  "blokkade": "Integrale run op de echte NAS ontbreekt.",
+  "opmerking": "Alleen het deel van home-control-hub: ongeldige/ingetrokken credentials of onbereikbare JWKS → 401, nooit open toegang; connector-health 'degraded'. Hub-kant (connector unknown + incident) hoort bij ai-server-manager.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-09"
+ }
+]
