@@ -1,6 +1,6 @@
 # Platformcontracten — TrueNAS Home Platform V2 (bouwcontract voor alle repos)
 
-Versie: `contracts 1.0` · Peildatum 2026-11-09 · Eigenaar: `lvos04/ai-server-manager` (bron van waarheid).
+Versie: `contracts 1.1` (1.1: installatie uitsluitend als standaard TrueNAS Custom App, alles-in-één image per repo, executor als aparte Custom App, derden via TrueNAS-catalogus) · Peildatum 2026-11-09 · Eigenaar: `lvos04/ai-server-manager` (bron van waarheid).
 Elke repo heeft een kopie in `docs/platform-v2/PLATFORM_CONTRACTEN.md`; bij verschil wint deze repo.
 Dit document maakt de pakketvoorstellen (`01_ARCHITECTUUR/02`, `03`, `07`) concreet zodat alle repos samenwerken.
 Het zegt **niets** over de echte NAS: alle NAS-gegevens (D01–D18) zijn onbekend tot de gebruiker ze in de
@@ -11,8 +11,17 @@ onboarding-wizard invult of de wizard ze via de TrueNAS-API meet.
 - Nieuwe repos: **Python 3.12 + FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL 16**, frontend **Next.js/React PWA** (alleen in
   `ai-server-manager`; alle schermen van alle nieuwe diensten staan in die ene Hub-UI). Andere nieuwe diensten zijn
   zelfstandige API-diensten met alleen een kleine eigen statuspagina (`GET /` → eenvoudige HTML, NL).
-- Installatie **zonder terminal**: eerste installatie via TrueNAS-web-UI (Apps → Discover Apps → ⋮ → *Install via YAML*,
-  of Custom App), daarna alles via de platform-UI. Geen `install.sh`-stappen voor de gebruiker.
+- Installatie **zonder terminal en zonder YAML**: alles wordt geïnstalleerd als **standaard TrueNAS Custom App**
+  (het gewone formulier: image + tag, poorten, opslag, omgevingsvariabelen) — nooit via *Install via YAML*,
+  `custom_compose_config` of docker compose. Eerste installatie: de gebruiker maakt in de TrueNAS-web-UI precies **twee**
+  Custom Apps: `ai-server-manager` (de Hub, alles-in-één) en `ai-server-manager-executor`. Daarna installeert het platform
+  alles via de TrueNAS-API vanuit de platform-UI. Apps van derden die meerdere containers nodig hebben (Authentik, Immich,
+  …) via de **officiële TrueNAS-catalogusapp** waar die bestaat (versie vastgezet); anders een standaard Custom App met
+  één gepinde image. `docker compose` mag alleen voor ontwikkeling, CI en de integrale E2E-testomgeving.
+- **Eén alles-in-één image per repo** (zoals MSO `deploy/allinone`): eigen ingebouwde PostgreSQL 16 (alleen unix-socket,
+  geen netwerkpoort), API, worker en — alleen bij de Hub — de web-UI, onder een kleine procesbewaker; één datamap
+  `/appdata`, één poort, healthcheck, start als root alleen om `/appdata` aan 568:568 te geven en draait daarna alles als
+  568. Geen wachtwoorden of geheimen in het formulier; geheimen maakt de app zelf bij eerste start in `/appdata/secrets`.
 - Geen `latest`-tags. Elke image op exacte versie, base-images bovendien op `@sha256:`-digest.
 - Geen shell/root voor AI, geen `sh -c`/`sudo`-endpoint, geen Docker-socket in een container, boiler nooit schakelen,
   geen betaalde API-overage (Claude alleen binnen inbegrepen credits, harde stop op 0 overage).
@@ -21,60 +30,70 @@ onboarding-wizard invult of de wizard ze via de TrueNAS-API meet.
 - Jellyfin-fork: technische identiteit/API blijft "Jellyfin" (clientcompatibiliteit); alleen de zichtbare naam is
   "Jelly Leon". GPL-licentie en upstream-credits blijven staan.
 
-## 2. Diensten, namen en poorten
+## 2. Apps, images en poorten
 
-Gedeeld Docker-netwerk: **`jl-platform`** (aangemaakt door de bootstrap-app; latere apps sluiten aan met
-`networks: { jl-platform: { external: true } }`). Diensten vinden elkaar op hun DNS-alias in dat netwerk.
-Bestaande zelfstandige apps (MediaGuard, MSO, my_house, Jellyfin, Immich, arr-apps) worden bereikt via de URL die de
-gebruiker in de wizard opgeeft of die de wizard uit de TrueNAS-app-inventaris haalt — nooit een aangenomen IP.
+Elke eigen app is één standaard Custom App met één image en één datamap `/appdata` (hostpad of ixVolume, door de gebruiker
+of — na onboarding — door de Hub gekozen via de datasetkiezer). Apps zitten **niet** in een gedeeld Docker-netwerk: ze
+bereiken elkaar via `http://<NAS-adres>:<hostpoort>` uit het dienstenregister van de Hub. Het NAS-adres komt uit de wizard
+(D03) of wordt door de wizard gemeten en door de gebruiker bevestigd; nooit aangenomen.
 
-| Repo | Dienst (DNS-alias) | Containerpoort | Image (GHCR) |
-|---|---|---|---|
-| ai-server-manager | `hub-web` (Next.js PWA, proxyt `/api/*` naar hub-api) | 3000 | `ghcr.io/lvos04/ai-server-manager-web` |
-| ai-server-manager | `hub-api` (FastAPI) | 8000 | `ghcr.io/lvos04/ai-server-manager-api` |
-| ai-server-manager | `hub-worker` (zelfde image, `command: worker`) | – | idem api |
-| ai-server-manager | `hub-ai` (AI-agent-runner, zelfde image, `command: ai-runner`, géén signing key) | – | idem api |
-| ai-server-manager | `hub-executor` (smalle executor, enige met schrijf-API-key TrueNAS) | 8010 | `ghcr.io/lvos04/ai-server-manager-executor` |
-| ai-server-manager | `platform-db` (PostgreSQL 16; aparte database + rol per kerndienst) | 5432 | `postgres:16.x-alpine@sha256:…` |
-| home-control-hub | `integrations` (B10/B11/B13/B14) | 8100 | `ghcr.io/lvos04/home-control-hub` |
-| appstore-en-fork | `appstore` (catalogus, manifeststandaard, import, forkbeheer) | 8200 | `ghcr.io/lvos04/appstore-en-fork` |
-| jelly-leon-platform | `platform-lifecycle` (install/update/rollback/remove/move) | 8300 | `ghcr.io/lvos04/jelly-leon-platform` |
-| zoeken-en-persoonlijke-ai | `search-ai` (B07/B15) | 8400 | `ghcr.io/lvos04/zoeken-en-persoonlijke-ai` |
-| zoeken-en-persoonlijke-ai | `stt` (faster-whisper, optioneel) / `tts` (Piper, optioneel) | 8410 / 8420 | gepinde upstream images |
-| jelly-leon(+web) | `jelly-leon` (server incl. web-client) | 8096 | `ghcr.io/lvos04/jelly-leon` |
+| Repo | Custom App-naam | Image (GHCR, exacte versie) | Containerpoort | Hostpoort (voorstel, wijzigbaar) |
+|---|---|---|---|---|
+| ai-server-manager | `ai-server-manager` (Hub: web-UI + API + worker + AI-runner + PostgreSQL) | `ghcr.io/lvos04/ai-server-manager` | 30400 | 30400 |
+| ai-server-manager | `ai-server-manager-executor` (enige met TrueNAS-schrijfkey) | `ghcr.io/lvos04/ai-server-manager-executor` | 30410 | 30410 |
+| home-control-hub | `home-control-hub` (integraties B10/B11/B13/B14) | `ghcr.io/lvos04/home-control-hub` | 30420 | 30420 |
+| appstore-en-fork | `appstore-en-fork` | `ghcr.io/lvos04/appstore-en-fork` | 30430 | 30430 |
+| jelly-leon-platform | `jelly-leon-platform` (lifecycle) | `ghcr.io/lvos04/jelly-leon-platform` | 30440 | 30440 |
+| zoeken-en-persoonlijke-ai | `zoeken-en-persoonlijke-ai` (PostgreSQL + pgvector ingebouwd) | `ghcr.io/lvos04/zoeken-en-persoonlijke-ai` | 30450 | 30450 |
+| jelly-leon(+web) | `jelly-leon` (server incl. web-client) | `ghcr.io/lvos04/jelly-leon` | 8096 | 30460 |
+| optioneel (standaard uit) | `stt` (faster-whisper), `tts` (Piper), `ollama` | gepinde upstream images | per image | voorstel bij installatie |
 
-Hostpoort (enige standaard naar buiten): `hub-web` → voorstel **30400/TCP**; de bootstrap-YAML noemt dit als voorstel
-dat de gebruiker in het TrueNAS-formulier kan wijzigen. Andere diensten publiceren standaard géén hostpoort.
+Hostpoorten zijn voorstellen: vóór installatie controleert de Hub via de TrueNAS-API op conflicten met bestaande apps.
+Binnen de alles-in-één image houdt elke app intern dezelfde modulegrenzen (api, worker, …) als aparte processen; in
+ontwikkeling/CI mogen die als losse processen of compose-diensten draaien.
 
-**Bootstrap-app** (`jelly-leon-platform/install/truenas/bootstrap.yaml`): `platform-init` (one-shot, maakt geheimen),
-`platform-db`, `hub-api`, `hub-worker`, `hub-ai`, `hub-web`, `hub-executor`, `appstore`, `platform-lifecycle`.
-Opslag in de bootstrap: **benoemde Docker-volumes** (geen hostpaden, dus geen poolnaam nodig). Na onboarding (D02 ingevuld
-en getest) biedt de UI een verhuizing naar gekozen datasets aan (R2, met back-up en hersteltest).
+**Eerste installatie (handmatig, 2 formulieren)**, beschreven in `jelly-leon-platform/install/truenas/INSTALLATIE.md`:
+1. Custom App `ai-server-manager`: image + tag, poort 30400, opslag `/appdata`. Bij eerste start toont de app een
+   eenmalige **setupcode** in de app-logs (TrueNAS-web-UI → Apps → app → Logs); de wizard vraagt die vóór het eerste
+   admin-account.
+2. Custom App `ai-server-manager-executor`: image + tag, poort 30410, eigen opslag `/appdata`. Koppelen gebeurt via de
+   web-UI (§3); de TrueNAS-schrijfkey voert de gebruiker alleen op de koppelpagina van de executor in.
+Daarna installeert de Hub (via executor) de overige eigen apps (`appstore-en-fork`, `jelly-leon-platform`, …) als
+standaard Custom App.
 
-## 3. Geheimen
+**Installatie via de API** (executor, `app.install`): TrueNAS `app.create` voor een standaard Custom App met de
+formulierwaarden (image, ports, storage, env, resources, gpu) — in TrueNAS 24.10+ is dat de catalogus-app `ix-app`
+met `values`; methodenaam en waardenschema per versie ontdekken en tegen de officiële docs controleren — of `app.create`
+met `catalog_app`/`train`/`version` voor een catalogusapp. **Nooit** `custom_compose_config`.
 
-- Nooit geheimen in compose/YAML/Git. `platform-init` (one-shot, image van hub-api, `command: init-secrets`) maakt bij
-  eerste start ontbrekende bestanden aan in het volume `jl-secrets` (mode 0600, eigenaar 568:568) en wijzigt bestaande nooit:
-  `platform-db.password`, `db-<dienst>.password`, `service-token-<dienst>`, `policy-signing.ed25519` (privé; alleen hub-api),
-  `policy-signing.pub` (publiek; executor + diensten), `hub-vault.key`, `executor-vault.key` (alleen executor),
-  `jwt-signing.ed25519`, `bootstrap-code` (eenmalige setupcode).
-- Containers lezen via `*_FILE`-omgevingsvariabelen. Executor krijgt alléén `executor-vault.key`, `policy-signing.pub`,
-  en eigen DB (SQLite in eigen volume `executor-data`). `hub-ai` krijgt alléén `service-token-hub-ai`.
-- De **bootstrap-code** staat in de app-logs (TrueNAS-web-UI → Apps → app → Logs) en wordt door de wizard gevraagd vóór
-  het eerste admin-account. Geen terminal nodig.
-- Credentials van externe apps (TrueNAS-API-keys, MediaGuard-`X-Api-Key`, my_house-token, …) voert de gebruiker in de UI in;
-  opslag versleuteld (AES-256-GCM, key uit vault-keyfile), alleen vault-referentie (`vault://<scope>/<naam>`) in tabellen.
-  UI toont nooit de waarde terug (alleen laatste 4 tekens + datum). Logs en evidence worden geredigeerd.
+## 3. Geheimen en koppelen
+
+- Nooit geheimen in het Custom App-formulier, in Git of in logs. Elke app maakt bij eerste start ontbrekende geheimen
+  aan in `/appdata/secrets/` (0600, eigenaar 568, nooit overschrijven): eigen DB-wachtwoord/socket, `vault.key`
+  (AES-256-GCM voor opgeslagen credentials), eigen Ed25519-identiteit. De Hub maakt daarnaast `policy-signing.ed25519`,
+  `jwt-signing.ed25519` en de eenmalige setupcode (alleen in de logs).
+- **Eigen apps aanmelden bij de Hub (enrollment):** bij installatie via de API geeft de Hub alleen niet-geheime env mee:
+  `HUB_URL` en een **eenmalig enrollment-token** (vervalt na 60 min of na eerste gebruik). Bij eerste start roept de app
+  `POST {HUB_URL}/api/v1/services/enroll` aan, krijgt een eigen service-token + de Hub-JWKS en de publieke
+  policy-sleutel. Het token in de app-configuratie is daarna waardeloos. Handmatig geïnstalleerde apps koppelen via een
+  koppelcode uit de Hub-UI, ingevoerd op de statuspagina van de app.
+- **Executor koppelen:** de Hub-wizard toont een eenmalige koppelcode (30 min). De gebruiker opent de statuspagina van
+  de executor (`http://<NAS>:30410`), vult daar de koppelcode én de TrueNAS-API-key met schrijfrechten in. De executor
+  wisselt met de Hub publieke sleutels uit (Hub-policy-sleutel ↔ executor-identiteit), versleutelt de key in zijn eigen
+  vault en toont alleen nog de laatste 4 tekens. De Hub ziet de schrijfkey nooit. Ontkoppelen/roteren via dezelfde pagina.
+- Credentials van andere apps (MediaGuard-`X-Api-Key`, my_house-token, TrueNAS-read-only-key, …) voert de gebruiker in de
+  Hub-UI in; opslag versleuteld, alleen vault-referentie (`vault://<scope>/<naam>`) in tabellen. UI toont nooit de waarde
+  terug (alleen laatste 4 tekens + datum). Logs en evidence worden geredigeerd.
 
 ## 4. Authenticatie en rollen
 
 - **Gebruikers** loggen in op de Hub (lokaal account, argon2id; optioneel OIDC via Authentik zodra B13 actief is).
   Rollen: `admin`, `operator`, `viewer`, `kind` (kinderprofiel). Sessiecookie (HttpOnly, SameSite=Strict, Secure achter
   HTTPS) + CSRF-token voor muterende webcalls.
-- **Gebruikerscontext naar diensten**: hub-api geeft kortlevende JWT's (EdDSA, `iss=hub`, `aud=<dienst>`, `sub`, `roles`,
-  `exp ≤ 120 s`). JWKS: `GET http://hub-api:8000/api/v1/auth/jwks`. Diensten met ACL (search-ai, jelly-leon-plugin)
+- **Gebruikerscontext naar diensten**: de Hub-API geeft kortlevende JWT's (EdDSA, `iss=hub`, `aud=<dienst>`, `sub`, `roles`,
+  `exp ≤ 120 s`). JWKS: `GET {HUB_URL}/api/v1/auth/jwks`. Diensten met ACL (search-ai, jelly-leon-plugin)
   dwingen rol/ACL zelf af op basis van deze JWT.
-- **Dienst-naar-dienst**: `Authorization: Bearer <service-token>` (per dienst eigen token uit `jl-secrets`); hub-api
+- **Dienst-naar-dienst**: `Authorization: Bearer <service-token>` (per app eigen token uit de enrollment); de Hub
   houdt het register en kan roteren zonder herinstallatie.
 - Diensten zonder geldige auth → 401 `{code:"unauthorized"}`; nooit "open access" bij verlopen/ingetrokken credentials
   (EX16): connector wordt `unknown` + incident.
@@ -116,7 +135,7 @@ delta-matrix ze als ontbrekend markeert.
  "actor":{"type":"system|user|ai|flow","id":"<id>"},"classification":"public|internal|sensitive",
  "payload":{…geschoond…},"payload_ref":null}
 ```
-- Push: `POST http://hub-api:8000/api/v1/events/inbox` (service-token). Dedupe op `event_id` én `(source_app, source_event_id)`.
+- Push: `POST {HUB_URL}/api/v1/events/inbox` (service-token). Dedupe op `event_id` én `(source_app, source_event_id)`.
 - Bron houdt een outbox (retry met backoff, dead-letter na 10 pogingen, zichtbaar in Hub). Zonder native events: Hub pollt
   `/connector/v1/events` of bestaande routes met cursor/ETag/watermark. Geen exact-once-aanname.
 - `event_type`-namen: `<domein>.<object>.<gebeurtenis>` (bv. `app.health.changed`, `backup.run.failed`,
@@ -124,10 +143,11 @@ delta-matrix ze als ontbrekend markeert.
 
 ## 8. Risicobeleid, voorstel, goedkeuring en executor
 
-**Stroom:** (AI, gebruiker, Node-RED-flow of spraak) → `ActionProposal` → **policy-engine in hub-api** (deterministisch,
-policybestanden read-only gemount uit `ai-server-manager/policy/*.yaml`, hash `policy_hash` vastgelegd) → bij R0/R1
-automatisch (allowlist, cooldown, anti-flap), bij R2/R3 **menselijke goedkeuring per gebonden diff** → hub-api ondertekent
-`ExecutionRequest` (Ed25519) → `hub-executor` of de eigenaar-connector voert uit → readback → audit.
+**Stroom:** (AI, gebruiker, Node-RED-flow of spraak) → `ActionProposal` → **policy-engine in de Hub** (deterministisch,
+policybestanden `ai-server-manager/policy/*.yaml` ingebakken in de Hub- én executor-image, read-only, hash `policy_hash`
+vastgelegd; de AI-runner draait als aparte gebruiker zonder toegang tot signing keys of vault) → bij R0/R1
+automatisch (allowlist, cooldown, anti-flap), bij R2/R3 **menselijke goedkeuring per gebonden diff** → de Hub ondertekent
+`ExecutionRequest` (Ed25519) → de executor-app of de eigenaar-connector voert uit → readback → audit.
 
 `ActionProposal`:
 ```json
@@ -155,9 +175,9 @@ afwijking → stop + incident. Executor-allowlist v1:
 | action_id | klasse (min.) | TrueNAS-API (versie-afhankelijk via `core.get_methods`) |
 |---|---|---|
 | `app.restart` / `app.stop` / `app.start` | R1 (niet-kritiek) / R2 (kritiek, netwerk, DNS, auth) | `app.redeploy` / `app.stop` / `app.start` |
-| `app.install` | R2 | `app.create` (custom compose uit gevalideerd manifest) |
-| `app.update` | R2 | `app.update` (nieuwe gepinde compose) |
-| `app.rollback` | R2 (R3 bij DB-restore) | vorige compose + snapshot-restore via eigenaar |
+| `app.install` | R2 | `app.create` als standaard Custom App (`ix-app`-waarden) of catalogusapp — nooit custom compose |
+| `app.update` | R2 | `app.update` (nieuwe gepinde image-tag/waarden) of `app.upgrade` (catalogusapp, vaste versie) |
+| `app.rollback` | R2 (R3 bij DB-restore) | vorige waarden/versie (`app.rollback` waar ondersteund) + snapshot-restore via eigenaar |
 | `app.uninstall` | R2 (container-only; data blijft) | `app.delete` met `remove_ix_volumes=false` |
 | `app.uninstall_data` | R3 (aparte bevestiging, nooit door AI aangeboden) | — standaard **niet** aangeboden |
 | `zfs.snapshot.create` | R1 | `pool.snapshot.create` / `zfs.snapshot.create` |
@@ -172,14 +192,16 @@ heeft een key met schrijfrechten, en die key voert de gebruiker in de wizard in.
 ## 9. Manifeststandaard (B08-001, eigenaar `appstore-en-fork`)
 
 `manifest_version: "1"` YAML met o.a.: `app_id`, `name`, `owner_repo`, `category`, `description_nl`,
-`version`, `images: [{name, repository, tag, digest}]` (tag ≠ `latest`, digest verplicht voor upstream-images; voor eigen
-GHCR-images vult de release-CI de digest), `compose` (TrueNAS custom-compose-sjabloon met `${…}`-parameters),
+`version`, `install: {method: custom_app | catalog_app}`, bij `custom_app`: `image: {repository, tag, digest}` (één
+image; tag ≠ `latest`; digest verplicht voor upstream-images; voor eigen GHCR-images vult de release-CI de digest) +
+`custom_app: {ports, storage, env, resources, gpu, run_as}` (het formulier van de standaard Custom App), bij `catalog_app`:
+`catalog: {train, app, version}` + `values`; een `compose`-veld is **verboden**,
 `parameters` (getypt, met `source: wizard|dataset_picker|secret|generated|default`, nooit voorbeeldwaarden als echte waarde),
 `storage: [{name, mount, kind: config|data|media|scratch, required_dataset_role}]`, `network: {ports, host_network:false,
 joins_platform_network}`, `privileges: {privileged:false, cap_add:[], devices:[], gpu:none|intel_render}` + `privilege_reason`,
 `healthcheck`, `backup: {db_export, snapshot_datasets, rpo, rto}`, `dependencies`, `sso: oidc|native|none`,
 `risk: {install, update, uninstall}`, `upgrade: {migrations, tag_only_rollback_safe: bool}`, `decisions_required: [D01…]`,
-`docs: [I-/A-doc]`, `validation_status`. Weigeren vóór uitvoering (EX47): `privileged`, Docker-socket, hostpad
+`docs: [I-/A-doc]`, `validation_status`. Weigeren vóór uitvoering (EX47): compose/YAML-installatie, `privileged`, Docker-socket, hostpad
 `/`, `/mnt` zonder dataset, `/etc`, `/var/run`, `/root`, host network zonder reden, `latest`, ontbrekende digest.
 
 ## 10. Repo-indeling nieuwe Python-diensten
@@ -187,21 +209,26 @@ joins_platform_network}`, `privileges: {privileged:false, cap_add:[], devices:[]
 ```
 apps/api/            pyproject.toml, src/<pakket>/…, alembic/, tests/{unit,integration}
 apps/web/            (alleen ai-server-manager) Next.js PWA + Playwright (360/390/768/1440)
-apps/executor/       (alleen ai-server-manager)
+apps/executor/       (alleen ai-server-manager; eigen image)
 policy/              (alleen ai-server-manager) policy YAML + hash
-deploy/truenas/      compose.yaml (TrueNAS custom app), README_INSTALLATIE.md
-deploy/manifest/     <app_id>.manifest.yaml (manifeststandaard §9)
-.env.example         alle variabelen gedocumenteerd, géén echte waarden
+deploy/allinone/     Dockerfile (alles-in-één), supervisor, healthcheck, first-start-init (zie MSO als voorbeeld)
+deploy/truenas/      CUSTOM_APP.md: exacte velden van het standaard Custom App-formulier (NL), geen YAML
+deploy/dev/          compose.yaml alleen voor ontwikkeling/CI (expliciet géén installatiemethode)
+deploy/manifest/     <app_id>.manifest.yaml (manifeststandaard §9, install.method custom_app)
+.env.example         alle variabelen gedocumenteerd, géén echte waarden (voor ontwikkeling; de Custom App heeft geen
+                     verplichte variabelen)
 docs/openapi/        geëxporteerde OpenAPI
 docs/adr/            ADR-0001… (keuzes en waarom)
 docs/platform-v2/    pakketdocs + DELTA_MATRIX.md (bestaande repos) + EVIDENCE.json
 tests/e2e/           dienst-E2E met simulators
 .github/workflows/   ci.yml (ruff, mypy, pytest + postgres-service, alembic up/down, openapi-drift, pip-audit,
-                     docker build, Playwright waar UI), release.yml (tag → GHCR push, SBOM, digest in release/digests.json)
-Makefile, VERSION (start 0.1.0), CHANGELOG.md, LICENSE-keuze laten aan gebruiker (geen licentie toevoegen zonder vraag)
+                     alles-in-één image bouwen en starten met healthcheck), release.yml (tag → GHCR push, SBOM,
+                     digest in release/digests.json)
+Makefile, VERSION (start 0.1.0), CHANGELOG.md, geen licentie toevoegen zonder vraag aan de gebruiker
 ```
-Container: niet-root (UID/GID 568:568, zoals TrueNAS-apps), read-only rootfs waar mogelijk, `cap_drop: [ALL]`,
-`no-new-privileges`, resource-limits in compose, healthcheck.
+Container: start als root alleen voor eigenaarschap van `/appdata`, daarna alle processen als 568:568,
+`no-new-privileges`, geen extra capabilities, geen Docker-socket, healthcheck; resource-limieten worden in het
+formulier/de API-waarden gezet.
 
 ## 11. Bewijs en Excel (EVIDENCE.json)
 
