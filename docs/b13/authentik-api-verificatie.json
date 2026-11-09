@@ -1,0 +1,594 @@
+{
+  "checked_on": "2026-11-09",
+  "source": "https://raw.githubusercontent.com/goauthentik/authentik/version/{version}/schema.yml",
+  "tool": "tools/authentik_schema_check.py",
+  "used_api": [
+    {
+      "method": "GET",
+      "path": "/admin/version/",
+      "purpose_nl": "versiedetectie",
+      "tasks": [
+        "B13-002",
+        "B13-005"
+      ],
+      "params": [],
+      "schema": "Version",
+      "fields": [
+        "version_current",
+        "build_hash"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/users/me/",
+      "purpose_nl": "rechten van het API-token (least privilege)",
+      "tasks": [
+        "B13-004"
+      ],
+      "params": [],
+      "schema": "UserSelf",
+      "fields": [
+        "username",
+        "is_superuser"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/users/",
+      "purpose_nl": "gebruikers met groepen (rechtenkaart)",
+      "tasks": [
+        "B13-004",
+        "B13-005"
+      ],
+      "params": [
+        "include_groups",
+        "page",
+        "page_size"
+      ],
+      "schema": "User",
+      "fields": [
+        "pk",
+        "username",
+        "is_active",
+        "is_superuser",
+        "groups_obj",
+        "type"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/groups/",
+      "purpose_nl": "groepen met leden (rechtenkaart, groepen → rollen)",
+      "tasks": [
+        "B13-003",
+        "B13-004",
+        "B13-005"
+      ],
+      "params": [
+        "include_users",
+        "page",
+        "page_size"
+      ],
+      "schema": "Group",
+      "fields": [
+        "pk",
+        "name",
+        "is_superuser",
+        "users_obj"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/flows/instances/",
+      "purpose_nl": "flows (autorisatie/invalidatie)",
+      "tasks": [
+        "B13-002",
+        "B13-005"
+      ],
+      "params": [
+        "designation",
+        "slug"
+      ],
+      "schema": "Flow",
+      "fields": [
+        "pk",
+        "slug",
+        "designation",
+        "name"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/flows/instances/{slug}/export/",
+      "purpose_nl": "flow-export als blueprint",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [],
+      "schema": null,
+      "fields": [],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/providers/oauth2/",
+      "purpose_nl": "bestaande OAuth2-providers",
+      "tasks": [
+        "B13-002",
+        "B13-005"
+      ],
+      "params": [
+        "name",
+        "client_id"
+      ],
+      "schema": "OAuth2Provider",
+      "fields": [
+        "pk",
+        "name",
+        "client_id",
+        "client_type",
+        "redirect_uris",
+        "authorization_flow",
+        "invalidation_flow",
+        "property_mappings",
+        "signing_key",
+        "sub_mode",
+        "issuer_mode",
+        "include_claims_in_id_token",
+        "access_code_validity",
+        "access_token_validity",
+        "assigned_application_slug"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/applications/",
+      "purpose_nl": "bestaande applicaties",
+      "tasks": [
+        "B13-002",
+        "B13-005"
+      ],
+      "params": [
+        "slug"
+      ],
+      "schema": "Application",
+      "fields": [
+        "pk",
+        "slug",
+        "name",
+        "provider",
+        "meta_launch_url",
+        "policy_engine_mode"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/propertymappings/provider/scope/",
+      "purpose_nl": "standaard OIDC-scopes",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [
+        "managed"
+      ],
+      "schema": "ScopeMapping",
+      "fields": [
+        "pk",
+        "name",
+        "managed",
+        "scope_name",
+        "expression"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/crypto/certificatekeypairs/",
+      "purpose_nl": "ondertekeningssleutels (alleen vingerafdruk)",
+      "tasks": [
+        "B13-002",
+        "B13-005"
+      ],
+      "params": [
+        "has_key"
+      ],
+      "schema": "CertificateKeyPair",
+      "fields": [
+        "pk",
+        "name",
+        "fingerprint_sha256",
+        "cert_expiry",
+        "private_key_available"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/events/events/",
+      "purpose_nl": "logins en wijzigingen (audit)",
+      "tasks": [
+        "B13-004"
+      ],
+      "params": [
+        "ordering",
+        "action",
+        "page",
+        "page_size"
+      ],
+      "schema": "Event",
+      "fields": [
+        "pk",
+        "action",
+        "app",
+        "context",
+        "client_ip",
+        "created",
+        "user"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/events/events/",
+      "purpose_nl": "meerdere acties per verzoek",
+      "tasks": [
+        "B13-004"
+      ],
+      "params": [
+        "actions"
+      ],
+      "schema": null,
+      "fields": [],
+      "since": "2025.8",
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/authenticators/admin/all/",
+      "purpose_nl": "MFA-apparaten van beheerders (alleen type/naam)",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [
+        "user"
+      ],
+      "schema": "Device",
+      "fields": [
+        "type",
+        "name",
+        "confirmed"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/authenticated_sessions/",
+      "purpose_nl": "sessies (voorstel intrekken)",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [
+        "user__username"
+      ],
+      "schema": "AuthenticatedSession",
+      "fields": [
+        "uuid",
+        "user",
+        "last_used",
+        "expires"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/core/brands/",
+      "purpose_nl": "brand-flows",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [],
+      "schema": "Brand",
+      "fields": [
+        "brand_uuid",
+        "domain",
+        "default",
+        "flow_authentication",
+        "flow_invalidation",
+        "flow_recovery",
+        "web_certificate"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/managed/blueprints/",
+      "purpose_nl": "blueprint-instanties",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [],
+      "schema": "BlueprintInstance",
+      "fields": [
+        "pk",
+        "name",
+        "path",
+        "enabled",
+        "status",
+        "last_applied_hash"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/outposts/instances/",
+      "purpose_nl": "outposts (moeten mee-upgraden)",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [],
+      "schema": "Outpost",
+      "fields": [
+        "pk",
+        "name",
+        "type",
+        "providers",
+        "managed"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "GET",
+      "path": "/policies/bindings/",
+      "purpose_nl": "groepsbindingen aan een applicatie",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [
+        "target"
+      ],
+      "schema": "PolicyBinding",
+      "fields": [
+        "pk",
+        "target",
+        "group",
+        "order",
+        "enabled",
+        "negate"
+      ],
+      "since": null,
+      "executed_in_this_version": true
+    },
+    {
+      "method": "POST",
+      "path": "/providers/oauth2/",
+      "purpose_nl": "OIDC-provider voor de Hub aanmaken",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": "OAuth2ProviderRequest",
+      "fields": [
+        "name",
+        "authorization_flow",
+        "invalidation_flow",
+        "client_type",
+        "redirect_uris",
+        "property_mappings",
+        "signing_key",
+        "sub_mode",
+        "issuer_mode",
+        "include_claims_in_id_token",
+        "access_code_validity",
+        "access_token_validity"
+      ],
+      "since": null,
+      "executed_in_this_version": false
+    },
+    {
+      "method": "POST",
+      "path": "/providers/oauth2/",
+      "purpose_nl": "grant types beperken",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": "OAuth2ProviderRequest",
+      "fields": [
+        "grant_types"
+      ],
+      "since": "2026.5",
+      "executed_in_this_version": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/providers/oauth2/{id}/",
+      "purpose_nl": "bestaande provider bijwerken",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": null,
+      "fields": [],
+      "since": null,
+      "executed_in_this_version": false
+    },
+    {
+      "method": "POST",
+      "path": "/core/applications/",
+      "purpose_nl": "applicatie voor de Hub aanmaken",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": "ApplicationRequest",
+      "fields": [
+        "name",
+        "slug",
+        "provider",
+        "meta_launch_url",
+        "policy_engine_mode"
+      ],
+      "since": null,
+      "executed_in_this_version": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/core/applications/{slug}/",
+      "purpose_nl": "bestaande applicatie bijwerken",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": null,
+      "fields": [],
+      "since": null,
+      "executed_in_this_version": false
+    },
+    {
+      "method": "POST",
+      "path": "/policies/bindings/",
+      "purpose_nl": "groep aan de applicatie binden",
+      "tasks": [
+        "B13-002"
+      ],
+      "params": [],
+      "schema": "PolicyBindingRequest",
+      "fields": [
+        "target",
+        "group",
+        "order",
+        "enabled",
+        "negate"
+      ],
+      "since": null,
+      "executed_in_this_version": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/core/authenticated_sessions/{uuid}/",
+      "purpose_nl": "sessie intrekken",
+      "tasks": [
+        "B13-005"
+      ],
+      "params": [],
+      "schema": null,
+      "fields": [],
+      "since": null,
+      "executed_in_this_version": false
+    }
+  ],
+  "results": [
+    {
+      "version": "2024.10.5",
+      "schema_sha256": "8cd04822fb4b70f1d7886bf2bbdd9a1fac94aada3f7edec7be55e23625a397a2",
+      "expected_sha256": "8cd04822fb4b70f1d7886bf2bbdd9a1fac94aada3f7edec7be55e23625a397a2",
+      "uses_checked": 23,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2024.12.5",
+      "schema_sha256": "d645bd2a93fa37ff654472ad64f5e8a49d1a33d464d14efd8dcdae4f5f09316b",
+      "expected_sha256": "d645bd2a93fa37ff654472ad64f5e8a49d1a33d464d14efd8dcdae4f5f09316b",
+      "uses_checked": 23,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.2.4",
+      "schema_sha256": "79917aed043a62f1c86b98940e886c61792fce4a704ff51c0740d6eac41a9fa2",
+      "expected_sha256": "79917aed043a62f1c86b98940e886c61792fce4a704ff51c0740d6eac41a9fa2",
+      "uses_checked": 23,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.4.4",
+      "schema_sha256": "25147a40c218af7c83d0a52e5cb024ce99088c671bc57bab80e8ff5967b101a0",
+      "expected_sha256": "25147a40c218af7c83d0a52e5cb024ce99088c671bc57bab80e8ff5967b101a0",
+      "uses_checked": 23,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.6.4",
+      "schema_sha256": "07f2c426ea6f5e5db3907d6a9c0e00dc271a42828f7824cb3c6bcef8dd6ec237",
+      "expected_sha256": "07f2c426ea6f5e5db3907d6a9c0e00dc271a42828f7824cb3c6bcef8dd6ec237",
+      "uses_checked": 23,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.8.6",
+      "schema_sha256": "8a80360a6fb650835fee40443e1c52b6a3b97967efb8909b2d76553bb590094b",
+      "expected_sha256": "8a80360a6fb650835fee40443e1c52b6a3b97967efb8909b2d76553bb590094b",
+      "uses_checked": 24,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.10.4",
+      "schema_sha256": "1535f008f9654914108388707b67861aece56ecb314a50099ac79d496872fc2d",
+      "expected_sha256": "1535f008f9654914108388707b67861aece56ecb314a50099ac79d496872fc2d",
+      "uses_checked": 24,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2025.12.6",
+      "schema_sha256": "50b9c78a4a3c2818c5acf6f2dbc80faef4c20c62901562a7a98ebb15251d153d",
+      "expected_sha256": "50b9c78a4a3c2818c5acf6f2dbc80faef4c20c62901562a7a98ebb15251d153d",
+      "uses_checked": 24,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2026.2.7",
+      "schema_sha256": "91a195e4695d4149c1824d10af6b02c6f1492974a63bec4fd9e2b9fa9aca8207",
+      "expected_sha256": "91a195e4695d4149c1824d10af6b02c6f1492974a63bec4fd9e2b9fa9aca8207",
+      "uses_checked": 24,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2026.5.8",
+      "schema_sha256": "b65a9a9e1a9ed93ce088f1f3f05d42432b327b0f6c1f2c18b0743995dd8b11fa",
+      "expected_sha256": "b65a9a9e1a9ed93ce088f1f3f05d42432b327b0f6c1f2c18b0743995dd8b11fa",
+      "uses_checked": 25,
+      "problems": [],
+      "ok": true
+    },
+    {
+      "version": "2026.8.5",
+      "schema_sha256": "1ffe03e3650de36497946fcc2229d0d913ac46fc49236583b0bbf15f91505cfe",
+      "expected_sha256": "1ffe03e3650de36497946fcc2229d0d913ac46fc49236583b0bbf15f91505cfe",
+      "uses_checked": 25,
+      "problems": [],
+      "ok": true
+    }
+  ],
+  "all_ok": true
+}
