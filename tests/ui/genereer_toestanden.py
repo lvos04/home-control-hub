@@ -32,10 +32,19 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "apps" / "api"))
 
 from fastapi.testclient import TestClient  # noqa: E402
-from tests.conftest import HUB_URL, PAIR_CODE, FakeHub, HubKeys, idem, recreate_database  # noqa: E402
+from tests.conftest import (  # noqa: E402
+    BROWSER_HEADERS,
+    HUB_URL,
+    PAIR_CODE,
+    FakeHub,
+    HubKeys,
+    idem,
+    recreate_database,
+)
 
 from integrations.app import create_app  # noqa: E402
 from integrations.config import Settings  # noqa: E402
+from integrations.hublink_store import LinkState, Pending  # noqa: E402
 from integrations.migrations import upgrade  # noqa: E402
 
 DB_NAAM = "hch_ui_toestanden"
@@ -49,6 +58,9 @@ TRACE = {
     "ontkoppeld": "f1d3b5a7-2c49-4e6b-9a8d-7e0c2f4b1d06",
     "niet-gereed": "a8c1e3f5-6d27-4b9a-8c4e-0f2b5d7a9c07",
     "onleesbaar": "b4d6f8a1-3e5c-4a7b-9d2f-8c1e0a3b5d08",
+    "koppelen-bezig": "c2e4a6b8-1d3f-4a5c-8e7b-9f0a1b2c3d09",
+    "herkomst-geweigerd": "d5f7b9c1-2e4a-4b6d-9f8c-0a1b2c3d4e10",
+    "domeinnaam": "e6a8c0d2-3f5b-4c7e-8a9d-1b2c3d4e5f11",
 }
 
 
@@ -64,7 +76,10 @@ class Toestanden:
         data.mkdir()
         base: dict[str, Any] = {"data_dir": data, "database_url": self.url, "allow_loopback_hub": False}
         base.update(settings)
-        client = TestClient(create_app(Settings(**base), transport=hub.transport), client=("192.0.2.40", 50000))
+        # Origin/Sec-Fetch-Site zoals een browser bij een formulier-POST van de eigen pagina (contract 1.3 §3.7)
+        client = TestClient(
+            create_app(Settings(**base), transport=hub.transport), client=("192.0.2.40", 50000), headers=BROWSER_HEADERS
+        )
         client.__enter__()
         return client
 
@@ -116,6 +131,9 @@ def main() -> int:
         ontkoppeld,
         niet_gereed,
         onleesbaar,
+        koppelen_bezig,
+        herkomst_geweigerd,
+        domeinnaam,
     ]
     for stap in stappen:
         stap(t)
@@ -214,6 +232,56 @@ def onleesbaar(t: Toestanden) -> None:
     (t.tmp / "onleesbaar" / "secrets" / "hub-link.json").write_text("geen json", encoding="utf-8")
     r = _get(c, "onleesbaar")
     t.bewaar("onleesbaar", r, "koppelbestand onleesbaar: fail-closed", ["Code <code>koppelstatus_onleesbaar</code>"])
+
+
+def koppelen_bezig(t: Toestanden) -> None:
+    c = t.app("koppelen-bezig", FakeHub(HubKeys()))
+
+    def bezig(st: LinkState) -> LinkState:
+        st.pending = Pending(
+            kind="token", secret_sha256="f" * 64, hub_url=HUB_URL, started_at="2026-11-10T11:54:00Z", attempts=2
+        )
+        return st
+
+    c.app.state.hublink_store.update(bezig)
+    r = _get(c, "koppelen-bezig")
+    t.bewaar(
+        "koppelen-bezig",
+        r,
+        "nog nooit gekoppeld, er loopt een koppelpoging (env-token): geen formulier (Peil 1.1.1, E02)",
+        ["Koppelen bezig</span>", "Niet gekoppeld</span>"],
+    )
+    if 'action="/koppelen"' in r.text:
+        raise SystemExit("koppelen-bezig: het formulier hoort weg te zijn")
+
+
+def herkomst_geweigerd(t: Toestanden) -> None:
+    hub = FakeHub(HubKeys())
+    c = t.app("herkomst-geweigerd", hub)
+    data = {"csrf": _csrf(c), "hub_adres": HUB_URL, "koppelcode": PAIR_CODE, "hub_vingerafdruk": hub.fingerprint()}
+    r = c.post(
+        "/koppelen",
+        data=data,
+        headers={"X-Trace-Id": TRACE["herkomst-geweigerd"], "Origin": "null"},
+        follow_redirects=False,
+    )
+    t.bewaar(
+        "herkomst-geweigerd",
+        r,
+        "formulier-POST met Origin: null: 403 herkomst_onjuist, niets naar de Hub (contract 1.3 §3.7)",
+        ["Code <code>herkomst_onjuist</code>"],
+    )
+
+
+def domeinnaam(t: Toestanden) -> None:
+    c = t.app("domeinnaam", FakeHub(HubKeys()))
+    r = c.get("/", headers={"X-Trace-Id": TRACE["domeinnaam"], "Host": "nas.voorbeeld.nl:30420"})
+    t.bewaar(
+        "domeinnaam",
+        r,
+        "pagina geopend via een publieke domeinnaam: melding dat koppelen hier niet kan (contract 1.3 §3.7 punt 4)",
+        ["Code <code>host_niet_toegestaan</code>"],
+    )
 
 
 if __name__ == "__main__":

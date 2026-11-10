@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from integrations.security.hubkeys import sha256_hex
 from integrations.status_page import PairThrottle
-from tests.conftest import HUB_URL, PAIR_CODE, FakeHub, idem, pair
+from tests.conftest import BROWSER_HEADERS, HUB_URL, PAIR_CODE, FakeHub, idem, pair
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +32,8 @@ _VELD = {"hub_url": "hub_adres", "code": "koppelcode", "fingerprint": "hub_vinge
 def _code(r: Any) -> str:
     """Geslaagd → ``gekoppeld`` (303); mislukt → de vaste code op de foutpagina (HC11: direct, met trace-ID)."""
     if r.status_code == 303:
-        return str(r.headers["location"]).removeprefix("/?melding=")
+        assert str(r.headers["location"]).startswith("/?melding=")  # sleutel van deze poging (§3.7, 1.3)
+        return "gekoppeld"
     m = re.search(r"Code <code>([a-z_]+)</code>", r.text)
     assert m and r.status_code >= 400, r.status_code
     return m.group(1)
@@ -46,7 +47,7 @@ def _post(client: Any, csrf: str, **form: str) -> str:
 
 def _client_from(client: Any, ip: str) -> TestClient:
     """Zelfde app, ander bron-IP van de TCP-verbinding (TestClient kan het client-adres zetten)."""
-    c = TestClient(client.app, client=(ip, 50000))
+    c = TestClient(client.app, client=(ip, 50000), headers=BROWSER_HEADERS)
     c.cookies.update(client.cookies)
     return c
 
@@ -64,7 +65,7 @@ def test_pairing_via_status_page_requires_fingerprint_and_csrf(client: Any, fake
         headers={"Origin": "http://kwaadaardig.example"},
         follow_redirects=False,
     )
-    assert _code(r) == "ongeldig_formulier"  # cross-site formulier geweigerd
+    assert _code(r) == "herkomst_onjuist"  # cross-site formulier geweigerd (contract 1.3 §3.7)
     assert _post(c, csrf, fingerprint="") == "ongeldige_vingerafdruk"  # verplicht veld
     assert _post(c, csrf, fingerprint=fp, code="KORT") == "ongeldige_koppelcode"
     # elke poging telt mee voor de rate-limit (5 per bron-IP); voor de rest van deze test een verse teller
@@ -81,14 +82,27 @@ def test_pairing_via_status_page_requires_fingerprint_and_csrf(client: Any, fake
     assert "hub.test" not in raw  # het Hub-adres van een mislukte poging wordt nergens bewaard
     # een nieuwe code + juiste vingerafdruk (kleine letters, zonder streepjes) → gekoppeld
     code = fake_hub.sim.new_pairing_code()
-    assert _post(c, csrf, fingerprint=fp.lower().replace("-", ""), code=code.lower()) == "gekoppeld"
+    ok = c.post(
+        "/koppelen",
+        data={
+            "csrf": csrf,
+            "hub_adres": HUB_URL,
+            "koppelcode": code.lower(),
+            "hub_vingerafdruk": fp.lower().replace("-", ""),
+        },
+        follow_redirects=False,
+    )
+    assert _code(ok) == "gekoppeld"
     body = fake_hub.enroll_requests[-1]
     assert set(body) == {"app_id", "version", "base_url", "public_key_jwk"}  # + pairing_code (niet gelogd)
     last = json.loads(next(r for r in reversed(fake_hub.requests) if r.url.path == "/api/v1/services/enroll").content)
     assert set(last) == {"app_id", "pairing_code", "version", "base_url", "public_key_jwk"}
-    page = c.get("/?melding=gekoppeld").text
+    page = c.get(ok.headers["location"]).text
     assert "Gekoppeld met de Hub" in page and fp in page and "Koppelcode" not in page
+    assert 'role="status"' in page  # info na dít verzoek (Peil 1.1.1, E05)
     assert "Ontkoppelen of opnieuw koppelen gaat via de Hub" in page
+    # 1.3 §3.7: een query-parameter alleen toont nooit een melding (ook niet het oude ?melding=gekoppeld)
+    assert "Gekoppeld met de Hub" not in c.get("/?melding=gekoppeld").text
     assert "<script>" not in c.get("/?melding=<script>alert(1)</script>").text  # geen weerspiegelde invoer
 
 
@@ -286,8 +300,10 @@ def test_unreadable_link_file_stays_fail_closed_after_a_failed_env_token(
     page = client.get("/")
     assert 'action="/koppelen"' not in page.text and "koppelstatus_onleesbaar" in page.text
     client.cookies.set("hch_csrf", csrf)
+    # 1.3 §3.7: een POST uit een oud tabblad gaat niet naar de Hub en krijgt koppelstatus_onleesbaar
     assert (
-        _post(client, csrf, code=fake_hub.sim.new_pairing_code(), fingerprint=fake_hub.fingerprint()) == "al_gekoppeld"
+        _post(client, csrf, code=fake_hub.sim.new_pairing_code(), fingerprint=fake_hub.fingerprint())
+        == "koppelstatus_onleesbaar"
     )
     assert len(fake_hub.enroll_requests) == 1  # geen koppelpoging via de statuspagina
     ready = client.get("/readyz").json()["hub_link"]

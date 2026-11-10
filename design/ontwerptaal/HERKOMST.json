@@ -1,17 +1,17 @@
 {
   "ontwerptaal": "Peil",
-  "versie": "1.1.0",
+  "versie": "1.1.1",
   "bron_repo": "lvos04/ai-server-manager",
-  "bron_commit": "172ee87f15406edbe1a72dda30908abde7488e94",
+  "bron_commit": "0a7143bc0a94ed5317a9655fa785e73a1fb07ba1",
   "bron_ref": "ccr-c133d7a0-kuz1cv",
   "bestanden": {
     "statuspagina.html": {
       "bron_pad": "design/ontwerptaal/statuspagina.html",
-      "sha256": "be766cc4bf6962772a8dfc77996da34040fa94698403a9625e33545fa9ee62c8"
+      "sha256": "d352028f798934d5efb96610c42a61712e3948b8c9eec8a87f34035b89f8c80b"
     },
     "statuspagina.css": {
       "bron_pad": "design/ontwerptaal/statuspagina.css",
-      "sha256": "b1e3f789cbeaa2c928088cdac482cc8d6d11c7a5007c5d9b79005df66dd1b5af"
+      "sha256": "0f9963583a32d91232e7cfb1b7fe8a8b7612cf8349d4fcc8edc3ca545e32e91b"
     }
   },
   "toelichting": "Versie-gepinde kopie (ONTWERPTAAL §13.2/§14, O-14). Bijwerken alleen met 'python3 tools/peil_kopie.py bijwerken'; daarna tests, UI-tests en schermafdrukken opnieuw."

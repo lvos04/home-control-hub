@@ -1,9 +1,11 @@
-// Statuspagina van home-control-hub in Peil (HC11; ONTWERPTAAL §12 testmatrix en §13.2; contract 1.2 §3.7).
+// Statuspagina van home-control-hub in Peil 1.1.1 (HC11; ONTWERPTAAL §12 testmatrix en §13.2; contract 1.3 §3.7).
 // Per toestand × thema (licht/donker) × breedte (320/360/390/768/1024/1440):
 //   axe-core (wcag2a, wcag2aa, wcag21a, wcag21aa, wcag22aa + best-practice) = 0 overtredingen,
 //   geen horizontale overloop, geen JavaScript, geen CSP-overtreding of extern verzoek,
 //   aanraakdoelen ≥ 44 px, tekst ≥ 14 px, één h1, geen dubbele id's of kapotte aria-verwijzingen,
 //   eerste signaal nooit groen als de dienst niet gereed is, fout = code + selecteerbare trace-ID,
+//   meldingsrol (1.1.1, E05): role="alert" alleen bij een fout van dít verzoek, geen live-regio bij een bestaande
+//   toestand; Referrer-Policy same-origin (contract 1.3 §3.7 punt 1),
 //   Tab-doorloop met zichtbare ring ≥ 3 px (390 en 1440) en stippelranden bij forced colors.
 // De pagina's komen uit de echte app tegen de Hub-simulator (genereer_toestanden.py) — uitkomst: Sim-getest.
 // SCHERMAFDRUKKEN=1: verplichte toestanden × 360/768/1440 × licht/donker naar docs/screenshots/peil/statuspagina/.
@@ -16,7 +18,15 @@ const UIT = process.env.STATUSPAGINA_UIT ?? path.join(__dirname, 'uit');
 const AFDRUKKEN = path.resolve(__dirname, '../../docs/screenshots/peil/statuspagina');
 const BREEDTES = [320, 360, 390, 768, 1024, 1440];
 const AFDRUK_BREEDTES = [360, 768, 1440];
-const VERPLICHT = ['niet-gekoppeld', 'koppelen-mislukt', 'gekoppeld', 'ingetrokken', 'niet-gereed'];
+const VERPLICHT = [
+  'niet-gekoppeld',
+  'koppelen-mislukt',
+  'gekoppeld',
+  'ingetrokken',
+  'niet-gereed',
+  'onleesbaar',
+  'koppelen-bezig',
+];
 const THEMAS = [
   { naam: 'licht', schema: 'light' as const, achtergrond: 'rgb(238, 241, 245)' },
   { naam: 'donker', schema: 'dark' as const, achtergrond: 'rgb(10, 13, 18)' },
@@ -68,6 +78,7 @@ for (const { naam, body, meta } of toestanden()) {
       await serveer(page, body, meta, extern);
       expect(meta.headers['content-security-policy']).toContain("default-src 'none'");
       expect(meta.headers['content-security-policy']).not.toContain('script-src');
+      expect(meta.headers['referrer-policy']).toBe('same-origin');
       expect(body.startsWith('<!doctype html>')).toBe(true);
       expect(body).not.toMatch(/<script|javascript:|\son[a-z]+\s*=/i); // geen JS, ook geen event-attributen
 
@@ -123,6 +134,7 @@ for (const { naam, body, meta } of toestanden()) {
             trace: trace?.textContent ?? null,
             traceSelecteerbaar: trace ? getComputedStyle(trace).userSelect : null,
             code: document.querySelector('.melding code:not(.selecteer)')?.textContent ?? null,
+            rol: document.querySelector('.melding')?.getAttribute('role') ?? null,
             formulier: document.querySelectorAll('form[action="/koppelen"]').length,
             ontkoppelen: document.querySelectorAll('form[action="/ontkoppelen"], form[action="/beheer"]').length,
           };
@@ -149,6 +161,9 @@ for (const { naam, body, meta } of toestanden()) {
           expect(m.code, plek).toMatch(/^[a-z_]+$/);
           expect(meta.headers['x-trace-id'], plek).toBe(m.trace);
         }
+        // meldingsrol (Peil 1.1.1, E05): alert = fout van dít verzoek (met trace-ID); een bestaande toestand zonder rol
+        if (m.trace !== null) expect(m.rol, `${plek}: rol bij een fout van dit verzoek`).toBe('alert');
+        else expect(m.rol, `${plek}: geen alert bij een bestaande toestand`).not.toBe('alert');
         if (m.titel.includes('koppelen mislukt')) {
           expect(meta.status, plek).toBeGreaterThanOrEqual(400);
           expect(m.trace, plek).not.toBeNull();

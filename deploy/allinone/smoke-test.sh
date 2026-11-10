@@ -131,7 +131,7 @@ check "healthcheck wordt healthy" "wait_healthy $NAME"
 check "/healthz geeft 200" "http_has /healthz '\"status\":\"ok\"'"
 check "/readyz geeft ready" "http_has /readyz '\"ready\"'"
 check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingerafdrukveld" \
-  "http_has / 'Peil statuspagina-sjabloon 1.1.0' && http_has / 'Niet gekoppeld' && http_has / 'name=\"hub_vingerafdruk\"'"
+  "http_has / 'Peil statuspagina-sjabloon 1.1.1' && http_has / 'Niet gekoppeld' && http_has / 'name=\"hub_vingerafdruk\"'"
 check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"
 check "API zonder token geeft 401 unauthorized (not_linked)" \
   "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"

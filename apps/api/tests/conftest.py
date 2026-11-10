@@ -34,6 +34,9 @@ PAIR_CODE = "KOPP-ELCO-DE42"  # normaliseert naar 12 Crockford-tekens (O→0, L�
 HUB_URL = "http://hub.test:30400"
 AUTHENTIK_URL = "http://authentik.test:9000"
 SIM_CLIENT_IP = "192.0.2.10"  # RFC 5737-documentatieadres; alleen voor de rate-limit van de nep-Hub
+#: wat een browser bij een formulier-POST van de eigen pagina meestuurt (contract 1.3 §3.7): Origin = schema://Host van
+#: de TestClient (``http://testserver``; 'testserver' is een naam zonder punt en dus een toegestane Host)
+BROWSER_HEADERS = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
 
 
 def _load_sim_hub() -> Any:
@@ -301,7 +304,7 @@ def app_factory(make_settings: Callable[..., Settings], fake_hub: FakeHub) -> Ca
 
     def _make(**overrides: Any) -> TestClient:
         app = create_app(make_settings(**overrides), transport=fake_hub.transport)
-        client = TestClient(app)
+        client = TestClient(app, headers=BROWSER_HEADERS)
         client.__enter__()
         clients.append(client)
         return client

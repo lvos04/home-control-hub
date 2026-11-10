@@ -388,6 +388,36 @@ def niet_gereed(r: Review) -> None:
         r.bekijk(d, "eigen database onbereikbaar: niet gereed (Storing)", GET, ["Nee — de eigen database"])
 
 
+def herkomst(r: Review) -> None:
+    """Contract 1.3 §3.7 punt 6 (C1.3-HCH-01): Chromium verstuurt het ECHTE formulier tegen de ECHTE dienst. Eerst de
+    negatieve gevallen (Origin null, vreemde Origin, Sec-Fetch-Site same-site en cross-site, geen cookie, een
+    niet-toegestane Host): elk 403 met de vaste code, en de Hub-simulator mag daarna geen enkel enroll-verzoek hebben
+    gezien en de koppelstatus is ongewijzigd. Daarna koppelt hetzelfde formulier wél (303)."""
+    code, vinger = r.koppelcode()
+    uit = r.uit / "herkomst"
+    with r.dienst("herkomst") as d:
+        poort = int(d.url.rsplit(":", 1)[1])
+        pad = r.tmp / "herkomst.plan.json"
+        plan = {"url": d.url, "poort": poort, "hub": r.hub, "code": code, "vinger": vinger, "uit": str(uit)}
+        pad.write_text(json.dumps(plan), encoding="utf-8")
+        voor = len(httpx.get(f"{r.hub}/sim/state", timeout=5).json()["enroll_requests"])
+        for fase in ("negatief", "positief"):
+            res = subprocess.run(
+                ["node", str(HIER / "herkomst.mjs"), str(pad)], cwd=HIER, env={**os.environ, "HERKOMST_FASE": fase}
+            )
+            if res.returncode != 0:
+                raise SystemExit(f"herkomst ({fase}): browsertest mislukt; zie {uit}")
+            if fase == "negatief":
+                na = len(httpx.get(f"{r.hub}/sim/state", timeout=5).json()["enroll_requests"])
+                link = httpx.get(f"{d.url}/readyz", timeout=10).json()["hub_link"]
+                if na != voor or link["state"] != "nooit_gekoppeld" or link["koppelen_bezig"]:
+                    raise SystemExit(
+                        f"herkomst: een geweigerd formulier bereikte de Hub of wijzigde de koppeling: {link}"
+                    )
+        if httpx.get(f"{d.url}/readyz", timeout=10).json()["hub_link"]["state"] != "gekoppeld":
+            raise SystemExit("herkomst: het echte formulier koppelde niet")
+
+
 def onleesbaar(r: Review) -> None:
     with r.dienst("onleesbaar") as d:
         (d.data / "secrets" / "hub-link.json").write_text("geen json", encoding="utf-8")
@@ -444,12 +474,15 @@ TOESTANDEN: list[Callable[[Review], None]] = [
     ontkoppeld,
     niet_gereed,
     onleesbaar,
+    herkomst,
 ]
 
 
 #: rijen waarvan de laatste meting oud is (testdata): die mogen nooit groen zijn (Peil §4.1/§4.4, 05_OPERATIES)
 VEROUDERD = {"gekoppeld-met-bronnen": ["Authentik en toegangsbeheer (B13)"]}
 NOOIT_GROEN = re.compile(r"^(Onbekend|Verouderd|Niet |Ontkoppeld|Ingetrokken|Koppelen bezig|Onleesbaar|Onvolledig)")
+#: groen mag alleen met het vaste Peil-woord: "Gezond" in een rij, "Alles gezond" in de totaalpil (Peil §11.1)
+GROENE_WOORDEN = {"Gezond", "Alles gezond"}
 
 
 def beoordeel(uit: Path, verwacht: int | None = None) -> int:
@@ -491,7 +524,10 @@ def beoordeel(uit: Path, verwacht: int | None = None) -> int:
             for pil in run["pillen"]:
                 if not pil["icoon"] or not pil["woord"]:
                     peil.append(f"pil zonder icoon of woord: {pil}")
-                if pil["klasse"] == "pil-gezond" and (pil["woord"] != "Gezond" or NOOIT_GROEN.match(pil["woord"])):
+                woord_ok = pil["woord"] in GROENE_WOORDEN and (
+                    pil["woord"] != "Alles gezond" or pil is run["pillen"][0]
+                )
+                if pil["klasse"] == "pil-gezond" and (not woord_ok or NOOIT_GROEN.match(pil["woord"])):
                     peil.append(f"groen voor '{pil['woord']}'")
                 if pil["klasse"] == "pil-gezond" and pil["rij"] in VEROUDERD.get(naam, []):
                     peil.append(f"verouderde meting groen: {pil['rij']}")
@@ -543,7 +579,7 @@ def beoordeel(uit: Path, verwacht: int | None = None) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--uit", type=Path, default=HIER / "review-uit")
-    p.add_argument("--breedtes", default="320,360,390,768,1440")
+    p.add_argument("--breedtes", default="320,360,390,768,1024,1440")  # contract 1.3 §13 = ONTWERPTAAL §12
     p.add_argument("--alleen", default="", help="komma-gescheiden namen (zoals niet-gekoppeld)")
     args = p.parse_args()
     args.uit = args.uit.resolve()

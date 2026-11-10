@@ -1,4 +1,4 @@
-"""Integratie (PostgreSQL, Hub-simulator): ``GET /`` en ``POST /koppelen`` in Peil (HC11, contract 1.2 §3.7,
+"""Integratie (PostgreSQL, Hub-simulator): ``GET /`` en ``POST /koppelen`` in Peil 1.1.1 (HC11, contract 1.3 §3.7,
 ONTWERPTAAL §13.2) per toestand — niet gekoppeld, koppelen mislukt, gekoppeld, ingetrokken, ontkoppeld, niet gereed en
 onleesbaar — met HTTP-status, vaste code en de trace-ID van het verzoek. Sim-getest."""
 
@@ -64,7 +64,8 @@ def _veiligheid(r: Any) -> None:
     assert r.headers["content-security-policy"] == CSP
     assert r.headers["x-frame-options"] == "DENY" and r.headers["cache-control"] == "no-store"
     assert r.headers["content-type"].startswith("text/html") and "<script" not in r.text.lower()
-    assert r.text.startswith("<!doctype html>\n<!-- Peil statuspagina-sjabloon 1.1.0 · sha256:")
+    assert r.text.startswith("<!doctype html>\n<!-- Peil statuspagina-sjabloon 1.1.1 · sha256:")
+    assert r.headers["referrer-policy"] == "same-origin"  # contract 1.3 §3.7 punt 1 (nooit no-referrer)
 
 
 # ------------------------------------------------------------------ niet gekoppeld
@@ -104,8 +105,10 @@ def test_failed_pairing_shows_code_trace_id_and_field_error(
     # ingevulde waarden worden nooit teruggetoond; het formulier blijft (de dienst is nog nooit gekoppeld)
     assert "AAAA-BBBB-CCCC" not in r.text and fake_hub.fingerprint() not in r.text and "hub.test" not in r.text
     assert 'action="/koppelen"' in r.text and _totaal(r.text)[0] != "gezond"
-    # de trace-ID is terug te vinden in de log en in het auditspoor
-    assert any(tid in rec.getMessage() and "hub_weigerde" in rec.getMessage() for rec in caplog.records)
+    assert re.search(r'<div class="melding melding-fout" role="alert"', r.text)  # fout van dít verzoek (E05)
+    # de trace-ID is terug te vinden in de log (precies één regel per poging, §3.7) en in het auditspoor
+    regels = [rec.getMessage() for rec in caplog.records if tid in rec.getMessage()]
+    assert len(regels) == 1 and "code=hub_weigerde" in regels[0] and "hub.test" not in regels[0]
     with client.app.state.db.sessions() as s:
         rij = s.scalars(select(AuditEvent).where(AuditEvent.action == "hub.pair_failed")).one()
         assert str(rij.trace_id) == tid
@@ -146,7 +149,8 @@ def test_form_and_rate_limit_refusals(client: Any, fake_hub: FakeHub) -> None:
         headers={"Origin": "http://kwaadaardig.example"},
         follow_redirects=False,
     )
-    assert (r.status_code, _code(r)) == (403, "ongeldig_formulier")
+    assert (r.status_code, _code(r)) == (403, "herkomst_onjuist")
+    # geweigerd op herkomst telt niet als poging: hieronder nog vijf pogingen tot de grens
     fake_hub.sim.max_failures = 1000
     codes = [
         _koppel(client, csrf, koppelcode="AAAA-BBBB-CCCC", hub_vingerafdruk="0000-0000-0000-0000") for _ in range(6)
@@ -172,18 +176,19 @@ def test_hub_unreachable_and_hub_rate_limit(client: Any, fake_hub: FakeHub) -> N
 def test_successful_pairing_then_linked_page(client: Any, fake_hub: FakeHub) -> None:
     csrf = _csrf(client)
     r = _koppel(client, csrf, hub_vingerafdruk=fake_hub.fingerprint())
-    assert r.status_code == 303 and r.headers["location"] == "/?melding=gekoppeld"
+    assert r.status_code == 303 and re.fullmatch(r"/\?melding=[A-Za-z0-9_-]{16,64}", r.headers["location"])
     r = client.get(r.headers["location"])
     _veiligheid(r)
     html = r.text
-    assert "<title>Home Control Hub — gekoppeld, gezond</title>" in html
-    assert _totaal(html) == ("gezond", "Gezond") and _gereed(html) == "Ja"
+    assert "<title>Home Control Hub — gekoppeld, alles gezond</title>" in html
+    assert _totaal(html) == ("gezond", "Alles gezond") and _gereed(html) == "Ja"
     assert '<p id="melding-titel"><strong>Gekoppeld met de Hub</strong></p>' in html and "melding-info" in html
+    assert 'class="melding melding-info" role="status"' in html  # info na dít verzoek (Peil 1.1.1, E05)
     assert (
         '<span class="pil pil-neutraal"><svg aria-hidden="true"><use href="#i-gekoppeld"/></svg>Gekoppeld</span>'
         in html
     )
-    assert fake_hub.fingerprint() in html and f'<a href="{HUB_URL}">Hub openen</a>' in html
+    assert fake_hub.fingerprint() in html and f'<a class="knop knop-secundair" href="{HUB_URL}">Hub openen</a>' in html
     assert "Ontkoppelen of opnieuw koppelen gaat via de Hub" in html
     assert 'action="/koppelen"' not in html and "Koppelcode" not in _zichtbaar(html)
     token = client.app.state.hublink.state().service_token
@@ -229,17 +234,22 @@ def test_database_down_is_not_ready(app_factory: Any) -> None:
     r = c.get("/")
     assert r.status_code == 200
     _veiligheid(r)
-    assert _totaal(r.text) == ("storing", "Storing")
+    assert _totaal(r.text) == ("storing", "Niet gereed")
     assert _gereed(r.text).startswith("Nee — de eigen database antwoordt niet")
-    assert "<title>Home Control Hub — niet gekoppeld, storing</title>" in r.text
+    assert "<title>Home Control Hub — niet gekoppeld, niet gereed</title>" in r.text
     assert "Niet te meten: de eigen database antwoordt niet." in r.text
 
 
 def test_unreadable_link_file(client: Any, data_dir: Path) -> None:
     (data_dir / "secrets" / "hub-link.json").write_text("geen json", encoding="utf-8")
     r = client.get("/")
-    assert r.status_code == 200 and _code(r) == "koppelstatus_onleesbaar" and _trace(r) == r.headers["x-trace-id"]
-    assert _totaal(r.text)[0] == "storing" and 'action="/koppelen"' not in r.text
+    assert r.status_code == 200 and _code(r) == "koppelstatus_onleesbaar"
+    # Peil 1.1.1 (E01/E05/E06): een toestand die bij het laden al bestond: geen live-regio en geen trace-ID, wel de
+    # code en het pad van het bestand; het koppelblok zegt "Onleesbaar" en toont geen formulier
+    assert 'class="selecteer"' not in r.text and 'role="alert"' not in r.text
+    assert "<p><code>/appdata/secrets/hub-link.json</code></p>" in r.text
+    assert '<use href="#i-storing"/></svg>Onleesbaar</span>' in r.text and "Hier staat bewust geen formulier." in r.text
+    assert _totaal(r.text) == ("storing", "Niet gereed") and 'action="/koppelen"' not in r.text
 
 
 def test_missing_template_gives_plain_error(client: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

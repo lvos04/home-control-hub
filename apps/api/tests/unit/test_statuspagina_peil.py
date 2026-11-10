@@ -1,6 +1,7 @@
-"""Unit (HC11, ONTWERPTAAL §13.2, O-14): de versie-gepinde Peil-kopie is intact en gelijk aan de bron, de renderer
-vult in één doorgang en escapet alles, en het paginamodel geeft per toestand precies één koppeltoestand en een eerste
-signaal dat nooit groen is als de dienst niet gereed is. Geen database nodig."""
+"""Unit (HC11, ONTWERPTAAL §13.2 en §14, Peil 1.1.1, contract 1.3 §3.5/§3.7): de versie-gepinde Peil-kopie is intact en
+gelijk aan de bron, de renderer vult in één doorgang (gelijk aan de referentie ``bouw/sjabloon.py``) en escapet alles,
+en het paginamodel geeft per toestand precies één koppeltoestand, de juiste tonen en meldingsrol, en een totaal dat
+nooit groen is als de dienst niet gereed is. Geen database nodig."""
 
 from __future__ import annotations
 
@@ -24,15 +25,17 @@ from integrations.status_page import (
     OPNIEUW_INVULLEN_NL,
     BronStand,
     Fout,
+    Meldingen,
     Meting,
     bouw_model,
+    host_toegestaan,
     koppeltoestand,
     nl_datumtijd,
 )
 from tests.conftest import REPO_ROOT
 
 NU = datetime(2026, 11, 9, 11, 56, tzinfo=UTC)
-FP = "MEGG-8GFG-2E4Y-K2RQ"  # testvector uit contract 1.2 §4.5
+FP = "MEGG-8GFG-2E4Y-K2RQ"  # testvector uit contract 1.3 §4.5
 TRACE = "3d8a1f4e-6b2c-4e95-a7d0-91c5b8e2f364"
 BRON_MAP = REPO_ROOT.parent / "ai-server-manager" / "design" / "ontwerptaal"
 
@@ -73,7 +76,16 @@ def _link(soort: str) -> LinkState:
         return LinkState(last_error=LastError(code="hub_weigerde", at="2026-11-09T11:50:00Z"))
     if soort == "bezig":
         return LinkState(
-            pending=Pending(kind="token", secret_sha256="f" * 64, hub_url="http://hub.test:30400", started_at="x")
+            pending=Pending(
+                kind="token", secret_sha256="f" * 64, hub_url="http://hub.test:30400", started_at="2026-11-09T11:54:00Z"
+            )
+        )
+    if soort == "gekoppeld_bezig":
+        return LinkState(
+            **gekoppeld,
+            pending=Pending(
+                kind="token", secret_sha256="e" * 64, hub_url="http://hub.test:30400", started_at="2026-11-09T11:54:00Z"
+            ),
         )
     if soort == "gekoppeld":
         return LinkState(**gekoppeld)
@@ -106,8 +118,10 @@ def _meting(link: LinkState, *, db_ok: bool = True, schema: str | None = "0003",
         schema_verwacht="0003",
         geheimen=kw.pop("geheimen", {"vault.key": True, "identity.ed25519": True}),
         link=link,
-        herstel_niveau=kw.pop("herstel", "risico") if db_ok else None,
+        herstel_niveau=kw.pop("herstel", "ok") if db_ok else None,
         bronnen=bronnen if db_ok else (),
+        herstel_accounts=kw.pop("accounts", 2) if db_ok else None,
+        host_ok=kw.pop("host_ok", True),
     )
 
 
@@ -115,15 +129,29 @@ def _html(data: dict[str, Any]) -> str:
     return peil.render(peil.sjabloon().tekst, data)
 
 
-FLAGS = ("koppelformulier", "gekoppeld", "ontkoppeld", "ingetrokken")
+FLAGS = ("koppelformulier", "gekoppeld", "ontkoppeld", "ingetrokken", "koppelstatus_onleesbaar")
+ALLE = ["nooit", "nooit_mislukt", "bezig", "gekoppeld", "gekoppeld_bezig", "onbevestigd", "rotatie_geweigerd"]
+ALLE += ["ontkoppeld", "ingetrokken", "onleesbaar"]
 
 
-# ------------------------------------------------------------------ versie-gepinde kopie (O-14)
+def _referentie() -> ModuleType | None:
+    """De referentie-renderer van Peil 1.1.1 (``bouw/sjabloon.py`` in de bron), als die naast deze repo staat."""
+    pad = BRON_MAP / "bouw" / "sjabloon.py"
+    if not pad.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("peil_sjabloon_referentie", pad)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ------------------------------------------------------------------ versie-gepinde kopie (O-14, E08)
 def test_pinned_copy_is_intact_and_consistent() -> None:
     assert _tool().controleer() == []
     tpl = peil.sjabloon()
-    assert tpl.intact and tpl.versie == "1.1.0" and tpl.bron.startswith("lvos04/ai-server-manager@")
-    assert tpl.tekst.startswith("<!doctype html>\n<!-- Peil statuspagina-sjabloon 1.1.0 · sha256:")
+    assert tpl.intact and tpl.versie == "1.1.1" and tpl.bron.startswith("lvos04/ai-server-manager@")
+    assert tpl.tekst.startswith("<!doctype html>\n<!-- Peil statuspagina-sjabloon 1.1.1 · sha256:")
     # het ontwikkelaarscommentaar (met plekken en woorden als 'ontkoppelcode') gaat niet mee naar de pagina
     assert "ontkoppelcode" not in tpl.tekst.split("<html", 1)[0]
 
@@ -150,7 +178,9 @@ def test_pinned_copy_detects_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_compare_with_source_drift_versus_newer_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``vergelijk --online`` zonder netwerk: de bron wordt gesimuleerd (de echte online-stap draait in CI)."""
+    """Pin- en driftregel (Peil 1.1.1, E08) met ``vergelijk --online`` zonder netwerk: de bron wordt gesimuleerd (de
+    echte online-stap draait in CI). Drift en dezelfde versie met andere inhoud = fout; een nieuwere versie = alleen een
+    waarschuwing."""
     tool = _tool()
     herkomst = tool.lees_herkomst()
     kopie = {n: tool.splits((tool.MAP / n).read_bytes())[1] for n in tool.BESTANDEN}
@@ -167,9 +197,9 @@ def test_compare_with_source_drift_versus_newer_version(monkeypatch: pytest.Monk
     # zelfde versie, andere inhoud op de bronbranch = drift (fout)
     bron[tak] = {**kopie, "statuspagina.css": kopie["statuspagina.css"].replace(b"--down:#B3141B", b"--down:#B3141C")}
     fouten, _ = tool.vergelijk(None, online=True)
-    assert fouten == ["online statuspagina.css: Peil 1.1.0 in de bron heeft andere inhoud dan de kopie (drift)"]
+    assert fouten == ["online statuspagina.css: Peil 1.1.1 in de bron heeft andere inhoud dan de kopie (drift)"]
     # een nieuwere versie in de bron = waarschuwing (bewust bijwerken), geen fout
-    bron[tak] = {n: d.replace(b"1.1.0", b"1.2.0", 2) for n, d in kopie.items()}
+    bron[tak] = {n: d.replace(b"1.1.1", b"1.2.0", 2) for n, d in kopie.items()}
     fouten, waarschuwingen = tool.vergelijk(None, online=True)
     assert fouten == [] and len(waarschuwingen) == 2 and "Peil 1.2.0" in waarschuwingen[0]
     # de gepinde commit zelf wijkt af van de kopie = drift
@@ -197,19 +227,53 @@ def test_template_load_flags_tampering(tmp_path: Path) -> None:
         peil.lees(zonder)
 
 
-# ------------------------------------------------------------------ renderer
+# ------------------------------------------------------------------ renderer in één doorgang (E07)
 def test_render_blocks_escape_and_single_pass() -> None:
     tpl = "<!--ALS:a-->A{{x}}<!--/ALS:a--><!--NIET:a-->N<!--/NIET:a--><!--ELK:l-->[{{n}}<!--ALS:r-->:{{r}}<!--/ALS:r-->]<!--/ELK:l-->"
     assert peil.render(tpl, {"a": True, "x": "<b>&'\"", "l": [{"n": 1}, {"n": 2, "r": "z"}]}) == (
         "A&lt;b&gt;&amp;&#39;&quot;[1][2:z]"
     )
     assert peil.render(tpl, {"a": False, "l": []}) == "N"
-    # een waarde wordt nooit opnieuw als sjabloon gelezen
+    # een waarde wordt nooit opnieuw als sjabloon gelezen (1.1.0 vulde een bronnaam '{{csrf_token}}' wél in)
     assert peil.render("{{x}}|{{y}}", {"x": "{{y}}", "y": "geheim"}) == "{{y}}|geheim"
     assert peil.render("{{x}}", {"x": "<!--ALS:y-->"}) == "&lt;!--ALS:y--&gt;"
+    assert peil.render("<!--ELK:l-->{{n}}<!--/ELK:l-->", {"l": [{"n": "{{csrf_token}}"}], "csrf_token": "s"}) == (
+        "{{csrf_token}}"
+    )
 
 
-# ------------------------------------------------------------------ paginamodel per toestand
+def test_render_nested_blocks_and_truthiness() -> None:
+    """Genest (ook NIET binnen ALS, en hetzelfde blok genest); onwaar = False, None, leeg, 0 en een lege lijst."""
+    tpl = "<!--ALS:a--><!--NIET:b-->x<!--/NIET:b--><!--ALS:a-->y<!--/ALS:a--><!--/ALS:a-->"
+    assert peil.render(tpl, {"a": "1", "b": ""}) == "xy"
+    assert peil.render(tpl, {"a": "1", "b": "1"}) == "y"
+    for onwaar in (False, None, "", 0, []):
+        assert peil.render("<!--ALS:a-->j<!--/ALS:a--><!--NIET:a-->n<!--/NIET:a-->", {"a": onwaar}) == "n"
+    assert peil.render("{{t}}|{{f}}", {"t": True, "f": False}) == "true|false"  # zoals de referentie (JavaScript)
+
+
+@pytest.mark.parametrize(
+    "kapot", ["<!--ALS:a-->x", "x<!--/ALS:a-->", "<!--ALS:a--><!--NIET:b--><!--/ALS:a--><!--/NIET:b-->"]
+)
+def test_render_refuses_broken_templates(kapot: str) -> None:
+    with pytest.raises(peil.SjabloonOntbreekt):
+        peil.render(kapot, {"a": True, "b": True})
+
+
+@pytest.mark.skipif(_referentie() is None, reason="geen lokale checkout van ai-server-manager (bouw/sjabloon.py)")
+@pytest.mark.parametrize("soort", ALLE)
+def test_renderer_equals_the_reference_byte_for_byte(soort: str) -> None:
+    """Peil 1.1.1 (E07): de Python-renderers van de diensten nemen ``bouw/sjabloon.py`` over; voor elke toestand van deze
+    pagina is de uitvoer byte-gelijk aan die van de referentie."""
+    ref = _referentie()
+    assert ref is not None
+    tekst = peil.sjabloon().tekst
+    for fout in (None, Fout("hub_weigerde", TRACE)):
+        data = bouw_model(_meting(_link(soort)), csrf="c" * 32, fout=fout)
+        assert peil.render(tekst, data) == ref.render(tekst, data), soort
+
+
+# ------------------------------------------------------------------ paginamodel per toestand (§3.5/§3.7)
 @pytest.mark.parametrize(
     ("soort", "toestand"),
     [
@@ -217,20 +281,23 @@ def test_render_blocks_escape_and_single_pass() -> None:
         ("nooit_mislukt", "koppelformulier"),
         ("bezig", "koppelformulier"),
         ("gekoppeld", "gekoppeld"),
+        ("gekoppeld_bezig", "gekoppeld"),
         ("onbevestigd", "gekoppeld"),
         ("rotatie_geweigerd", "gekoppeld"),
         ("ontkoppeld", "ontkoppeld"),
         ("ingetrokken", "ingetrokken"),
-        ("onleesbaar", None),
+        ("onleesbaar", "koppelstatus_onleesbaar"),
     ],
 )
-def test_exactly_one_link_state(soort: str, toestand: str | None) -> None:
+def test_exactly_one_link_state(soort: str, toestand: str) -> None:
     link = _link(soort)
     assert koppeltoestand(link) == toestand
-    data = bouw_model(_meting(link), csrf="c" * 32, melding_trace_id=TRACE)
-    assert [f for f in FLAGS if data[f]] == ([toestand] if toestand else [])
+    data = bouw_model(_meting(link), csrf="c" * 32)
+    assert [f for f in FLAGS if data[f]] == [toestand]
     html = _html(data)
-    assert ('action="/koppelen"' in html) == (toestand == "koppelformulier")
+    # het formulier alleen bij nooit gekoppeld, leesbaar en zonder lopende poging
+    assert ('action="/koppelen"' in html) == (toestand == "koppelformulier" and link.pending is None)
+    assert ("novalidate" in html) == ('action="/koppelen"' in html)  # E09: server-side validatie met NL-teksten
     for verboden in ("ontkoppelcode", 'action="/ontkoppelen"', 'action="/beheer"', 'action="/schrijfsleutel"'):
         assert verboden not in html
 
@@ -242,73 +309,109 @@ def test_not_linked_is_never_green_and_shows_last_error() -> None:
     assert data["gereed"] == "Nee — wacht op koppeling met de Hub"
     assert data["titel_toestand"] == "niet gekoppeld, niet gereed"
     rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
-    # vast Peil-woord bij het icoon (circle-help = Onbekend); de precieze toestand opent de reden (ADR-0012)
-    assert rij["toon"] == "onbekend" and rij["label"] == "Onbekend" and rij["reden"].startswith("Niet gekoppeld: ")
+    # Peil 1.1.1 (E03/E04): toon niet-gekoppeld (link-2-off, telt als Onbekend) met het vaste woord
+    assert (rij["toon"], rij["label"]) == ("niet-gekoppeld", "Niet gekoppeld")
     assert "Laatste melding, 9 nov 2026, 11:50 UTC (code hub_weigerde)" in rij["reden"]
     assert not data.get("melding")  # een opgeslagen fout is geen melding met trace-ID van dit verzoek
     html = _html(data)
     assert '<span class="pil pil-onbekend"><svg aria-hidden="true"><use href="#i-onbekend"/></svg>Niet gereed' in html
+    assert '<use href="#i-niet-gekoppeld"/></svg>Niet gekoppeld</span>' in html
     assert "<title>Home Control Hub — niet gekoppeld, niet gereed</title>" in html
+    assert "(verplicht)" in html and 'class="spring"' in html
 
 
-def test_linked_and_confirmed_is_healthy_with_neutral_link_pill() -> None:
-    data = bouw_model(_meting(_link("gekoppeld")), csrf="c" * 32, gekoppeld_melding=True)
-    assert (data["totaal_toon"], data["totaal_label"], data["gereed"]) == ("gezond", "Gezond", "Ja")
-    assert data["totaal_toelichting"] == "Gereed. Wat deze dienst doet: 1 beperkt · 3 onbekend."
+def test_linked_and_confirmed_is_all_healthy_with_neutral_link_pill() -> None:
+    data = bouw_model(_meting(_link("gekoppeld"), herstel="ok"), csrf="c" * 32, gekoppeld_melding=True)
+    assert (data["totaal_toon"], data["totaal_label"], data["gereed"]) == ("gezond", "Alles gezond", "Ja")
+    # niet ingesteld (gate) en beleid tellen niet mee (E10); dat staat erbij
+    assert data["totaal_toelichting"] == (
+        "Gereed. Alle controles en gemeten onderdelen zijn gezond. 3 onderdelen wachten op instelling of een verse "
+        "meting."
+    )
     assert all(r["naam"] != "Koppeling met de Hub" for r in data["checks"])  # alleen als er iets ontbreekt
     assert data["hub_adres"] == "http://hub.test:30400" and data["hub_vingerafdruk"] == FP
     assert data["gekoppeld_sinds"] == "8 nov 2026, 19:14 UTC"
-    assert (
-        data["melding_toon"] == "info" and data["melding_titel"] == "Gekoppeld met de Hub" and not data.get("trace_id")
+    assert (data["melding_toon"], data["melding_rol"], data["melding_titel"]) == (
+        "info",
+        "status",
+        "Gekoppeld met de Hub",
     )
+    assert not data.get("trace_id")
     html = _html(data)
     assert (
         '<span class="pil pil-neutraal"><svg aria-hidden="true"><use href="#i-gekoppeld"/></svg>Gekoppeld</span>'
         in html
     )
-    assert '<a href="http://hub.test:30400">Hub openen</a>' in html and "svc_" not in html
+    assert '<a class="knop knop-secundair" href="http://hub.test:30400">Hub openen</a>' in html and "svc_" not in html
+    assert 'role="status" aria-labelledby="melding-titel"' in html
 
 
 def test_success_notice_only_when_really_linked() -> None:
-    for soort in ("nooit", "ontkoppeld", "ingetrokken"):
+    for soort in ("nooit", "ontkoppeld", "ingetrokken", "onleesbaar"):
         data = bouw_model(_meting(_link(soort)), csrf="c" * 32, gekoppeld_melding=True)
-        assert not data.get("melding"), soort
+        assert data.get("melding_titel") != "Gekoppeld met de Hub", soort
 
 
 @pytest.mark.parametrize(
-    ("soort", "toestand", "reden"),
+    ("soort", "toon", "label", "reden"),
     [
-        ("onbevestigd", "Niet bevestigd: ", "wacht op bevestiging door de Hub"),
-        ("ingetrokken", "Ingetrokken door de Hub: ", "de Hub heeft de koppeling ingetrokken"),
-        ("ontkoppeld", "Ontkoppeld door de Hub: ", "ontkoppeld door de Hub"),
-        ("bezig", "Koppelen bezig met het token HUB_ENROLLMENT_TOKEN uit de Custom App", "koppelen is bezig"),
+        ("onbevestigd", "onbekend", "Onbekend", "wacht op bevestiging door de Hub"),
+        ("ingetrokken", "niet-gekoppeld", "Ingetrokken", "de Hub heeft de koppeling ingetrokken"),
+        ("ontkoppeld", "niet-gekoppeld", "Ontkoppeld", "ontkoppeld door de Hub"),
+        ("bezig", "niet-gekoppeld", "Niet gekoppeld", "er loopt een koppelpoging"),
     ],
 )
-def test_link_problems_make_the_service_not_ready(soort: str, toestand: str, reden: str) -> None:
+def test_link_problems_make_the_service_not_ready(soort: str, toon: str, label: str, reden: str) -> None:
     data = bouw_model(_meting(_link(soort)), csrf="c" * 32)
     rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
-    assert (rij["toon"], rij["label"]) == ("onbekend", "Onbekend") and rij["reden"].startswith(toestand)
+    assert (rij["toon"], rij["label"]) == (toon, label)
     assert "Ontkoppelen" not in rij["reden"]  # na intrekken/ontkoppelen kan alleen opnieuw koppelen
     assert data["totaal_toon"] == "onbekend" and data["totaal_label"] == "Niet gereed"
     assert data["gereed"] == f"Nee — {reden}"
 
 
-def test_unreadable_link_file_shows_error_with_code_and_trace_id() -> None:
-    data = bouw_model(_meting(_link("onleesbaar")), csrf="c" * 32, melding_trace_id=TRACE)
-    assert data["totaal_toon"] == "storing" and data["gereed"] == "Nee — koppelstatus onleesbaar"
-    assert (data["melding_code"], data["trace_id"], data["melding_toon"]) == ("koppelstatus_onleesbaar", TRACE, "fout")
+def test_pairing_in_progress_hides_the_form_and_keeps_the_state() -> None:
+    """Peil 1.1.1 (E02; contract 1.3 §3.7): ``koppelen_bezig`` verbergt formulier en stappen; de stabiele toestand
+    blijft erboven staan, met de starttijd."""
+    data = bouw_model(_meting(_link("bezig")), csrf="c" * 32)
+    assert data["koppelformulier"] and data["koppelen_bezig"]
+    assert (data["koppelen_bezig_sinds"], data["koppelen_bezig_iso"]) == ("11:54", "2026-11-09T11:54:00+00:00")
+    rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
+    assert rij["reden"] == "Er loopt een koppelpoging sinds 11:54 (met het token uit de Custom App)."
     html = _html(data)
-    assert f'<code class="selecteer">{TRACE}</code>' in html and "Code <code>koppelstatus_onleesbaar</code>" in html
+    assert 'action="/koppelen"' not in html and '<ol class="stappen">' not in html
+    assert '<use href="#i-nog-niet"/></svg>Koppelen bezig</span>' in html
+    assert '(gestart om <time datetime="2026-11-09T11:54:00+00:00">11:54</time>)' in html
+    # ook een gekoppelde dienst met een nieuw env-token toont "Koppelen bezig" onder "Gekoppeld"
+    html = _html(bouw_model(_meting(_link("gekoppeld_bezig")), csrf="c" * 32))
+    assert html.index("</svg>Gekoppeld</span>") < html.index("</svg>Koppelen bezig</span>")
+
+
+def test_unreadable_link_file_is_storing_without_form_and_without_live_region() -> None:
+    """Peil 1.1.1 (E01/E05/E06; contract 1.3 §3.5): Storing · Niet gereed; melding met code en pad, zonder rol en
+    zonder trace-ID (een toestand die bij het laden al bestond); geen formulier."""
+    data = bouw_model(_meting(_link("onleesbaar")), csrf="c" * 32)
+    assert (data["totaal_toon"], data["totaal_label"]) == ("storing", "Niet gereed")
+    assert data["totaal_toelichting"] == "Storing — koppelstatus onleesbaar."
+    assert data["gereed"] == "Nee — koppelstatus onleesbaar"
+    assert (data["melding_code"], data["melding_toon"], data["melding_rol"]) == ("koppelstatus_onleesbaar", "fout", "")
+    assert data["melding_pad"] == "/appdata/secrets/hub-link.json" and not data.get("trace_id")
+    rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
+    assert (rij["toon"], rij["label"], rij["reden_code"]) == ("storing", "Onleesbaar", "koppelstatus_onleesbaar")
+    html = _html(data)
+    assert "Code <code>koppelstatus_onleesbaar</code>" in html and 'class="selecteer"' not in html
+    assert 'role="alert"' not in html and 'action="/koppelen"' not in html
+    assert "Hier staat bewust geen formulier." in html and "(code <code>koppelstatus_onleesbaar</code>)" in html
 
 
 def test_database_down_is_storing_and_nothing_is_guessed() -> None:
     data = bouw_model(_meting(_link("gekoppeld"), db_ok=False), csrf="c" * 32)
-    assert (data["totaal_toon"], data["totaal_label"]) == ("storing", "Storing")
+    assert (data["totaal_toon"], data["totaal_label"]) == ("storing", "Niet gereed")
     assert data["gereed"] == "Nee — de eigen database antwoordt niet"
     schema = next(r for r in data["checks"] if r["naam"] == "Databaseschema")
     assert schema["toon"] == "onbekend" and schema["reden"] == "Niet te meten zonder database."
     tonen = {r["naam"]: r["toon"] for r in data["dienst_blok"]}
-    assert tonen.pop("Boiler") == "gate" and set(tonen.values()) == {"onbekend"}
+    assert tonen.pop("Boiler") == "beleid" and set(tonen.values()) == {"onbekend"}
 
 
 def test_schema_and_secrets_failures() -> None:
@@ -320,12 +423,16 @@ def test_schema_and_secrets_failures() -> None:
 
 
 def test_refused_key_rotation_is_limited_but_ready() -> None:
-    data = bouw_model(_meting(_link("rotatie_geweigerd")), csrf="c" * 32)
+    data = bouw_model(_meting(_link("rotatie_geweigerd"), herstel="ok"), csrf="c" * 32)
     assert (data["totaal_toon"], data["totaal_label"], data["gereed"]) == ("beperkt", "Beperkt", "Ja")
     assert data["totaal_toelichting"] == "Gereed, maar beperkt: Sleutels van de Hub."
+    rij = next(r for r in data["checks"] if r["naam"] == "Sleutels van de Hub")
+    assert rij["reden_code"] == "sleutelrotatie_geweigerd"
 
 
-def test_sources_and_recovery_level_in_service_block() -> None:
+def test_total_rule_service_block_counts_at_most_limited() -> None:
+    """Peil 1.1.1 (E10): een verse Storing in het dienstblok maakt het totaal hooguit Beperkt; gate, beleid en verouderd
+    tellen niet mee; Onbekend in het dienstblok maakt het totaal Deels onbekend (nooit groen)."""
     bronnen = (
         BronStand("network", True, "healthy", NU - timedelta(minutes=3)),
         BronStand("network", True, "down", NU - timedelta(minutes=1)),
@@ -340,16 +447,44 @@ def test_sources_and_recovery_level_in_service_block() -> None:
     )
     assert rijen["Node-RED-automatisering (B11)"]["toon"] == "onbekend"
     assert rijen["Node-RED-automatisering (B11)"]["reden"] == "1 van 1 bron ingesteld: 1 nog nooit gemeten."
+    assert (rijen["Energie en resources (B14)"]["toon"], rijen["Energie en resources (B14)"]["label"]) == (
+        "gate",
+        "Niet ingesteld",
+    )
     assert rijen["Energie en resources (B14)"]["reden"].startswith("Nog geen bron ingesteld")
     assert rijen["Beheerherstel (B13-001)"]["toon"] == "gezond"
-    assert rijen["Boiler"]["label"] == "Alleen meten" and rijen["Boiler"]["toon"] == "gate"
-    # een uitgevallen bron maakt de dienst zelf niet 'storing', maar de telling staat wel bij het totaal
-    assert data["totaal_toon"] == "gezond" and "1 storing" in data["totaal_toelichting"]
+    assert rijen["Boiler"]["label"] == "Alleen meten" and rijen["Boiler"]["toon"] == "beleid"
+    # een uitgevallen bron maakt de dienst zelf niet 'storing': hooguit Beperkt
+    assert (data["totaal_toon"], data["totaal_label"]) == ("beperkt", "Beperkt")
+    assert data["totaal_toelichting"] == "Gereed, maar beperkt: Netwerk en privacy (B10)."
+    # alleen een onbekende meting in het dienstblok: Deels onbekend
+    alleen = (BronStand("automation", True, "unknown", None),)
+    data = bouw_model(_meting(_link("gekoppeld"), bronnen=alleen, herstel="ok"), csrf="c")
+    assert (data["totaal_toon"], data["totaal_label"]) == ("onbekend", "Deels onbekend")
+    assert data["totaal_toelichting"] == "Gereed, maar deels onbekend: Node-RED-automatisering (B11)."
 
 
-# ------------------------------------------------------------------ ontwerpreview Peil (ADR-0012)
+def test_not_ready_with_a_limited_service_block_says_why() -> None:
+    """Niet gereed + een beperkt onderdeel in het dienstblok: de pil wordt Beperkt (E10) en de toelichting noemt de
+    reden van niet gereed én het onderdeel; nooit groen."""
+    data = bouw_model(_meting(_link("nooit"), herstel="risico"), csrf="c")
+    assert (data["totaal_toon"], data["totaal_label"]) == ("beperkt", "Niet gereed")
+    assert data["totaal_toelichting"] == (
+        "Deels onbekend — wacht op koppeling met de Hub. Daarnaast beperkt: Beheerherstel (B13-001)."
+    )
+
+
+def test_empty_recovery_register_waits_and_does_not_count() -> None:
+    data = bouw_model(_meting(_link("gekoppeld"), herstel="onbekend", accounts=0), csrf="c")
+    rij = next(r for r in data["dienst_blok"] if r["naam"] == "Beheerherstel (B13-001)")
+    assert (rij["toon"], rij["label"]) == ("gate", "Niet ingevuld")
+    assert data["totaal_toon"] == "gezond"
+
+
+# ------------------------------------------------------------------ verouderd (Peil §4.4, E15; contract §6.2)
 def test_stale_measurement_is_never_green() -> None:
-    """Een oude meting is Onbekend (verouderd), nooit de laatst bekende stand (Peil §4.1 regel 4, §4.4)."""
+    """Een oude meting is nooit de laatst bekende stand als actueel: alleen oude metingen → Verouderd met de tijd van
+    de laatste meting (telt niet mee); een verse en een oude meting → de verse telt, de oude staat erbij."""
     oud = NU - BRON_MAX_LEEFTIJD - timedelta(seconds=1)
     bronnen = (
         BronStand("sso", True, "healthy", oud),
@@ -360,19 +495,19 @@ def test_stale_measurement_is_never_green() -> None:
     data = bouw_model(_meting(_link("gekoppeld"), bronnen=bronnen, herstel="ok"), csrf="c")
     rijen = {r["naam"]: r for r in data["dienst_blok"]}
     sso = rijen["Authentik en toegangsbeheer (B13)"]
-    assert (sso["toon"], sso["label"]) == ("onbekend", "Onbekend")
+    assert (sso["toon"], sso["label"]) == ("verouderd", "Verouderd · laatst bekend 11:40")
     assert sso["reden"] == (
         "1 van 1 bron ingesteld: 1 verouderd (laatst bekend 9 nov 2026, 11:40 UTC). Metingen ouder dan 15 minuten "
-        "tellen als onbekend."
+        "tonen we niet als actueel."
     )
-    # een verse gezonde en een oude gezonde meting: Onbekend (niet alles vers), met beide tijden
     net = rijen["Netwerk en privacy (B10)"]
-    assert net["toon"] == "onbekend" and net["reden"] == (
+    assert (net["toon"], net["reden_code"]) == ("gezond", "meting_verouderd") and net["reden"] == (
         "2 van 5 bronnen ingesteld: 1 verouderd (laatst bekend 6 nov 2026, 11:56 UTC), 1 gezond. Laatst gemeten "
-        "9 nov 2026, 11:54 UTC. Metingen ouder dan 15 minuten tellen als onbekend."
+        "9 nov 2026, 11:54 UTC. Metingen ouder dan 15 minuten tonen we niet als actueel."
     )
     # ook een oude storing is geen actuele storing
-    assert rijen["Energie en resources (B14)"]["toon"] == "onbekend"
+    assert rijen["Energie en resources (B14)"]["toon"] == "verouderd"
+    assert data["totaal_toon"] == "gezond"  # verouderd telt niet mee (E10); de pagina zegt wel dat iets wacht
     # precies op de grens is nog vers
     grens = (BronStand("sso", True, "healthy", NU - BRON_MAX_LEEFTIJD),)
     data = bouw_model(_meting(_link("gekoppeld"), bronnen=grens), csrf="c")
@@ -397,38 +532,32 @@ def test_recovery_level_always_has_a_reason(niveau: str, toon: str, begin: str) 
     )
 
 
-def test_pill_words_follow_the_icon() -> None:
-    """Elke pil draagt het vaste Peil-woord bij het icoon van zijn toon (ONTWERPTAAL §7, §11.1); alleen de totaalpil
-    zegt "Niet gereed" (sjabloon) en de boiler "Alleen meten" (beleid)."""
-    woorden = {"gezond": {"Gezond"}, "beperkt": {"Beperkt"}, "storing": {"Storing"}, "onbekend": {"Onbekend"}}
-    woorden["gate"] = {"Alleen meten"}
-    for soort in ("nooit", "nooit_mislukt", "bezig", "gekoppeld", "onbevestigd", "rotatie_geweigerd", "ontkoppeld"):
+def test_pill_words_follow_the_tone() -> None:
+    """Elke pil draagt het vaste Peil-woord bij zijn toon (ONTWERPTAAL §7, §11.1, 1.1.1)."""
+    woorden = {
+        "gezond": {"Gezond"},
+        "beperkt": {"Beperkt"},
+        "storing": {"Storing", "Onleesbaar"},
+        "onbekend": {"Onbekend"},
+        "niet-gekoppeld": {"Niet gekoppeld", "Ontkoppeld", "Ingetrokken"},
+        "gate": {"Niet ingesteld", "Niet ingevuld"},
+        "beleid": {"Alleen meten"},
+    }
+    for soort in ALLE:
         for db_ok in (True, False):
             data = bouw_model(_meting(_link(soort), db_ok=db_ok), csrf="c")
             for r in [*data["checks"], *data["dienst_blok"]]:
                 assert r["label"] in woorden[r["toon"]], (soort, r)
-    data = bouw_model(_meting(_link("onleesbaar")), csrf="c", melding_trace_id=TRACE)
-    rij = next(r for r in data["checks"] if r["naam"] == "Koppeling met de Hub")
-    assert (rij["toon"], rij["label"]) == ("storing", "Storing") and rij["reden"].startswith("Koppelbestand onleesbaar")
-    # de lange variabelenaam alleen in de controle (14 px), niet in de melding (WCAG 1.4.12 op 320 px)
-    assert "HUB_ENROLLMENT_TOKEN" in rij["reden"] and "HUB_ENROLLMENT_TOKEN" not in data["melding_tekst"]
-
-
-def test_pending_reason_names_the_attempt_and_the_last_error() -> None:
-    link = _link("bezig")
-    link.last_error = LastError(code="hub_onbereikbaar", at="2026-11-09T11:55:00Z")
-    rij = next(r for r in bouw_model(_meting(link), csrf="c")["checks"] if r["naam"] == "Koppeling met de Hub")
-    assert "Het formulier hieronder werkt pas weer als deze poging klaar is." in rij["reden"]
-    assert "Laatste melding, 9 nov 2026, 11:55 UTC (code hub_onbereikbaar)" in rij["reden"]
+                assert r["toon"] in peil.TONEN
 
 
 def test_failed_attempt_says_fields_must_be_filled_in_again() -> None:
     """Ingevulde waarden worden nooit teruggezet (veiligheid, WCAG 3.3.7-uitzondering); de melding zegt dat."""
-    for code in ("hub_weigerde", "ongeldige_koppelcode", "hub_onbereikbaar", "ongeldig_formulier"):
+    for code in ("hub_weigerde", "ongeldige_koppelcode", "hub_onbereikbaar"):
         data = bouw_model(_meting(_link("nooit")), csrf="c", fout=Fout(code, TRACE))
         assert data["melding_tekst"].endswith(OPNIEUW_INVULLEN_NL), code
         assert data["melding_tekst"].count("opnieuw in") == 1, code
-    for code in ("te_veel_pogingen", "koppelen_bezig", "rate_limited"):
+    for code in ("te_veel_pogingen", "koppelen_bezig", "rate_limited", "ongeldig_formulier", "herkomst_onjuist"):
         data = bouw_model(_meting(_link("nooit")), csrf="c", fout=Fout(code, TRACE))
         assert OPNIEUW_INVULLEN_NL not in data["melding_tekst"], code
     data = bouw_model(_meting(_link("gekoppeld")), csrf="c", fout=Fout("al_gekoppeld", TRACE))
@@ -444,16 +573,18 @@ def test_header_copy_is_short_and_not_repeated() -> None:
 
 
 @pytest.mark.parametrize("code", sorted(FOUTEN))
-def test_every_failure_has_status_code_trace_id_and_field(code: str) -> None:
+def test_every_failure_has_status_code_trace_id_role_and_field(code: str) -> None:
     soort = FOUTEN[code]
-    link = _link("gekoppeld") if code == "al_gekoppeld" else _link("nooit")
+    link = _link("gekoppeld") if code == "al_gekoppeld" else _link("onleesbaar" if "onleesbaar" in code else "nooit")
     data = bouw_model(_meting(link), csrf="c" * 32, fout=Fout(code, TRACE))
     assert 400 <= soort.status <= 599
     assert data["melding_code"] == code and data["trace_id"] == TRACE and data["melding_toon"] == "fout"
+    assert data["melding_rol"] == "alert"  # de fout van dít verzoek (E05)
     assert data["titel_toestand"].endswith("(koppelen mislukt)")
     html = _html(data)
     assert f"Code <code>{code}</code>" in html and f'<code class="selecteer">{TRACE}</code>' in html
-    if soort.veld is not None:
+    assert 'role="alert"' in html
+    if soort.veld is not None and data["koppelformulier"]:
         veld_id = {"hub_adres": "hub", "koppelcode": "koppelcode", "vingerafdruk": "vingerafdruk"}[soort.veld]
         assert data["spring_doel"] == veld_id and data["melding_link_doel"] == veld_id
         assert re.search(rf'<input id="{veld_id}"[^>]*aria-invalid="true"', html)
@@ -471,28 +602,88 @@ def test_unsafe_hub_address_is_never_a_link() -> None:
         assert "<script" not in _html(data) and "javascript:" not in _html(data)
 
 
+def test_host_notice_before_filling_in_the_form() -> None:
+    """§3.7 punt 4: via een domeinnaam kan niet gekoppeld worden; dat staat er vóór iemand het formulier invult (een
+    toestand bij het laden: geen live-regio)."""
+    data = bouw_model(_meting(_link("nooit"), host_ok=False), csrf="c")
+    assert (data["melding_code"], data["melding_toon"], data["melding_rol"]) == ("host_niet_toegestaan", "info", "")
+    assert "IP-adres van de NAS" in data["melding_tekst"]
+    assert not bouw_model(_meting(_link("gekoppeld"), host_ok=False), csrf="c").get("melding")
+
+
 def test_invariants_over_all_combinations() -> None:
-    soorten = ["nooit", "nooit_mislukt", "bezig", "gekoppeld", "onbevestigd", "rotatie_geweigerd", "ontkoppeld"]
-    soorten += ["ingetrokken", "onleesbaar"]
-    for soort, db_ok, schema, fout in itertools.product(
-        soorten, (True, False), ("0003", "0002"), (None, "hub_weigerde")
+    for soort, db_ok, schema, fout, host_ok in itertools.product(
+        ALLE, (True, False), ("0003", "0002"), (None, "hub_weigerde"), (True, False)
     ):
         data = bouw_model(
-            _meting(_link(soort), db_ok=db_ok, schema=schema),
+            _meting(_link(soort), db_ok=db_ok, schema=schema, host_ok=host_ok),
             csrf="c" * 32,
             fout=Fout(fout, TRACE) if fout else None,
-            melding_trace_id=TRACE,
         )
-        plek = f"{soort}/{db_ok}/{schema}/{fout}"
+        plek = f"{soort}/{db_ok}/{schema}/{fout}/{host_ok}"
         if data["gereed"] != "Ja":
-            assert data["totaal_toon"] != "gezond", plek
+            assert data["totaal_toon"] != "gezond" and data["totaal_label"] == "Niet gereed", plek
+        assert data["totaal_toon"] in peil.TOTAAL_TONEN, plek
         tonen = [r["toon"] for r in data["checks"]] + [r["toon"] for r in data["dienst_blok"]]
-        assert all(t in peil.TONEN for t in [*tonen, data["totaal_toon"]]), plek
+        assert all(t in peil.TONEN for t in tonen), plek
+        assert sum(bool(data[f]) for f in FLAGS) == 1, plek
+        if data.get("melding"):
+            assert data["melding_rol"] == ("alert" if fout else data["melding_rol"]), plek
+            assert data["melding_rol"] in ("alert", "status", ""), plek
         html = _html(data)
         assert "{{" not in html and "<!--ALS" not in html and "<!--ELK" not in html, plek
         assert html.count("<h1>") == 1 and "<script" not in html, plek
         ids = re.findall(r' id="([^"]+)"', html)
         assert len(ids) == len(set(ids)), plek
+
+
+# ------------------------------------------------------------------ herkomst en meldingen (contract 1.3 §3.7)
+@pytest.mark.parametrize(
+    ("host", "ok"),
+    [
+        ("192.168.1.10:30420", True),
+        ("192.168.1.10", True),
+        ("[fd00::10]:30420", True),
+        ("[::1]", True),
+        ("nas:30420", True),
+        ("localhost:30420", True),
+        ("nas.local:30420", True),
+        ("NAS.Lan", True),
+        ("truenas.internal", True),
+        ("nas.home.arpa:30420", True),
+        ("nas.local.:30420", True),  # één punt aan het eind telt niet mee
+        ("testserver", True),
+        ("evil.example:30420", False),  # publieke domeinnaam (DNS-rebinding)
+        ("nas.fritz.box", False),  # .box is een publieke TLD (K1)
+        ("local", True),
+        ("x.local.evil.example", False),
+        ("127.1", False),  # afwijkende IPv4-vormen (§3.2)
+        ("2130706433", False),
+        ("0x7f000001", False),
+        ("010.0.0.1", False),
+        ("fd00::10", False),  # IPv6 zonder []
+        ("[fd00::10", False),
+        ("[nietip]:80", False),
+        ("nas:poort", False),
+        ("nas..local", False),
+        ("", False),
+        (None, False),
+        ("nas local", False),
+    ],
+)
+def test_host_restriction(host: str | None, ok: bool) -> None:
+    assert host_toegestaan(host) is ok
+
+
+def test_notices_belong_to_this_browser_and_expire() -> None:
+    m = Meldingen(geldig_s=60)
+    sleutel = m.maak("gekoppeld", "cookie-a" * 4)
+    assert m.lees(sleutel, "cookie-a" * 4) == "gekoppeld"
+    assert m.lees(sleutel, "cookie-b" * 4) is None  # een andere browser
+    assert m.lees(sleutel, None) is None and m.lees("gekoppeld", "cookie-a" * 4) is None  # alleen een parameter
+    verlopen = Meldingen(geldig_s=-1)
+    oud = verlopen.maak("gekoppeld", "c" * 32)
+    assert verlopen.lees(oud, "c" * 32) is None
 
 
 def test_nl_datetime() -> None:

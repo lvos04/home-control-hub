@@ -30,7 +30,7 @@ from .security.replay import ReplayGuard
 from .security.secrets import enroll_public_jwk, ensure_secrets, load_identity, load_vault_key
 from .security.vault import Vault
 from .sources import router as sources_router
-from .status_page import PairThrottle
+from .status_page import Meldingen, PairThrottle
 from .status_page import router as status_router
 
 log = logging.getLogger("integrations")
@@ -67,7 +67,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
         version=__version__,
         description=(
             "Integraties B10 netwerk/privacy, B11 Node-RED, B13 Authentik/SSO (incl. beheerherstel B13-001) en "
-            "B14 energie/resources voor TrueNAS Home Platform V2 (platformcontract 1.2). Niet-gebouwde functies "
+            "B14 energie/resources voor TrueNAS Home Platform V2 (platformcontract 1.3). Niet-gebouwde functies "
             "geven `501 capability_unavailable`; nooit gesimuleerd succes."
         ),
         docs_url=None,
@@ -86,6 +86,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
     app.state.http_transport = transport
     app.state.alembic_head = head_revision(settings)
     app.state.pair_throttle = PairThrottle()
+    app.state.meldingen = Meldingen()
     app.state.app_id = APP_ID
 
     install_handlers(app)
