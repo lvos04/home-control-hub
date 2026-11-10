@@ -8,7 +8,7 @@ App-formulier** van TrueNAS: geen YAML, geen *Install via YAML*, geen docker com
 > **Normaal installeer je deze app niet zelf.** Na de eerste installatie van de Hub (`ai-server-manager`) en de
 > executor installeert het platform deze app via de TrueNAS-API met precies dezelfde formulierwaarden, en geeft het
 > `HUB_URL`, een eenmalig koppeltoken (`HUB_ENROLLMENT_TOKEN`) en de verwachte sleutelset-vingerafdruk
-> (`HUB_KEY_FINGERPRINT`) mee (platformcontract 1.2 §3.2). Dit document is voor handmatige installatie en voor
+> (`HUB_KEY_FINGERPRINT`) mee (platformcontract 1.3 §3.2). Dit document is voor handmatige installatie en voor
 > controle.
 
 > **Verificatiestatus: NIET GEVALIDEERD (echte NAS).** De image is in een Linux/Docker-bouwomgeving gebouwd en gestart
@@ -98,7 +98,11 @@ Network*, geen *Privileged*. Er is geen enkele reden voor in deze app.
   staat daar een formulier: adres van de Hub, koppelcode en de **vingerafdruk van de Hub** (de Hub-UI toont
   koppelcode en vingerafdruk samen met een kopieerknop). Maximaal 5 pogingen per kwartier per apparaat. Lukt het
   niet, dan toont de pagina een vaste melding met een **code** en een **trace-ID**; geef die door als je hulp vraagt
-  (de trace-ID staat ook in de logs van de app).
+  (de trace-ID staat ook in de logs van de app). **Open de pagina via het IP-adres van de NAS** (of een lokale naam
+  zoals `nas.local`, `nas.lan`, `*.internal` of `*.home.arpa`): via een gewone domeinnaam weigert de pagina het
+  formulier (`host_niet_toegestaan`, bescherming tegen DNS-rebinding, contract 1.3 §3.7). Wie de app via een eigen
+  domeinnaam opent, koppelt met het token (hierboven, aanbevolen) of via de Hub. Loopt er al een koppelpoging (bv.
+  met het token), dan staat er *Koppelen bezig* en geen formulier.
 
 De statuspagina (ontwerptaal Peil, zonder JavaScript) toont bovenaan altijd de totaalstand. Die is **nooit groen**
 zolang de dienst niet gereed is: niet gekoppeld, koppeling nog niet door de Hub bevestigd, ingetrokken of een
@@ -141,9 +145,12 @@ upgrade: zie `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
   en voert dan de migraties uit. **Mislukt de back-up, dan migreert de app niet** en stopt hij met een melding in de
   log (bijv. te weinig vrije ruimte op de dataset). Mislukt een migratie, dan blijft de oude database ongewijzigd en
   meldt de log dat ook. Een ZFS-snapshot vooraf blijft verstandig.
-- **Contract 1.2 (deze versie):** de database kreeg migratie `0003` en de koppeling met de Hub verhuist bij de eerste
+- **Contract 1.2:** de database kreeg migratie `0003` en de koppeling met de Hub verhuist bij de eerste
   start eenmalig uit de database naar `/appdata/secrets/hub-link.json`. Terug naar een oudere image kan alleen met de
   back-up of ZFS-snapshot van vóór de update.
+- **Contract 1.3 (deze versie):** migratie `0004` (noodtoegang: `100.64.0.0/10` telt alleen nog als privé als een
+  beheerder dat bewust toestaat) en `hub-link.json` met `schema_version` `"1.3"` (oudere versies lezen dat; een
+  bestaande koppeling blijft). Terug naar een oudere image: alleen met de back-up of ZFS-snapshot van vóór de update.
 - **Terugdraaien:** zolang een release geen databasewijziging heeft (zie de releasenotes, veld
   `tag_only_rollback_safe`), kun je de Tag terugzetten. Bij een schemawijziging: zet de ZFS-snapshot van vóór de
   update terug, of gebruik de back-up uit `/appdata/backups`. `app.rollback` van TrueNAS werkt niet voor een
@@ -162,4 +169,7 @@ upgrade: zie `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
 | Statuspagina: *sleutelset-vingerafdruk van de Hub klopt niet* | Vingerafdruk verkeerd overgenomen, of je praat niet met jouw Hub. Er is niets opgeslagen; maak in de Hub een nieuwe koppelcode of een nieuw token. |
 | Statuspagina: *HUB_URL is ongeldig* | Gebruik `http://<NAS-adres>:<Hub-poort>`: geen `localhost`, geen pad, geen inloggegevens. |
 | Statuspagina: *ingetrokken* | De Hub heeft de koppeling ingetrokken. Opnieuw koppelen gaat via de Hub (nieuw token). |
+| Statuspagina: *Koppelen kan niet via dit adres* (`host_niet_toegestaan`) | Je opende de pagina via een domeinnaam. Open `http://<NAS-adres>:30420`, of koppel met het token of via de Hub. |
+| Statuspagina: *Het formulier kwam niet van deze pagina* (`herkomst_onjuist`) | Het formulier werd van een andere pagina of app verstuurd, of de browser stuurde geen herkomst. Laad de statuspagina opnieuw en vul het daar in. |
+| Statuspagina: *De koppelstatus is onleesbaar* | Het koppelbestand is beschadigd of heeft de verkeerde rechten. Maak in de Hub een nieuw koppeltoken en zet het in `HUB_ENROLLMENT_TOKEN`; het oude bestand blijft bewaard als `hub-link.json.onleesbaar-<tijd>`. |
 | Image kan niet worden opgehaald (`denied`) | Het GHCR-pakket is nog privé; zie stap 0 (terugval met registry-login). |

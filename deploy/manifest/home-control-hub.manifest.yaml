@@ -1,12 +1,12 @@
-# Manifest (manifeststandaard v1, platformcontract 1.2 §9; eigenaar van de standaard: appstore-en-fork).
+# Manifest (manifeststandaard v1, platformcontract 1.3 §9; eigenaar van de standaard: appstore-en-fork).
 # Installatie uitsluitend als standaard TrueNAS Custom App (één image + formulierwaarden); een 'compose'-veld is
 # verboden. De digest van de eigen GHCR-image vult de release-CI in (release/digests.json); zonder digest is installeren
 # niet gereed. Poorten staan alleen in network.ports (contract 1.2: custom_app.ports en joins_platform_network zijn
 # vervallen; apps delen nooit een Docker-netwerk).
 # Koppelen met de Hub: bij installatie via de API geeft de Hub zelf HUB_URL, HUB_ENROLLMENT_TOKEN (eenmalig, 60 min)
-# en HUB_KEY_FINGERPRINT mee (contract 1.2 §3.2, §8); het zijn daarom geen manifestparameters en custom_app.env blijft
-# leeg. Gecontroleerd met de validator van appstore-en-fork (jl-manifest validate): geldig, 0 fouten; alleen de
-# verwachte waarschuwing digest_pending_release (de digest komt pas bij een release).
+# en HUB_KEY_FINGERPRINT mee (contract 1.3 §3.2, §8); HUB_* is gereserveerd: geen manifestparameters en custom_app.env
+# blijft leeg. Gecontroleerd met de 1.3-validator van appstore-en-fork (jl-manifest validate --strict, C1.3-ASF-08):
+# geldig, 0 fouten; digest_pending_release is geaccepteerd (alleen vóór de eerste release, zie accepted_findings).
 manifest_version: "1"
 app_id: home-control-hub
 name: Home Control Hub
@@ -101,6 +101,9 @@ healthcheck:
   interval_s: 30
   timeout_s: 8
   start_period_s: 90
+  # monitorplan (contract 1.3 §9): de Hub (B09) maakt er een monitorplan van; de beheerder neemt het over in Uptime
+  # Kuma en bevestigt het per monitor ("handmatig bevestigd", nooit "gevalideerd door de Hub")
+  monitor: {pad: /readyz, verwachte_status: 200, timeout_s: 8, interval_s: 60}
   retries: 3
 backup:
   db_export:
@@ -145,3 +148,7 @@ provenance:
   source_commit: null
   upstream_repo: null
   license: GPL-3.0
+# contract 1.3 §9: alleen waarschuwingen uit de vaste lijst; --strict faalt zodra deze niet meer optreedt (na de release)
+accepted_findings:
+  - code: digest_pending_release
+    reden_nl: Eigen image vóór de eerste release; de release-CI vult de digest in (release/digests.json).

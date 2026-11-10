@@ -1,16 +1,21 @@
-"""Unit: installatie-artefacten volgen contract 1.2 (alleen standaard Custom App, gepinde images, manifest §9, geen
-root-PID 1 en zelf gezette no-new-privileges, Custom App-instructies met digest) + OpenAPI-drift."""
+"""Unit: installatie-artefacten volgen contract 1.3 (alleen standaard Custom App, gepinde images, manifest §9, geen
+root-PID 1 en zelf gezette no-new-privileges, healthcheck met controlevlag, Custom App-instructies met digest) +
+OpenAPI-drift."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 
+import pytest
 import yaml
 
 from integrations.cli import export_openapi
 from tests.conftest import REPO_ROOT
 
+APPSTORE_CLI = REPO_ROOT.parent / "appstore-en-fork" / ".venv" / "bin" / "jl-manifest"
 DEPLOY = REPO_ROOT / "deploy"
 FORBIDDEN_HOST_PATHS = ("/", "/mnt", "/etc", "/var/run", "/root")
 
@@ -65,6 +70,34 @@ def test_manifest_is_custom_app_and_safe() -> None:
     assert m["validation_status"] == "unvalidated"
     version = (REPO_ROOT / "VERSION").read_text().strip()
     assert m["version"] == m["image"]["tag"] == version
+
+
+def test_manifest_follows_contract_1_3() -> None:
+    """Contract 1.3 §9 (C1.3-HCH-13): HUB_* is gereserveerd, monitorplan in healthcheck.monitor, kop 1.3 en alleen
+    geaccepteerde waarschuwingen uit de vaste lijst."""
+    text = (DEPLOY / "manifest/home-control-hub.manifest.yaml").read_text(encoding="utf-8")
+    m = yaml.safe_load(text)
+    assert "platformcontract 1.3 §9" in text.splitlines()[0]
+    names = [p["name"] for p in m.get("parameters", [])] + [e["name"] for e in m["custom_app"]["env"]]
+    assert not [n for n in names if n.upper().startswith("HUB_")]
+    assert m["healthcheck"]["monitor"] == {"pad": "/readyz", "verwachte_status": 200, "timeout_s": 8, "interval_s": 60}
+    assert m["healthcheck"]["monitor"]["pad"] == m["healthcheck"]["path"]
+    assert [a["code"] for a in m["accepted_findings"]] == ["digest_pending_release"]
+    assert all(a["reden_nl"] for a in m["accepted_findings"])
+
+
+@pytest.mark.skipif(not APPSTORE_CLI.is_file(), reason="geen lokale appstore-en-fork met venv (validator)")
+def test_manifest_is_valid_for_the_1_3_validator_in_strict_mode() -> None:
+    """Dezelfde controle als de release-CI van appstore-en-fork: jl-manifest validate --strict (C1.3-ASF-08)."""
+    out = subprocess.run(  # noqa: S603 - vaste opdracht, geen shell
+        [str(APPSTORE_CLI), "validate", "--strict", str(DEPLOY / "manifest/home-control-hub.manifest.yaml")],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        check=False,
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "GELDIG — 0 fout(en)" in out.stdout
 
 
 def test_dockerfile_pins_base_images_by_digest_and_no_latest() -> None:
