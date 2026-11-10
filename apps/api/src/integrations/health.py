@@ -1,8 +1,8 @@
-"""``/healthz`` (proces leeft), ``/readyz`` (afhankelijkheden ok) en de connector-health (contract §5/§6)."""
+"""``/healthz`` (proces leeft), ``/readyz`` (afhankelijkheden ok) en de connector-health (contract 1.3 §5/§6/§6.2)."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 
 from . import APP_ID, __version__
 from .domains.sso import service as sso_service
-from .models import IntegrationSource, OutboxEvent
+from .models import IntegrationSource, OutboxEvent, ServiceState
 from .security.secrets import secrets_present
-from .timeutil import iso, utcnow
+from .timeutil import ensure_aware, iso, utcnow
+from .worker import HEARTBEAT_KEY
 
 router = APIRouter(tags=["gezondheid"])
 
@@ -56,116 +57,182 @@ def readyz(request: Request) -> JSONResponse:
     return JSONResponse(body, status_code=200 if ok else 503)
 
 
-def _check(name: str, status: str, detail: Any = None, reason: str | None = None) -> dict[str, Any]:
-    return {"name": name, "status": status, "observed_at": iso(utcnow()), "detail": detail or {}, "reason_code": reason}
+#: contract 1.3 §6: totaal = de slechtste check in deze volgorde (zoals het Peil-totaal: onbekend is nooit groen)
+ERNST = {"healthy": 0, "unknown": 1, "degraded": 2, "down": 3}
+#: een hartslag van de worker is vers zolang hij niet ouder is dan 3 rondes (minstens 60 s)
+WORKER_STIL_NA_RONDES = 3
+#: een wachtrij die niet afneemt: het oudste te verzenden event wacht langer dan dit (gekoppeld) → degraded
+JOBS_STIL_NA = timedelta(hours=1)
+
+
+def _check(
+    name: str, status: str, detail: Any = None, reason: str | None = None, observed_at: datetime | None = None
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "observed_at": iso(observed_at or utcnow()),
+        "detail": detail or {},
+        "reason_code": reason,
+    }
+
+
+def _worker_check(session: Session, interval_s: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Vaste checks ``worker`` (``observed_at`` = laatste hartslag) en ``jobs`` (wachtrij, bezig, laatste job klaar)."""
+    row = session.get(ServiceState, HEARTBEAT_KEY)
+    beat = dict(row.value) if row is not None else {}
+    at = _parse(beat.get("at"))
+    now = utcnow()
+    grens = timedelta(seconds=max(60.0, WORKER_STIL_NA_RONDES * float(beat.get("interval_s") or interval_s)))
+    detail = {"laatste_hartslag": beat.get("at"), "mislukte_stappen": beat.get("mislukte_stappen", [])}
+    if at is None:
+        worker = _check("worker", "unknown", detail, "worker_nog_geen_hartslag")
+    elif now - at > grens:
+        worker = _check("worker", "degraded", detail, "worker_stil", observed_at=at)
+    elif beat.get("mislukte_stappen"):
+        worker = _check("worker", "degraded", detail, "workerstap_mislukt", observed_at=at)
+    else:
+        worker = _check("worker", "healthy", detail, None, observed_at=at)
+    pending = session.scalar(select(func.count()).where(OutboxEvent.delivery_status == "pending")) or 0
+    retrying = (
+        session.scalar(select(func.count()).where(OutboxEvent.delivery_status == "pending", OutboxEvent.attempts > 0))
+        or 0
+    )
+    dead = session.scalar(select(func.count()).where(OutboxEvent.delivery_status == "dead_letter")) or 0
+    oldest = session.scalar(select(func.min(OutboxEvent.timestamp_utc)).where(OutboxEvent.delivery_status == "pending"))
+    return worker, {
+        "wachtrij": int(pending),
+        "bezig": int(retrying),
+        "laatste_job_klaar": beat.get("laatste_job_klaar"),
+        "dead_letter": int(dead),
+        "oudste_wachtend": iso(oldest) if oldest is not None else None,
+    }
+
+
+def _parse(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return ensure_aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
 
 
 def connector_health(request: Request, session: Session) -> dict[str, Any]:
+    """Connector-health volgens contract 1.3 §6/§6.2 (C1.3-HCH-07).
+
+    - ``status`` = de slechtste check (``healthy`` < ``unknown`` < ``degraded`` < ``down``); ``reason_code`` = die van de
+      eerste slechtste check.
+    - Vaste namen: ``database``, ``worker`` (``observed_at`` = laatste hartslag), ``jobs`` (``detail.wachtrij``,
+      ``detail.bezig``, ``detail.laatste_job_klaar``; een wachtrij die niet afneemt → ``degraded``) en ``hub_link``.
+      Eigen checks: ``migraties``, ``hub_sleutels``, ``herstelregister`` en ``bronnen``.
+    - Wat niet is ingesteld, is geen check (geen bron ingesteld, leeg herstelregister): "niet ingesteld" is geen
+      meting en zou het totaal anders nooit groen laten worden (zoals Peil 1.1.1, E10). Een ingestelde bron zonder
+      verse meting telt als ``unknown`` met ``meting_verouderd`` (§6.2)."""
     state = request.app.state
     checks: list[dict[str, Any]] = []
     db_ok = state.db.ping()
-    checks.append(_check("database", "healthy" if db_ok else "down"))
-    if not db_ok:
-        return {
-            "status": "down",
-            "observed_at": iso(utcnow()),
-            "reason_code": "database_onbereikbaar",
-            "checks": checks,
-        }
-
-    current = state.db.current_revision()
-    checks.append(
-        _check(
-            "migraties",
-            "healthy" if current == state.alembic_head else "degraded",
-            {"huidig": current, "verwacht": state.alembic_head},
-        )
-    )
+    checks.append(_check("database", "healthy" if db_ok else "down", None, None if db_ok else "database_onbereikbaar"))
     link = state.hublink.state()
     coupled = link.linked
+    hub: tuple[str, str | None]
+    if link.corrupt:
+        hub = ("down", "koppelstatus_onleesbaar")
+    elif coupled and link.confirmed_at:
+        hub = ("healthy", None)
+    elif coupled:
+        hub = ("degraded", "niet_bevestigd")
+    else:
+        hub = ("unknown", "niet_gekoppeld" if link.state == "nooit_gekoppeld" else link.state)
     checks.append(
         _check(
-            "hub_koppeling",
-            "healthy" if coupled and link.confirmed_at else ("degraded" if coupled else "unknown"),
+            "hub_link",
+            hub[0],
             {"state": link.state, "bevestigd": bool(link.confirmed_at), "koppelen_bezig": link.pending is not None},
-            None if coupled and link.confirmed_at else ("niet_bevestigd" if coupled else link.state),
+            hub[1],
         )
     )
     # §4.5: vertrouwd worden alleen de gepinde sleutels (geen JWKS via HTTP); een geweigerde sleutelrotatie stopt het
     # toepassen van verdere rotaties en is een incident
-    keys_reason: str | None
-    keys_detail: dict[str, Any]
-    if not coupled or link.pins is None:
-        keys_status, keys_reason, keys_detail = "unknown", "niet_gekoppeld", {}
-    else:
+    if coupled and link.pins is not None:
         blocked = link.key_rotation_blocked_sequence
-        keys_status = "degraded" if blocked is not None else "healthy"
-        keys_reason = "sleutelrotatie_geweigerd" if blocked is not None else None
-        keys_detail = {
-            "jwt": len(link.pins.jwt),
-            "policy": len(link.pins.policy),
-            "rotation_sequence": link.pins.rotation_sequence,
-            "keyset_fingerprint": link.pins.keyset_fingerprint,
-        }
-    checks.append(_check("hub_sleutels", keys_status, keys_detail, keys_reason))
-
-    dead = session.scalar(select(func.count()).where(OutboxEvent.delivery_status == "dead_letter")) or 0
-    stale_pending = (
-        session.scalar(
-            select(func.count()).where(
-                OutboxEvent.delivery_status == "pending", OutboxEvent.timestamp_utc < utcnow() - timedelta(hours=1)
+        checks.append(
+            _check(
+                "hub_sleutels",
+                "degraded" if blocked is not None else "healthy",
+                {
+                    "jwt": len(link.pins.jwt),
+                    "policy": len(link.pins.policy),
+                    "rotation_sequence": link.pins.rotation_sequence,
+                    "keyset_fingerprint": link.pins.keyset_fingerprint,
+                },
+                "sleutelrotatie_geweigerd" if blocked is not None else None,
             )
         )
-        or 0
-    )
-    outbox_status = "degraded" if dead or (coupled and stale_pending) else "healthy"
-    checks.append(
-        _check(
-            "outbox",
-            outbox_status,
-            {"dead_letter": dead, "pending_ouder_dan_1u": stale_pending},
-            "dead_letter" if dead else ("achterstand" if outbox_status != "healthy" else None),
+    if db_ok:
+        current = state.db.current_revision()
+        at_head = current is not None and current == state.alembic_head
+        checks.append(
+            _check(
+                "migraties",
+                "healthy" if at_head else "down",  # /readyz is dan 503: de dienst neemt geen verkeer aan
+                {"huidig": current, "verwacht": state.alembic_head},
+                None if at_head else "schema_niet_actueel",
+            )
         )
-    )
-
-    readiness_result = sso_service.overall(session, state.settings.break_glass_test_max_age_days)
-    reasons = readiness_result["reasons"]
-    checks.append(
-        _check(
-            "herstelregister",
-            readiness_result["health"],
-            readiness_result["counts"],
-            reasons[0]["code"] if reasons else None,
+        worker, jobs = _worker_check(session, state.settings.worker_interval_s)
+        checks.append(worker)
+        stil = (
+            coupled
+            and jobs["oudste_wachtend"] is not None
+            and utcnow() - (_parse(jobs["oudste_wachtend"]) or utcnow()) > JOBS_STIL_NA
         )
-    )
+        jobs_reason = "dead_letter" if jobs["dead_letter"] else ("wachtrij_neemt_niet_af" if stil else None)
+        checks.append(_check("jobs", "degraded" if jobs_reason else "healthy", jobs, jobs_reason))
 
-    rows = {r.source_id: r for r in session.scalars(select(IntegrationSource))}
-    from .sources import ALL_SOURCES, effective_probe
+        readiness_result = sso_service.overall(session, state.settings.break_glass_test_max_age_days)
+        if readiness_result["counts"]["accounts"]:
+            reasons = readiness_result["reasons"]
+            checks.append(
+                _check(
+                    "herstelregister",
+                    readiness_result["health"],
+                    readiness_result["counts"],
+                    reasons[0]["code"] if reasons else None,
+                )
+            )
 
-    # een meting ouder dan 15 min telt als 'unknown' (nooit de laatst bekende stand; sources.PROBE_MAX_AGE)
-    counts = {"healthy": 0, "degraded": 0, "down": 0, "unknown": 0}
-    stale = 0
-    now = utcnow()
-    for sid in ALL_SOURCES:
-        st, why = effective_probe(rows.get(sid), now)
-        stale += why == "meting_verouderd"
-        counts[st] = counts.get(st, 0) + 1
-    src_status = (
-        "down"
-        if counts["down"]
-        else ("degraded" if counts["degraded"] else ("healthy" if counts["unknown"] == 0 else "unknown"))
-    )
-    src_reason = "meting_verouderd" if stale else ("niet_geconfigureerd" if counts["unknown"] else None)
-    checks.append(_check("bronnen", src_status, {**counts, "verouderd": stale}, src_reason))
+        from .sources import ALL_SOURCES, effective_probe
 
-    service_checks = [c for c in checks if c["name"] in ("migraties", "hub_koppeling", "hub_sleutels", "outbox")]
-    bad = [c for c in service_checks if c["status"] not in ("healthy", "unknown")]
-    # de dienst zelf draait; een uitgevallen afhankelijkheid (Hub/sleutels/outbox) maakt hem 'degraded', nooit 'healthy'
-    status = "degraded" if bad or not coupled else "healthy"
-    reason = next((c["reason_code"] or c["name"] for c in service_checks if c["status"] != "healthy"), None)
+        rows = {r.source_id: r for r in session.scalars(select(IntegrationSource))}
+        configured = {sid: r for sid, r in rows.items() if sid in ALL_SOURCES and r.enabled and r.base_url}
+        if configured:
+            now = utcnow()
+            counts = {"healthy": 0, "degraded": 0, "down": 0, "unknown": 0}
+            stale = 0
+            seen: list[datetime] = []
+            for row in configured.values():
+                st, why = effective_probe(row, now)
+                stale += why == "meting_verouderd"
+                counts[st] = counts.get(st, 0) + 1
+                if row.last_probe_at is not None and why != "meting_verouderd":
+                    seen.append(ensure_aware(row.last_probe_at))
+            src_status = max((k for k, v in counts.items() if v), key=ERNST.__getitem__)
+            src_reason = "meting_verouderd" if stale else (None if src_status == "healthy" else "bron_" + src_status)
+            checks.append(
+                _check(
+                    "bronnen",
+                    src_status,
+                    {**counts, "verouderd": stale, "ingesteld": len(configured), "totaal": len(ALL_SOURCES)},
+                    src_reason,
+                    observed_at=min(seen) if seen and not stale else None,
+                )
+            )
+    status = max((c["status"] for c in checks), key=ERNST.__getitem__)
+    worst = next(c for c in checks if c["status"] == status)
     return {
         "status": status,
         "observed_at": iso(utcnow()),
-        "reason_code": reason if status != "healthy" else None,
+        "reason_code": None if status == "healthy" else (worst["reason_code"] or worst["name"]),
         "checks": checks,
     }

@@ -1,6 +1,10 @@
 """Worker: koppelen met het env-token, de koppeling onderhouden (bevestigen, token roteren op verzoek van de Hub,
-ondertekende sleutelrotaties pollen; contract 1.2 §3.6–§3.8, §4.5), outbox pushen, Authentik synchroniseren (B13-004),
-verlopen noodactivaties sluiten en opruimen (idempotency, JWT-replaycache, oude Authentik-events)."""
+ondertekende sleutelrotaties pollen; contract 1.3 §3.6–§3.8, §4.5), outbox pushen, Authentik synchroniseren (B13-004),
+verlopen noodactivaties sluiten en opruimen (idempotency, JWT-replaycache, oude Authentik-events).
+
+Na elke ronde schrijft de worker een **hartslag** in ``service_state`` (``worker_hartslag``: tijd, duur, mislukte
+stappen, laatste geslaagde push); de connector-health leest die als de vaste checks ``worker`` en ``jobs`` (contract
+1.3 §6: zo herkent de Hub "geeft 200 maar voert geen jobs uit")."""
 
 from __future__ import annotations
 
@@ -9,6 +13,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -25,14 +30,20 @@ from .idempotency import purge_expired
 from .security.replay import purge_expired as purge_jti
 from .security.secrets import enroll_public_jwk, ensure_secrets, load_identity, load_vault_key
 from .security.vault import Vault
+from .timeutil import iso, utcnow
 
 log = logging.getLogger("integrations.worker")
+
+
+#: sleutel in service_state met de hartslag van de worker (geen geheimen)
+HEARTBEAT_KEY = "worker_hartslag"
 
 
 @dataclass
 class WorkerState:
     last_purge: float = 0.0
     next_authentik_sync: float = 0.0
+    last_push_ok: str | None = None
     stats: dict[str, int] = field(
         default_factory=lambda: {"pushed": 0, "push_failed": 0, "closed_activations": 0, "authentik_syncs": 0}
     )
@@ -128,18 +139,51 @@ class Worker:
 
     def run_once(self) -> None:
         now = time.monotonic()
-        for step in (
-            self.start_step,
-            self.enroll_step,
-            self.link_step,
-            self.push_step,
-            lambda: self.authentik_step(now),
-            lambda: self.housekeeping_step(now),
+        started = utcnow()
+        failed: list[str] = []
+        names = ("start", "koppelen", "koppeling", "push", "authentik", "onderhoud")
+        for name, step in zip(
+            names,
+            (
+                self.start_step,
+                self.enroll_step,
+                self.link_step,
+                self.push_step,
+                lambda: self.authentik_step(now),
+                lambda: self.housekeeping_step(now),
+            ),
+            strict=True,
         ):
             try:
                 step()
             except Exception:  # een fout in één stap mag de andere niet blokkeren
+                failed.append(name)
                 log.exception("workerstap mislukt")
+        self.heartbeat(started, failed)
+
+    def heartbeat(self, started: Any, failed: list[str]) -> None:
+        """Hartslag voor de connector-health (§6: ``worker``/``jobs``); best effort (database weg = geen hartslag)."""
+        from .models import ServiceState
+
+        if "push" not in failed:
+            self.state.last_push_ok = iso(utcnow())
+        value = {
+            "at": iso(utcnow()),
+            "duur_ms": int((utcnow() - started).total_seconds() * 1000),
+            "mislukte_stappen": failed,
+            "laatste_job_klaar": self.state.last_push_ok,
+            "interval_s": self.settings.worker_interval_s,
+        }
+        try:
+            with self.db.sessions() as s:
+                row = s.get(ServiceState, HEARTBEAT_KEY)
+                if row is None:
+                    s.add(ServiceState(key=HEARTBEAT_KEY, value=value))
+                else:
+                    row.value = value
+                s.commit()
+        except Exception as exc:
+            log.warning("hartslag van de worker niet vastgelegd (%s)", type(exc).__name__)
 
     def run(self, stop: threading.Event) -> None:
         log.info("worker gestart (interval %.0f s)", self.settings.worker_interval_s)

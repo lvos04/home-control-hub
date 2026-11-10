@@ -173,12 +173,15 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
         "sso.sessions.revoke": "nog_niet_toepasbaar",
     }
     assert set(d["domains"]) == {"network", "automation", "sso", "energy"} and d["timestamp_utc"].endswith("Z")
+    assert d["limits"]["max_age_s"] == {"source": 900, "health": 900}  # contract 1.3 §6.2
     health = c.get("/connector/v1/health", headers=h).json()
     assert health["status"] in ("healthy", "degraded", "down", "unknown")
     names = {x["name"]: x for x in health["checks"]}
-    assert names["hub_koppeling"]["status"] == "healthy"
-    assert names["bronnen"]["status"] == "unknown"  # niet geconfigureerd ≠ gezond
-    assert names["herstelregister"]["status"] == "unknown"
+    assert names["hub_link"]["status"] == "healthy"  # vaste naam (1.3 §6)
+    # niet ingesteld is geen meting: geen check voor bronnen of een leeg herstelregister (1.3 §6, ADR-0014)
+    assert "bronnen" not in names and "herstelregister" not in names
+    # nog geen hartslag van de worker (geen worker in deze test): onbekend, dus het totaal is nooit groen
+    assert names["worker"]["status"] == "unknown" and health["status"] == "unknown"
     items = c.get("/connector/v1/items", params={"type": "source", "limit": 3}, headers=h).json()
     assert len(items["items"]) == 3 and items["next_cursor"]
     rest = c.get(

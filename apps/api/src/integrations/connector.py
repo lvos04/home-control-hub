@@ -43,7 +43,7 @@ from .models import AuditEvent, OutboxEvent
 from .pagination import MAX_LIMIT, decode_cursor, encode_cursor
 from .redact import redact
 from .security.auth import AuthFirstRoute, Principal, require_admin_or_service, require_connector_reader
-from .sources import ALL_SOURCES, source_view
+from .sources import ALL_SOURCES, PROBE_MAX_AGE, source_view
 from .timeutil import iso, utcnow
 
 router = APIRouter(prefix=CONNECTOR_PREFIX, tags=["connector"], route_class=AuthFirstRoute)
@@ -61,6 +61,8 @@ ITEM_TYPES: dict[str, dict[str, Any]] = {
     "sso.proposal": {"roles": {"admin", "operator", "service"}, "title_nl": "Voorstellen (preview, niet toepasbaar)"},
     "sso.anomaly": {"roles": {"admin", "operator", "service"}, "title_nl": "Afwijkingen uit Authentik"},
 }
+#: §6.2: standaard max_age 900 s; de bronmetingen van deze dienst gebruiken dezelfde grens (sources.PROBE_MAX_AGE)
+MAX_AGE_S = int(PROBE_MAX_AGE.total_seconds())
 UNBUILT_ITEM_TYPES = {
     "network.device": "network.devices.read",
     "network.dns_summary": "network.dns.summary.read",
@@ -110,7 +112,13 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
         ],
         "item_types": {k: v["title_nl"] for k, v in ITEM_TYPES.items()},
         "unbuilt_item_types": UNBUILT_ITEM_TYPES,
-        "limits": {"max_page_size": MAX_LIMIT, "outbound_timeout_s": {"connect": 5, "read": 15}, "max_retries": 3},
+        "limits": {
+            "max_page_size": MAX_LIMIT,
+            "outbound_timeout_s": {"connect": 5, "read": 15},
+            "max_retries": 3,
+            # contract 1.3 §6.2: na deze leeftijd is een meting 'unknown' (meting_verouderd); een afnemer mag strenger
+            "max_age_s": {"source": MAX_AGE_S, "health": MAX_AGE_S},
+        },
         "domains": domains,
         "timestamp_utc": iso(utcnow()),
     }

@@ -542,8 +542,8 @@ def test_outbox_push_delivery_dead_letter_and_not_paired(
             s.commit()
         worker.run_once()
     health = c.get("/connector/v1/health", headers=h).json()
-    outbox = next(x for x in health["checks"] if x["name"] == "outbox")
-    assert outbox["status"] == "degraded" and outbox["detail"]["dead_letter"] >= 1
+    jobs = next(x for x in health["checks"] if x["name"] == "jobs")  # vaste naam (1.3 §6)
+    assert jobs["status"] == "degraded" and jobs["detail"]["dead_letter"] >= 1 and jobs["reason_code"] == "dead_letter"
     assert c.get("/connector/v1/events", headers=h).json()["dead_letter_count"] >= 1
 
 
