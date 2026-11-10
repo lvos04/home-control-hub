@@ -42,11 +42,11 @@ from .idempotency import idempotency_key, run_idempotent
 from .models import AuditEvent, OutboxEvent
 from .pagination import MAX_LIMIT, decode_cursor, encode_cursor
 from .redact import redact
-from .security.auth import Principal, require_admin_or_service, require_connector_reader
+from .security.auth import AuthFirstRoute, Principal, require_admin_or_service, require_connector_reader
 from .sources import ALL_SOURCES, source_view
 from .timeutil import iso, utcnow
 
-router = APIRouter(prefix=CONNECTOR_PREFIX, tags=["connector"])
+router = APIRouter(prefix=CONNECTOR_PREFIX, tags=["connector"], route_class=AuthFirstRoute)
 
 ITEM_TYPES: dict[str, dict[str, Any]] = {
     "source": {"roles": {"admin", "operator", "viewer", "service"}, "title_nl": "Bronnen (catalogus + toestand)"},

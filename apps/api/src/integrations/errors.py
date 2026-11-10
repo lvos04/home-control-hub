@@ -11,6 +11,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .bodylimit import MAX_BODY_BYTES
+
 log = logging.getLogger("integrations")
 
 TRACE_HEADER = "X-Trace-Id"
@@ -114,7 +116,8 @@ def install_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code, message = _STATUS_CODES.get(exc.status_code, ("http_error", "Fout bij verwerken van het verzoek."))
-        return error_response(request, exc.status_code, code, message, headers=getattr(exc, "headers", None))
+        details = {"max_bytes": MAX_BODY_BYTES} if exc.status_code == 413 else None  # foutcatalogus §5
+        return error_response(request, exc.status_code, code, message, details, getattr(exc, "headers", None))
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

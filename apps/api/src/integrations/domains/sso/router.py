@@ -24,6 +24,7 @@ from ...idempotency import idempotency_key, run_idempotent
 from ...pagination import decode_cursor, encode_cursor, limit_param
 from ...redact import looks_like_secret
 from ...security.auth import (
+    AuthFirstRoute,
     Principal,
     require_admin,
     require_admin_or_operator,
@@ -42,7 +43,7 @@ from .models import (
     SsoRecoveryMethod,
 )
 
-router = APIRouter(prefix=f"{API_PREFIX}/sso", tags=["sso"])
+router = APIRouter(prefix=f"{API_PREFIX}/sso", tags=["sso"], route_class=AuthFirstRoute)
 
 SystemT = Literal["hub_local", "authentik", "truenas", "node_red", "adguard_home", "netalertx", "overig"]
 LoginKindT = Literal["lokaal", "sso", "beide"]
@@ -769,7 +770,10 @@ def report_activation(
                 payload={"reasons": [r["code"] for r in ev.reasons], "mode": body.mode},
             )
             session.commit()  # de weigering zelf blijft in de audit staan
-            raise ApiError(403, "noodtoegang_geweigerd", "Noodtoegang geweigerd.", {"reasons": ev.reasons})
+            # foutcatalogus §5 (1.3): 403 = forbidden met details.reason (geen eigen 403-code buiten de vaste lijst)
+            raise ApiError(
+                403, "forbidden", "Noodtoegang geweigerd.", {"reason": "noodtoegang_geweigerd", "reasons": ev.reasons}
+            )
         now = utcnow()
         act = SsoBreakGlassActivation(
             id=uuid.uuid4(),

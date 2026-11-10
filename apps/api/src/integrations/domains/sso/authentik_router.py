@@ -28,6 +28,7 @@ from ...models import ServiceState
 from ...pagination import decode_cursor, encode_cursor, limit_param
 from ...redact import looks_like_secret
 from ...security.auth import (
+    AuthFirstRoute,
     Principal,
     require_admin,
     require_admin_operator_or_service,
@@ -44,7 +45,7 @@ from .models import SsoAnomaly, SsoAppSetting, SsoAuthentikSnapshot, SsoAuthEven
 from .oidc_hub import ACTION_ID as HUB_OIDC_ACTION
 from .oidc_hub import check_https_url, check_hub_client
 
-router = APIRouter(prefix=f"{API_PREFIX}/sso", tags=["sso"])
+router = APIRouter(prefix=f"{API_PREFIX}/sso", tags=["sso"], route_class=AuthFirstRoute)
 DETECT_KEY = "authentik_detect"
 SLUG = r"^[a-z0-9][a-z0-9-]{1,48}$"
 USERNAME = r"^[A-Za-z0-9._@+-]{1,150}$"

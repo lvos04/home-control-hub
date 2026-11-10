@@ -138,7 +138,7 @@ def test_idempotency_required_replay_and_conflict(paired_client: Any, auth: Any)
     listing = c.get("/integrations/v1/sso/recovery/accounts", headers=h).json()
     assert len(listing["items"]) == 1  # géén tweede uitvoering
     other = c.post("/integrations/v1/sso/recovery/accounts", json={**body, "username": "ander"}, headers=idem(h, key))
-    assert other.status_code == 409 and other.json()["code"] == "idempotency_key_conflict"
+    assert other.status_code == 422 and other.json()["code"] == "idempotency_key_reused"  # foutcatalogus §5 (1.3)
     dup = c.post("/integrations/v1/sso/recovery/accounts", json=body, headers=idem(h))
     assert dup.status_code == 409 and dup.json()["code"] == "conflict"
 

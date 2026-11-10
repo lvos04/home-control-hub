@@ -35,7 +35,7 @@ from .hubclient import HubUrlError, validate_hub_url
 from .idempotency import idempotency_key, run_idempotent
 from .models import IntegrationSource
 from .redact import looks_like_secret
-from .security.auth import Principal, require_admin, require_reader
+from .security.auth import AuthFirstRoute, Principal, require_admin, require_reader
 from .timeutil import ensure_aware, iso, utcnow
 
 ALL_SOURCES: dict[str, SourceSpec] = {
@@ -160,7 +160,7 @@ def probe_source(request: Request, session: Session, source_id: str) -> tuple[st
     return status, reason, detail
 
 
-router = APIRouter(prefix=API_PREFIX, tags=["bronnen"])
+router = APIRouter(prefix=API_PREFIX, tags=["bronnen"], route_class=AuthFirstRoute)
 
 
 class SourceConfig(BaseModel):

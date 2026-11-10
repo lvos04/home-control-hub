@@ -41,5 +41,5 @@ def check_if_match(current_version: int, given: str | None, *, required: bool = 
             412,
             "precondition_failed",
             "Het object is intussen gewijzigd; haal het opnieuw op en probeer het nog eens.",
-            {"current_etag": etag(current_version)},
+            {"huidige_etag": etag(current_version)},  # foutcatalogus §5 (contract 1.3)
         )

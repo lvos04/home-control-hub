@@ -12,7 +12,10 @@
   idempotency-laag met het opgeslagen resultaat beantwoordt. Replaycontrole niet mogelijk → 503
   ``replay_check_unavailable`` (fail-closed, §4.6).
 - Vaste ``reason``-waarden (Engels) en controlevolgorde: ``state`` → tokensoort → handtekening/``kid`` → claims →
-  ``token_use`` → ``jti`` (§4.7). Nooit "open access" (EX16).
+  ``token_use`` → ``jti`` → schemavalidatie van de body (§4.7). Rol (403) en ``Idempotency-Key`` komen pas ná de
+  authenticatie (RV9). :class:`AuthFirstRoute` dwingt dat af: FastAPI leest een JSON-body vóór de afhankelijkheden en
+  zou een onleesbare body zonder geldige aanmelding met 422 beantwoorden; nu is dat altijd 401. Nooit "open access"
+  (EX16).
 """
 
 from __future__ import annotations
@@ -25,6 +28,10 @@ from typing import TYPE_CHECKING, Any
 
 import jwt
 from fastapi import Depends, Request
+from fastapi.dependencies.models import Dependant
+from fastapi.routing import APIRoute
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import Response
 
 from ..errors import ApiError, forbidden
 from .hubkeys import InvalidKeyError, public_key_from_jwk
@@ -231,6 +238,11 @@ class Authenticator:
 
 
 def current_principal(request: Request) -> Principal:
+    """De aangemelde principal van dit verzoek. Al aangemeld in dit verzoek (``AuthFirstRoute``) → dezelfde
+    principal: de ``jti`` van een mutatie wordt nooit twee keer verbruikt."""
+    existing = getattr(request.state, "principal", None)
+    if isinstance(existing, Principal):
+        return existing
     auth: Authenticator = request.app.state.auth
     principal = auth.authenticate(
         request.headers.get("Authorization"),
@@ -240,6 +252,33 @@ def current_principal(request: Request) -> Principal:
     )
     request.state.principal = principal
     return principal
+
+
+def _uses_principal(dependant: Dependant) -> bool:
+    return any(d.call is current_principal or _uses_principal(d) for d in dependant.dependencies)
+
+
+class AuthFirstRoute(APIRoute):
+    """Route die eerst authenticeert (§4.7, RV9): vóór het lezen van de body, vóór rol en ``Idempotency-Key``.
+
+    Alleen voor routes met ``current_principal`` in hun afhankelijkheden; andere routes (``/healthz``, de statuspagina)
+    blijven ongewijzigd. Een geweigerde aanmelding wordt door de gewone foutafhandeling een 401 met ``reason``."""
+
+    def get_route_handler(self) -> Callable[[Request], Any]:
+        handler = super().get_route_handler()
+        if not _uses_principal(self.dependant):
+            return handler
+
+        async def authenticate_first(request: Request) -> Response:
+            if request.method in MUTATING_METHODS:
+                # eerst de 1 MiB-laag (§4.7: de eerste stap van de controlevolgorde): de body wordt hier alleen begrensd
+                # ingelezen (BodyLimitMiddleware, ook chunked) en nog niet geparsed
+                await request.body()
+            await run_in_threadpool(current_principal, request)
+            response: Response = await handler(request)
+            return response
+
+        return authenticate_first
 
 
 def require_roles(*roles: str) -> Callable[..., Principal]:

@@ -158,7 +158,8 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
         json={"account_id": acc["id"], "client_ip": "203.0.113.50", "mode": "echt"},
         headers=idem(h),
     )
-    assert denied.status_code == 403 and denied.json()["code"] == "noodtoegang_geweigerd"
+    assert denied.status_code == 403 and denied.json()["code"] == "forbidden"
+    assert denied.json()["details"]["reason"] == "noodtoegang_geweigerd"  # foutcatalogus §5 (1.3)
 
     # totaal: Authentik-admin zonder herstelmethodes blijft een risico
     overview = c.get(f"{BASE}/recovery/overview", headers=h).json()

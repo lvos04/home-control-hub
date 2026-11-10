@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import API_PREFIX
 from ..deps import get_session
 from ..errors import ApiError
-from ..security.auth import Principal, require_reader
+from ..security.auth import AuthFirstRoute, Principal, require_reader
 from . import DOMAIN_TITLES_NL, Domain, SourceSpec
 
 
@@ -27,7 +27,7 @@ def domain_router(
     domain: Domain, sources: tuple[SourceSpec, ...], data_routes: dict[str, tuple[str, tuple[str, ...]]]
 ) -> APIRouter:
     """Maakt ``GET /<domein>/capabilities`` en per niet-gebouwde capability een route die 501 geeft."""
-    router = APIRouter(prefix=f"{API_PREFIX}/{domain}", tags=[domain])
+    router = APIRouter(prefix=f"{API_PREFIX}/{domain}", tags=[domain], route_class=AuthFirstRoute)
 
     @router.get("/capabilities", summary=f"Capabilities en bronnen — {DOMAIN_TITLES_NL[domain]}")
     def capabilities(

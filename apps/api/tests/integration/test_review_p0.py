@@ -146,7 +146,9 @@ def test_body_limit_before_auth(client: Any) -> None:
             yield b"a" * 32768  # 1,25 MiB zonder Content-Length (chunked)
 
     r = client.post("/integrations/v1/sso/recovery/kit/verify", content=chunks())
+    # §4.7: de 1 MiB-laag komt vóór de authenticatie, ook zonder Content-Length (chunked)
     assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
+    assert r.json()["details"] == {"max_bytes": 1024 * 1024}
     r = client.post("/koppelen", content=chunks(), headers={"Content-Type": "application/x-www-form-urlencoded"})
     assert r.status_code == 413
     # normale verzoeken blijven werken
@@ -189,7 +191,10 @@ def test_status_page_shows_only_recovery_level(paired_client: Any, auth: Any) ->
     assert r.status_code == 201
     page = c.get("/").text
     # alleen het totaalniveau (risico → Peil-woord 'Beperkt'), geen accountnamen of aandachtspunten
-    assert re.search(r'Beheerherstel \(B13-001\)</span><span class="pil pil-beperkt">.*?</svg>Beperkt</span>', page)
+    assert re.search(
+        r'Beheerherstel \(B13-001\)<span class="sr">:</span></span><span class="pil pil-beperkt">.*?</svg>Beperkt</span>',
+        page,
+    )
     for leak in ("akadmin-review", "geen_noodaccount", "minder_dan_twee_herstelmethodes", "beheeraccount(s)"):
         assert leak not in page, leak
 
