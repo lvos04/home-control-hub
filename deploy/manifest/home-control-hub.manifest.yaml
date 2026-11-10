@@ -7,6 +7,7 @@
 # en HUB_KEY_FINGERPRINT mee (contract 1.3 §3.2, §8); HUB_* is gereserveerd: geen manifestparameters en custom_app.env
 # blijft leeg. Gecontroleerd met de 1.3-validator van appstore-en-fork (jl-manifest validate --strict, C1.3-ASF-08):
 # geldig, 0 fouten; digest_pending_release is geaccepteerd (alleen vóór de eerste release, zie accepted_findings).
+# CI draait die validator verplicht op een vaste commit van appstore-en-fork (.github/workflows/ci.yml).
 manifest_version: "1"
 app_id: home-control-hub
 name: Home Control Hub
@@ -130,8 +131,8 @@ upgrade:
   migrations: true
   tag_only_rollback_safe: false
   notes_nl: >-
-    Alembic-migraties bij de start (0001 basisschema, 0002 B13 P1, 0003 replaycache contract 1.2), met een pg_dump
-    vooraf. Terug naar een oudere tag kan pas nadat de back-up of dataset-snapshot van vóór de update is hersteld.
+    Alembic-migraties bij de start (0001 basisschema, 0002 B13 P1, 0003 replaycache contract 1.2, 0004 noodtoegang
+    contract 1.3: 100.64.0.0/10 alleen nog privé met toestemming van een beheerder), met een pg_dump vooraf. Terug naar een oudere tag kan pas nadat de back-up of dataset-snapshot van vóór de update is hersteld.
     De koppeling met de Hub staat in /appdata/secrets/hub-link.json en wordt bij de eerste start van 1.2 eenmalig uit
     de database overgezet.
 decisions_required: [D01, D02, D03, D16, D17]
