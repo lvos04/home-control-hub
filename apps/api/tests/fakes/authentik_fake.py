@@ -16,6 +16,7 @@ Zonder imports uit het testpakket, zodat de E2E-simulator dit bestand los kan la
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -464,6 +465,12 @@ class AuthentikFake:
                 out = [r for r in out if str(r.get(k)) == q[k]]
         return out
 
+    #: installatie-ID van deze nep-Authentik (Authentik: get_unique_identifier())
+    install_id = "nep-authentik-installatie"
+
+    def uid(self, pk: int) -> str:
+        return hashlib.sha256(f"{pk}-{self.install_id}".encode("ascii")).hexdigest()
+
     def _user_groups(self, username: str) -> list[dict[str, Any]]:
         return [g for g in self.groups.values() if username in g["members"]]
 
@@ -471,7 +478,12 @@ class AuthentikFake:
         out = []
         for u in self.users.values():
             groups = self._user_groups(u["username"])
-            row = {**u, "is_superuser": any(g["is_superuser"] for g in groups), "groups": [g["pk"] for g in groups]}
+            row = {
+                **u,
+                "is_superuser": any(g["is_superuser"] for g in groups),
+                "groups": [g["pk"] for g in groups],
+                "uid": self.uid(u["pk"]),  # zoals Authentik: sha256(f"{id}-{installatie-ID}") (User.uid)
+            }
             if q.get("include_groups") == "true":
                 row["groups_obj"] = [
                     {

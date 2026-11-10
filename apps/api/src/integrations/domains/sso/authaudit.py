@@ -5,6 +5,14 @@
 - De rechtenkaart (gebruiker → groepen → rol per app, via de koppeling van B13-003) wordt vergeleken met de vorige.
   **Alleen een volledig gelezen toestand** wordt vergeleken: een half gelezen lijst mag nooit "toegang ingetrokken"
   opleveren (fail-safe). Ingetrokken toegang → ``sso.access.revoked`` zodat de Hub sessies kan beëindigen.
+- ``sso.access.revoked``/``sso.access.changed`` dragen (contract 1.3 §7) ``issuer``, ``sub`` en
+  ``preferred_username``: ``sub`` is wat de Hub-client van Authentik als OIDC-``sub`` krijgt, afgeleid uit de
+  ``sub_mode`` van zijn provider (``hashed_user_id`` → ``User.uid``, ``user_id`` → ``pk``, ``user_uuid`` → ``uuid``,
+  ``user_username`` → gebruikersnaam; gelezen in de broncode van Authentik 2026.8.5, ``providers/oauth2/id_token.py``)
+  en ``issuer`` uit de discovery van die provider. Is iets daarvan niet te bepalen (geen Hub-client, ``user_email``/
+  ``user_upn``, issuer onleesbaar), dan ``issuer``/``sub`` ``null`` met ``sub_onbekend`` als reden: de Hub koppelt dan
+  op ``preferred_username`` (overgang van §7); een event trekt alleen in, het geeft nooit rechten. NIET GEVALIDEERD
+  tegen een echte Authentik.
 - Afwijkingen zijn regelgebaseerd en ontdubbeld (``sso_anomaly.dedupe_key``); elke nieuwe afwijking → audit +
   ``sso.anomaly.detected`` (classificatie *sensitive*). Regels zijn een startpunt; de grenzen (5 mislukte logins in
   10 min) staan in ADR-0007 en zijn niet op een echte installatie geijkt.
@@ -28,7 +36,15 @@ from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
 from .authentik.reader import read_state, read_version
 from .catalog import APP_BY_ID
-from .models import SsoAdminAccount, SsoAnomaly, SsoAuthentikSnapshot, SsoAuthEvent, SsoGroupRoleMapping
+from .models import (
+    SsoAdminAccount,
+    SsoAnomaly,
+    SsoAuthentikSnapshot,
+    SsoAuthEvent,
+    SsoGroupRoleMapping,
+    SsoProposal,
+)
+from .oidc_hub import ACTION_ID as HUB_OIDC_ACTION
 from .oidc_hub import canonical
 
 EVENT_ACTIONS = (
@@ -51,6 +67,10 @@ BURST_WINDOW = timedelta(minutes=10)
 BURST_THRESHOLD = 5
 MAX_PAGES = 5
 MAX_CHANGE_EVENTS = 50
+#: standaard-slug van de Hub-applicatie in Authentik (B13-002, ``HubOidcParams.application_slug``)
+HUB_CLIENT_SLUG = "hub"
+#: sub_mode van de provider → veld van de Authentik-gebruiker dat de OIDC-sub is (Authentik ``id_token._resolve_sub``)
+SUB_FIELD = {"hashed_user_id": "uid", "user_id": "pk", "user_uuid": "uuid", "user_username": "username"}
 # Rollen die als "beheer" tellen (voor afwijkingen bij toekenning)
 ADMIN_ROLES = {"ai-server-manager": {"admin"}, "immich": {"admin"}, "node-red": {"*"}}
 
@@ -260,6 +280,7 @@ def _record_anomaly(
         classification="sensitive",
         payload={
             "rule_id": rule_id,
+            "ernst": severity,  # 1.3 §7: Peil-woord (laag/middel/hoog); 'severity' vervalt na één overgangsrelease
             "severity": severity,
             "subject": subject,
             "count": row.count,
@@ -484,6 +505,65 @@ def store_snapshot(
     return row
 
 
+def user_ids(users: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per gebruikersnaam de velden waaruit de OIDC-``sub`` volgt (geen e-mail of attributen: niet nodig voor de
+    ondersteunde ``sub_mode``'s en persoonsgegevens)."""
+    return {
+        str(u.get("username")): {k: u.get(k) for k in ("pk", "uuid", "uid") if u.get(k) is not None}
+        for u in users
+        if u.get("username")
+    }
+
+
+def hub_client_slug(session: Session) -> str:
+    """De slug van de Hub-applicatie: uit het laatste voorstel ``sso.oidc.hub.register``, anders ``hub``."""
+    latest = session.scalar(
+        select(SsoProposal).where(SsoProposal.action_id == HUB_OIDC_ACTION).order_by(SsoProposal.created_at.desc())
+    )
+    slug = (latest.parameters or {}).get("application_slug") if latest is not None else None
+    return slug if isinstance(slug, str) and slug else HUB_CLIENT_SLUG
+
+
+def hub_client_identity(session: Session, client: AuthentikClient, caps: compat.ApiCapabilities) -> dict[str, Any]:
+    """``issuer`` en ``sub_mode`` van de Hub-client in Authentik (alleen lezen). Bij een fout: ``None`` + reden."""
+    slug = hub_client_slug(session)
+    try:
+        st = read_state(client, ("applications", "providers"), caps=caps)
+    except AuthentikError:
+        return {"issuer": None, "sub_mode": None, "reden": "authentik_onleesbaar"}
+    app = next((a for a in st.get("applications") or [] if a.get("slug") == slug), None)
+    prov = next((p for p in st.get("providers") or [] if app is not None and p.get("pk") == app.get("provider")), None)
+    if prov is None:
+        return {"issuer": None, "sub_mode": None, "reden": "hub_client_niet_gevonden"}
+    issuer: str | None = None
+    try:
+        doc = client.get_public_json(f"/application/o/{slug}/.well-known/openid-configuration")
+        issuer = doc.get("issuer") if isinstance(doc, dict) and isinstance(doc.get("issuer"), str) else None
+    except AuthentikError:
+        issuer = None
+    return {"issuer": issuer, "sub_mode": prov.get("sub_mode"), "reden": None if issuer else "issuer_onbekend"}
+
+
+def access_identity(identity: dict[str, Any], ids: dict[str, Any] | None, username: str) -> dict[str, Any]:
+    """``issuer``, ``sub`` en ``preferred_username`` voor ``sso.access.*`` (1.3 §7). Nooit gegokt: kan de ``sub`` niet
+    bepaald worden, dan ``null`` met de reden in ``sub_onbekend`` (de Hub valt dan terug op de gebruikersnaam)."""
+    out: dict[str, Any] = {"issuer": identity.get("issuer"), "sub": None, "preferred_username": username}
+    reden = identity.get("reden")
+    field = SUB_FIELD.get(str(identity.get("sub_mode")))
+    if reden is None and field is None:
+        reden = "sub_mode_niet_ondersteund"
+    if reden is None and field is not None:
+        value = username if field == "username" else (ids or {}).get(field)
+        if value is None:
+            reden = "gebruiker_onbekend"
+        else:
+            out["sub"] = str(value)
+    if out["sub"] is None:
+        out["issuer"] = None  # alleen het paar (issuer, sub) betekent iets
+        out["sub_onbekend"] = reden
+    return out
+
+
 def refresh_rights(
     session: Session, client: AuthentikClient, caps: compat.ApiCapabilities, actor: Actor, tid: str
 ) -> dict[str, Any]:
@@ -492,12 +572,14 @@ def refresh_rights(
         return {"status": "onvolledig", "missing": state.missing, "changes": [], "snapshot_id": None}
     role_map = roles_by_group(session)
     rights = build_rights(state.parts["users"], state.parts["groups"], role_map)
-    content = {"rights": rights, "role_map": role_map, "version": state.version}
+    ids = user_ids(state.parts["users"])
+    content = {"rights": rights, "role_map": role_map, "version": state.version, "ids": ids}
     previous = latest_snapshot(session, "rechten")
     if (
         previous is not None
         and previous.content.get("rights") == rights
         and previous.content.get("role_map") == role_map
+        and previous.content.get("ids") == ids
     ):
         # niets veranderd: geen nieuwe momentopname (de worker draait elke paar minuten)
         return {"status": "ongewijzigd", "changes": [], "snapshot_id": str(previous.id), "previous_id": None}
@@ -505,6 +587,15 @@ def refresh_rights(
     if previous is None:
         return {"status": "basislijn", "changes": [], "snapshot_id": str(snap.id), "previous_id": None}
     changes = diff_rights(previous.content.get("rights", {}), rights)
+    known_ids = {**(previous.content.get("ids") or {}), **ids}  # een verwijderde gebruiker staat alleen in de vorige
+    identity: dict[str, Any] | None = None
+
+    def access(username: str) -> dict[str, Any]:
+        nonlocal identity
+        if identity is None:  # alleen bij echte wijzigingen: twee leesverzoeken extra
+            identity = hub_client_identity(session, client, caps)
+        return access_identity(identity, known_ids.get(username), username)
+
     emitted = 0
     for ch in changes:
         if emitted >= MAX_CHANGE_EVENTS:
@@ -524,7 +615,10 @@ def refresh_rights(
                 actor_id=actor[1],
                 trace_id=tid,
                 classification="sensitive",
-                payload={k: ch[k] for k in ("change", "roles_lost", "active_before", "active_after", "groups_removed")},
+                payload={
+                    **access(ch["username"]),
+                    **{k: ch[k] for k in ("change", "roles_lost", "active_before", "active_after", "groups_removed")},
+                },
             )
             emitted += 1
         if ch["roles_gained"] or ch["superuser_after"] != ch["superuser_before"] or ch["groups_added"]:
@@ -538,7 +632,11 @@ def refresh_rights(
                 trace_id=tid,
                 classification="sensitive",
                 payload={
-                    k: ch[k] for k in ("change", "roles_gained", "superuser_before", "superuser_after", "groups_added")
+                    **access(ch["username"]),
+                    **{
+                        k: ch[k]
+                        for k in ("change", "roles_gained", "superuser_before", "superuser_after", "groups_added")
+                    },
                 },
             )
             emitted += 1
@@ -711,7 +809,19 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
             actor_type=actor[0],
             actor_id=actor[1],
             trace_id=tid,
-            payload={"reason": result["reason"]},
+            payload={"reason": result["reason"], "ernst": "middel"},
+        )
+    elif result["status"] != "fout" and previous.get("status") == "fout":
+        # 1.3 §7: herstel met hetzelfde onderwerp (integration_source/authentik) als het probleem
+        events.emit(
+            session,
+            event_type="sso.authentik_sync.recovered",
+            entity_type="integration_source",
+            entity_id="authentik",
+            actor_type=actor[0],
+            actor_id=actor[1],
+            trace_id=tid,
+            payload={"status": result["status"], "vorige_reden": previous.get("reason"), "ernst": "info"},
         )
     return result
 

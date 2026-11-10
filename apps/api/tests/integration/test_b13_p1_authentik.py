@@ -297,6 +297,12 @@ def test_b13_004_events_rights_and_anomalies(
     revoked = [p for t, p, _c in out if t == "sso.access.revoked"]
     assert revoked == [
         {
+            # contract 1.3 §7: zonder Hub-client in Authentik is de OIDC-sub niet te bepalen → null + reden; de Hub
+            # koppelt dan op preferred_username (alleen intrekken, nooit rechten geven)
+            "issuer": None,
+            "sub": None,
+            "preferred_username": "carla",
+            "sub_onbekend": "hub_client_niet_gevonden",
             "change": "gewijzigd",
             "roles_lost": {"ai-server-manager": ["viewer"]},
             "active_before": True,

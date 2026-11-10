@@ -118,7 +118,9 @@ def clean_group(g: dict[str, Any]) -> dict[str, Any]:
 
 
 def clean_user(u: dict[str, Any]) -> dict[str, Any]:
-    out = _pick(u, ("pk", "username", "is_active", "is_superuser", "type"))
+    # uid (= sha256(id + installatie-ID), de OIDC-sub bij sub_mode=hashed_user_id) en uuid: om de 'sub' van de Hub-client
+    # te bepalen voor sso.access.* (contract 1.3 §7; authentik/core/models.py User.uid, providers/oauth2/id_token.py)
+    out = _pick(u, ("pk", "username", "is_active", "is_superuser", "type", "uid", "uuid"))
     groups = u.get("groups_obj")
     out["groups"] = (
         sorted(str(g.get("name")) for g in groups if isinstance(g, dict) and g.get("name"))

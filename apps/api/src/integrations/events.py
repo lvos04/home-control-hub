@@ -1,9 +1,15 @@
-"""Outbox met event-envelope (contract §7).
+"""Outbox met event-envelope (contract 1.3 §7).
 
 Events worden in dezelfde transactie als de wijziging vastgelegd. De worker pusht ze naar
 ``POST {HUB_URL}/api/v1/events/inbox`` (service-token) met backoff; na 10 mislukte pogingen → ``dead_letter``
 (zichtbaar via de connector en de Hub). De Hub kan ook pollen via ``GET /connector/v1/events?cursor=``.
 Geen exact-once-aanname: de Hub dedupliceert op ``event_id``.
+
+Grenzen van de Hub-inbox worden **vóór verzending** gecontroleerd (1.3 §7), zodat een event niet pas als dead-letter
+opvalt: precies drie segmenten; eigen domeinen ``sso``, ``energy``, ``network``, ``automation``, ``flow``; gedeeld
+alleen ``app.health.changed`` en de vaste ``service.*``-lijst (met ``entity`` = deze dienst); ``payload.ernst``
+optioneel met een van de vijf Peil-woorden. Het derde segment is het werkwoord (probleem: ``failed`` …, herstel:
+``recovered`` …, de rest informatie); ``entity`` is het stabiele onderwerp (ADR-0014).
 """
 
 from __future__ import annotations
@@ -31,6 +37,53 @@ CLASSIFICATIONS = ("public", "internal", "sensitive")
 EVENT_TYPE_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$")
 ENTITY_TYPE_RE = re.compile(r"^[a-z0-9_.-]{1,60}$")  # kolom 60, Hub 64
 MAX_PAYLOAD_BYTES = 16 * 1024
+#: 1.3 §7: domeinen van home-control-hub (eerste segment); gedeeld: ``app`` (alleen app.health.changed) en ``service``
+DOMAINS = frozenset({"sso", "energy", "network", "automation", "flow"})
+SERVICE_EVENTS = frozenset(
+    {
+        "service.hub_link.linked",
+        "service.hub_link.unlinked",
+        "service.hub_link.revoked",
+        "service.token.rotated",
+        "service.key_rotation.applied",
+        "service.key_rotation.rejected",
+    }
+)
+#: 1.3 §7: vaste werkwoorden (derde segment) voor probleem en herstel; de rest is informatie
+PROBLEM_VERBS = frozenset(
+    {"failed", "crashed", "down", "degraded", "stalled", "blocked", "rejected", "saturated", "conflict"}
+)
+RECOVERY_VERBS = frozenset({"recovered", "succeeded", "resolved", "restored"})
+#: 1.3 §7: platformbrede ernst (Peil-woorden) in ``payload.ernst`` (optioneel)
+ERNST = ("kritiek", "hoog", "middel", "laag", "info")
+
+
+def check_event_type(event_type: str, entity_type: str, entity_id: str) -> None:
+    """De 1.3-regels van §7 voor deze bron; een afwijking is een programmeerfout (de Hub zou het event weigeren of
+    alleen als algemene informatie verwerken)."""
+    if len(event_type) > 120 or not EVENT_TYPE_RE.match(event_type):  # kolom 120, Hub 128
+        raise ValueError(f"event_type moet precies <domein>.<object>.<gebeurtenis> zijn: {event_type!r}")
+    domain = event_type.split(".", 1)[0]
+    if domain == "service":
+        if event_type not in SERVICE_EVENTS:
+            raise ValueError(f"service-event buiten de vaste lijst van §7: {event_type!r}")
+        if entity_type != "service" or entity_id != APP_ID:
+            raise ValueError("een service-event heeft entity {type: service, id: home-control-hub}")
+    elif domain == "app":
+        if event_type != "app.health.changed":
+            raise ValueError(f"domein 'app' alleen voor app.health.changed: {event_type!r}")
+    elif domain not in DOMAINS:
+        raise ValueError(f"domein {domain!r} hoort niet bij home-control-hub (§7)")
+
+
+def event_role(event_type: str) -> str:
+    """``probleem`` | ``herstel`` | ``info`` volgens het werkwoord (derde segment, §7)."""
+    verb = event_type.rsplit(".", 1)[-1]
+    if verb in PROBLEM_VERBS:
+        return "probleem"
+    if verb in RECOVERY_VERBS:
+        return "herstel"
+    return "info"
 
 
 def _fit_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -59,10 +112,11 @@ def emit(
 ) -> OutboxEvent:
     if classification not in CLASSIFICATIONS:
         raise ValueError("ongeldige classificatie")
-    if len(event_type) > 120 or not EVENT_TYPE_RE.match(event_type):  # kolom 120, Hub 128
-        raise ValueError(f"event_type moet precies <domein>.<object>.<gebeurtenis> zijn: {event_type!r}")
+    check_event_type(event_type, entity_type, str(entity_id))
     if not ENTITY_TYPE_RE.match(entity_type) or not str(entity_id) or not actor_id:
         raise ValueError("ongeldige entity of actor voor de event-envelope")
+    if payload is not None and "ernst" in payload and payload["ernst"] not in ERNST:
+        raise ValueError(f"payload.ernst moet een van {', '.join(ERNST)} zijn")
     clean = _fit_payload(redact(payload or {}))
     ev = OutboxEvent(
         event_id=uuid.uuid4(),

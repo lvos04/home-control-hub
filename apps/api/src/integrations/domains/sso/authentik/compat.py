@@ -277,7 +277,7 @@ USED_API: tuple[ApiUse, ...] = (
         ("B13-004", "B13-005"),
         params=("include_groups", "page", "page_size"),
         schema="User",
-        fields=("pk", "username", "is_active", "is_superuser", "groups_obj", "type"),
+        fields=("pk", "username", "is_active", "is_superuser", "groups_obj", "type", "uid", "uuid"),
     ),
     ApiUse(
         "get",

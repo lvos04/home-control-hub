@@ -57,7 +57,9 @@
         "is_active",
         "is_superuser",
         "groups_obj",
-        "type"
+        "type",
+        "uid",
+        "uuid"
       ],
       "since": null,
       "executed_in_this_version": true
