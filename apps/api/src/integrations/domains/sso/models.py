@@ -117,6 +117,8 @@ class SsoEmergencyAccess(Timestamps, Base):
         ForeignKey("sso_admin_account.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     network_scopes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    # contract 1.3 §4.1: 100.64.0.0/10 telt alleen mee als een beheerder het voor deze noodtoegang toestaat
+    cgnat_toegestaan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     session_max_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     review_interval_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
     last_reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

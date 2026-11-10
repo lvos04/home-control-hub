@@ -15,13 +15,20 @@ from .models import SSO_INDEPENDENT_METHODS
 
 IpNet = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-# Alleen privé-bereiken: LAN (RFC 1918), CGNAT 100.64/10 (o.a. Tailscale) en IPv6 ULA fc00::/7.
+# Alleen privé-bereiken: LAN (RFC 1918) en IPv6 ULA fc00::/7 (contract 1.3 §4.1). CGNAT 100.64.0.0/10 (ook Tailscale)
+# telt standaard NIET als privé: met Tailscale-delen kunnen gasten in dat bereik zitten. Alleen als een beheerder het
+# per noodtoegang expliciet toestaat (``cgnat_toegestaan``, audit + waarschuwing). De Hub mag dit beleid cachen, maar
+# alleen om te verscherpen: zonder toestemming in de Hub telt een 100.64-bereik daar nooit mee.
 ALLOWED_PRIVATE_NETS: tuple[IpNet, ...] = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),
     ipaddress.ip_network("fc00::/7"),
+)
+CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+CGNAT_WAARSCHUWING_NL = (
+    "100.64.0.0/10 (CGNAT, ook Tailscale) telt als privé. Doe dit alleen als je Tailscale niet met anderen deelt: "
+    "gasten van een gedeeld Tailscale-netwerk zitten in hetzelfde bereik."
 )
 MAX_SCOPES = 16
 # Tegentest in de zelftest: documentatie-adressen (RFC 5737 / RFC 3849), nooit een echt adres.
@@ -36,7 +43,12 @@ class ScopeError(ValueError):
     """Ongeldig netwerkbereik; boodschap is Nederlands."""
 
 
-def validate_scopes(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
+def is_cgnat(net: IpNet) -> bool:
+    return net.version == 4 and net.subnet_of(CGNAT_NET)  # type: ignore[arg-type]
+
+
+def validate_scopes(raw: list[dict[str, Any]], allow_cgnat: bool = False) -> list[dict[str, str]]:
+    """Alleen privé-bereiken; ``100.64.0.0/10`` alleen met ``allow_cgnat`` (expliciete keuze van een beheerder)."""
     if not raw:
         raise ScopeError("Geef minstens één LAN- of VPN-bereik op (CIDR).")
     if len(raw) > MAX_SCOPES:
@@ -52,10 +64,18 @@ def validate_scopes(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
             net = ipaddress.ip_network(cidr, strict=False)
         except ValueError as exc:
             raise ScopeError(f"'{cidr}' is geen geldig netwerkbereik (CIDR).") from exc
-        if not any(net.version == allowed.version and net.subnet_of(allowed) for allowed in ALLOWED_PRIVATE_NETS):  # type: ignore[arg-type]
+        if is_cgnat(net):
+            if not allow_cgnat:
+                raise ScopeError(
+                    f"'{net}' ligt in 100.64.0.0/10 (CGNAT, ook Tailscale). Dat telt standaard niet als privé; een "
+                    "beheerder kan het per noodtoegang toestaan (cgnat_toegestaan), alleen als Tailscale niet met "
+                    "anderen gedeeld wordt."
+                )
+        elif not any(net.version == allowed.version and net.subnet_of(allowed) for allowed in ALLOWED_PRIVATE_NETS):  # type: ignore[arg-type]
             raise ScopeError(
                 f"'{net}' is geen privé-LAN/VPN-bereik. Noodtoegang mag nooit vanaf internet: gebruik een bereik binnen "
-                "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 of fc00::/7."
+                "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 of fc00::/7 (100.64.0.0/10 alleen als een beheerder het "
+                "toestaat)."
             )
         key = str(net)
         if key in seen:
@@ -95,8 +115,12 @@ def evaluate_access(
     scopes: list[dict[str, str]] | None,
     session_max_minutes: int | None,
     client_ip: str,
+    allow_cgnat: bool = False,
 ) -> Evaluation:
-    """Mag dit noodaccount vanaf ``client_ip`` de noodtoegang gebruiken? Raadpleegt nooit Authentik."""
+    """Mag dit noodaccount vanaf ``client_ip`` de noodtoegang gebruiken? Raadpleegt nooit Authentik.
+
+    Een 100.64.0.0/10-bereik telt alleen mee als de beheerder het voor deze noodtoegang heeft toegestaan (§4.1); een
+    oudere registratie met zo'n bereik maar zonder toestemming geeft dus geen toegang (verscherpen, nooit verruimen)."""
     reasons: list[dict[str, str]] = []
     try:
         ip = ipaddress.ip_address(client_ip.strip())
@@ -111,13 +135,26 @@ def evaluate_access(
     if policy_status != "actief" or not scopes:
         reasons.append(_reason("geen_noodtoegang", "Er is geen actieve noodtoegang (LAN/VPN-bereik) geregistreerd."))
     matched: str | None = None
+    cgnat_geweigerd = False
     for scope in scopes or []:
         net = ipaddress.ip_network(scope["cidr"], strict=False)
         if ip.version == net.version and ip in net:
+            if is_cgnat(net) and not allow_cgnat:
+                cgnat_geweigerd = True
+                continue
             matched = scope["cidr"]
             break
     if scopes and matched is None:
-        reasons.append(_reason("buiten_bereik", "Het adres valt buiten de geregistreerde LAN/VPN-bereiken."))
+        if cgnat_geweigerd:
+            reasons.append(
+                _reason(
+                    "cgnat_niet_toegestaan",
+                    "Het adres ligt in 100.64.0.0/10 (CGNAT/Tailscale); dat telt niet als privé tot een beheerder het "
+                    "toestaat.",
+                )
+            )
+        else:
+            reasons.append(_reason("buiten_bereik", "Het adres valt buiten de geregistreerde LAN/VPN-bereiken."))
     allowed = not reasons
     return Evaluation(allowed, reasons, matched, session_max_minutes if allowed else None)
 
@@ -172,6 +209,18 @@ def evaluate_account(acc: AccountView, now: datetime, drill_max_age_days: int) -
         if not em or em.get("status") != "actief":
             reasons.append(_reason("geen_noodtoegang", "Noodaccount zonder actieve LAN/VPN-noodtoegang."))
         else:
+            cgnat = [
+                s["cidr"] for s in em.get("scopes") or [] if is_cgnat(ipaddress.ip_network(s["cidr"], strict=False))
+            ]
+            if cgnat and not em.get("cgnat_toegestaan"):
+                reasons.append(
+                    _reason(
+                        "cgnat_bereik_niet_toegestaan",
+                        "Een geregistreerd bereik ligt in 100.64.0.0/10 (CGNAT/Tailscale) en telt niet mee tot een "
+                        "beheerder het toestaat.",
+                        "let_op",
+                    )
+                )
             due = ensure_aware(em["last_reviewed_at"]) + timedelta(days=int(em["review_interval_days"]))
             if due < now:
                 reasons.append(_reason("herbevestiging_verlopen", "De noodtoegang is niet tijdig herbevestigd."))

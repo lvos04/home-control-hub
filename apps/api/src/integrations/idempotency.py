@@ -106,9 +106,7 @@ def run_idempotent(
         session.rollback()
         winner = session.get(IdempotencyRecord, pk)
         if winner is None or winner.request_hash != req_hash:
-            raise ApiError(
-                422, "idempotency_key_reused", "Deze Idempotency-Key is al gebruikt voor een ander verzoek."
-            )
+            raise ApiError(422, "idempotency_key_reused", "Deze Idempotency-Key is al gebruikt voor een ander verzoek.")
         return _replay(winner)
     session.commit()
     return JSONResponse(body_json, status_code=status_code, headers=headers)

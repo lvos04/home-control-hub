@@ -132,6 +132,8 @@ class Scope(BaseModel):
 class EmergencyAccessIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     network_scopes: list[Scope] = Field(min_length=1, max_length=recovery.MAX_SCOPES)
+    # contract 1.3 §4.1: 100.64.0.0/10 (CGNAT, ook Tailscale) telt alleen mee als een beheerder dit bewust aanzet
+    cgnat_toegestaan: bool = False
     session_max_minutes: int = Field(default=60, ge=5, le=240)
     review_interval_days: int = Field(default=90, ge=7, le=365)
     reason: str = Field(default="", max_length=300)
@@ -576,7 +578,9 @@ def put_emergency_access(
     tid: str = Depends(trace_id),
 ) -> Any:
     try:
-        scopes = recovery.validate_scopes([s.model_dump() for s in body.network_scopes])
+        scopes = recovery.validate_scopes(
+            [s.model_dump() for s in body.network_scopes], allow_cgnat=body.cgnat_toegestaan
+        )
     except recovery.ScopeError as exc:
         raise ApiError(422, "validation_error", str(exc), {"veld": "network_scopes"}) from exc
 
@@ -608,6 +612,7 @@ def put_emergency_access(
             em.version += 1
             em.last_reviewed_at, em.last_reviewed_by = now, principal.audit_id
         em.network_scopes = scopes
+        em.cgnat_toegestaan = body.cgnat_toegestaan
         em.session_max_minutes = body.session_max_minutes
         em.review_interval_days = body.review_interval_days
         em.reason = body.reason
@@ -628,6 +633,7 @@ def put_emergency_access(
             payload={
                 "account_id": str(acc.id),
                 "network_scopes": scopes,
+                "cgnat_toegestaan": body.cgnat_toegestaan,
                 "session_max_minutes": body.session_max_minutes,
                 "status": "actief",
             },
@@ -719,6 +725,7 @@ def _evaluate(session: Session, account_id: uuid.UUID, client_ip: str) -> tuple[
         scopes=em.network_scopes if em else None,
         session_max_minutes=em.session_max_minutes if em else None,
         client_ip=client_ip,
+        allow_cgnat=bool(em.cgnat_toegestaan) if em else False,
     )
     return acc, ev
 

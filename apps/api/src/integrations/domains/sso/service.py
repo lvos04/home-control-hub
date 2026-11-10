@@ -73,6 +73,8 @@ def emergency_dict(e: SsoEmergencyAccess) -> dict[str, Any]:
         "id": str(e.id),
         "account_id": str(e.account_id),
         "network_scopes": e.network_scopes,
+        "cgnat_toegestaan": e.cgnat_toegestaan,
+        **({"waarschuwing_nl": recovery.CGNAT_WAARSCHUWING_NL} if e.cgnat_toegestaan else {}),
         "session_max_minutes": e.session_max_minutes,
         "review_interval_days": e.review_interval_days,
         "last_reviewed_at": iso(e.last_reviewed_at),
@@ -155,6 +157,7 @@ def load_views(session: Session) -> list[recovery.AccountView]:
                     {
                         "status": em.status,
                         "scopes": em.network_scopes,
+                        "cgnat_toegestaan": em.cgnat_toegestaan,
                         "last_reviewed_at": em.last_reviewed_at,
                         "review_interval_days": em.review_interval_days,
                     }
@@ -268,6 +271,7 @@ def run_selftest(
                     scopes=em.network_scopes if em else None,
                     session_max_minutes=em.session_max_minutes if em else None,
                     client_ip=ip,
+                    allow_cgnat=bool(em.cgnat_toegestaan) if em else False,
                 )
 
             ev_in, ev_out = _eval(inside), _eval(outside)

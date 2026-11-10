@@ -300,6 +300,11 @@
       "EmergencyAccessIn": {
         "additionalProperties": false,
         "properties": {
+          "cgnat_toegestaan": {
+            "default": false,
+            "title": "Cgnat Toegestaan",
+            "type": "boolean"
+          },
           "network_scopes": {
             "items": {
               "$ref": "#/components/schemas/Scope"

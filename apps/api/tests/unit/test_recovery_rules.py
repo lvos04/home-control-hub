@@ -16,12 +16,19 @@ PASS = "lange wachtwoordzin voor de kluis 2026"
 
 
 # ------------------------------------------------------------------ bereiken
-@pytest.mark.parametrize(
-    "cidr",
-    ["192.168.1.0/24", "10.0.0.0/8", "172.16.5.0/24", "100.64.0.0/10", "100.100.1.5/32", "fd7a:115c:a1e0::/48"],
-)
+@pytest.mark.parametrize("cidr", ["192.168.1.0/24", "10.0.0.0/8", "172.16.5.0/24", "fd7a:115c:a1e0::/48"])
 def test_private_scopes_accepted(cidr: str) -> None:
     assert recovery.validate_scopes([{"cidr": cidr, "kind": "lan"}])[0]["cidr"]
+
+
+@pytest.mark.parametrize("cidr", ["100.64.0.0/10", "100.100.1.5/32", "100.127.255.0/24"])
+def test_cgnat_is_not_private_unless_an_admin_allows_it(cidr: str) -> None:
+    """Contract 1.3 §4.1 (C1.3-HCH-10): 100.64.0.0/10 (CGNAT, ook Tailscale) telt standaard niet als privé."""
+    with pytest.raises(recovery.ScopeError, match=r"100\.64\.0\.0/10"):
+        recovery.validate_scopes([{"cidr": cidr, "kind": "vpn"}])
+    assert recovery.validate_scopes([{"cidr": cidr, "kind": "vpn"}], allow_cgnat=True)[0]["cidr"]
+    with pytest.raises(recovery.ScopeError):  # groter dan CGNAT blijft geweigerd, ook met toestemming
+        recovery.validate_scopes([{"cidr": "100.0.0.0/8", "kind": "vpn"}], allow_cgnat=True)
 
 
 @pytest.mark.parametrize(
@@ -69,8 +76,12 @@ def _eval(ip: str, **kw: object) -> recovery.Evaluation:
 def test_evaluate_inside_lan_and_vpn() -> None:
     lan = _eval("192.168.10.20")
     assert lan.allowed and lan.matched_scope == "192.168.10.0/24" and lan.session_max_minutes == 60
-    assert _eval("100.101.102.103").allowed
     assert lan.to_dict()["authenticator_required"] is False
+    # 100.64.0.0/10 alleen met toestemming van een beheerder (1.3 §4.1); een oudere registratie zonder toestemming
+    # geeft geen toegang meer (verscherpen, nooit stil verruimen)
+    zonder = _eval("100.101.102.103")
+    assert not zonder.allowed and [r["code"] for r in zonder.reasons] == ["cgnat_niet_toegestaan"]
+    assert _eval("100.101.102.103", allow_cgnat=True).allowed
 
 
 @pytest.mark.parametrize(

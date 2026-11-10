@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 BASE = "/integrations/v1/sso"
 PASSPHRASE = "correct paard batterij nietje 2026!"
 LAN = {"cidr": "192.168.50.0/24", "kind": "lan"}  # testbereik (geen echte NAS-waarde)
-VPN = {"cidr": "100.64.0.0/10", "kind": "vpn"}
+VPN = {"cidr": "10.8.0.0/24", "kind": "vpn"}  # WireGuard-achtig VPN in RFC 1918 (100.64/10: zie de CGNAT-test)
 
 
 def _create_account(c: Any, h: dict[str, str], **body: Any) -> dict[str, Any]:
@@ -88,7 +88,7 @@ def test_break_glass_testable_while_authenticator_offline(paired_client: Any, au
     ok = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.7"}, headers=h)
     assert ok.json()["allowed"] is True and ok.json()["authenticator_required"] is False
     assert ok.json()["session_max_minutes"] == 30
-    vpn = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "100.70.1.2"}, headers=h)
+    vpn = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "10.8.0.5"}, headers=h)
     assert vpn.json()["allowed"] is True
     wan = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "198.51.100.4"}, headers=h)
     assert wan.json()["allowed"] is False and wan.json()["reasons"][0]["code"] == "buiten_bereik"
@@ -325,3 +325,35 @@ def test_pagination_of_accounts(paired_client: Any, auth: Any) -> None:
     assert seen == [f"acc{i}" for i in range(5)]
     assert c.get(f"{BASE}/recovery/accounts", params={"cursor": "kapot"}, headers=h).json()["code"] == "invalid_cursor"
     assert c.get(f"{BASE}/recovery/accounts", params={"limit": 500}, headers=h).status_code == 422
+
+
+def test_cgnat_only_with_explicit_admin_permission(paired_client: Any, auth: Any) -> None:
+    """Contract 1.3 §4.1 (C1.3-HCH-10): 100.64.0.0/10 telt standaard niet als privé; een beheerder kan het per
+    noodtoegang toestaan (audit + waarschuwing). Zonder toestemming: 422 bij registreren en geen toegang."""
+    c, h = paired_client, auth("admin")
+    acc = _prepare_break_glass(c, h)
+    pad = f"{BASE}/recovery/accounts/{acc['id']}/emergency-access"
+    huidig = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()["emergency_access"]
+    cgnat = {"cidr": "100.64.0.0/10", "kind": "vpn"}
+    r = c.put(pad, json={"network_scopes": [LAN, cgnat]}, headers=idem(h, **{"If-Match": huidig["etag"]}))
+    assert r.status_code == 422 and "100.64.0.0/10" in r.json()["message"]
+    tailscale = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "100.70.1.2"}, headers=h
+    )
+    assert tailscale.json()["allowed"] is False
+    r = c.put(
+        pad,
+        json={"network_scopes": [LAN, cgnat], "cgnat_toegestaan": True},
+        headers=idem(h, **{"If-Match": huidig["etag"]}),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["cgnat_toegestaan"] is True and "Tailscale" in r.json()["waarschuwing_nl"]
+    tailscale = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "100.70.1.2"}, headers=h
+    )
+    assert tailscale.json()["allowed"] is True
+    with c.app.state.db.sessions() as s:
+        detail = s.execute(
+            text("SELECT details FROM audit_event WHERE action = 'emergency_access.changed' ORDER BY at DESC LIMIT 1")
+        ).scalar_one()
+    assert detail["cgnat_toegestaan"] is True  # audit
