@@ -1,4 +1,18 @@
-# Ontwerpreview: statuspagina van home-control-hub (Peil 1.1.0)
+# Ontwerpreview: statuspagina van home-control-hub (Peil 1.1.0, herhaald op Peil 1.1.1)
+
+> **Herhaald op 10 november 2026 (Peil 1.1.1, contract 1.3; ADR-0014).** De gepinde kopie is 1.1.1
+> (`ai-server-manager@0a7143b`). Dezelfde review, nu op **320, 360, 390, 768, 1024 en 1440 px** (contract 1.3 §13 =
+> ONTWERPTAAL §12), 14 toestanden × 6 breedtes × licht/donker = **168 metingen, 0 overtredingen**: 0 axe (WCAG
+> 2.0/2.1/2.2 A en AA, ook 0 best-practice), tekst ≥ **8,34:1**, betekenisdragende randen ≥ 4,86:1, iconen ≥ 5,41:1,
+> focusring ≥ 7,79:1, geen overloop, geen doel < 44 px, focus nooit bedekt; elke pil heeft icoon en woord, groen alleen
+> met "Gezond" (rij) of "Alles gezond" (totaal); de verouderde meting (Authentik, 3 dagen oud) is nu een
+> **Verouderd**-pil (telt niet mee). Daarna de **browsertest van het koppelformulier** tegen dezelfde echte dienst
+> (`tests/ui/herkomst.mjs`): Origin `null` (pagina met no-referrer), een vreemde site, een buurapp op hetzelfde adres
+> (met het echte formuliertoken), geen cookie en een publieke domeinnaam (DNS-rebinding) → elk 403 met de vaste code en
+> niets naar de Hub; daarna koppelt het echte formulier (303). De S-punten van §6 zijn in Peil 1.1.1 opgelost (E01–E10:
+> sjabloonblok onleesbaar, koppelen bezig, tonen, meldingsrol, codes, renderer in één doorgang, skiplink, novalidate).
+> Afdrukken: `docs/ontwerp/peil-review/` (opnieuw gemaakt). NIET GEVALIDEERD blijven de echte schermlezer, telefoon en
+> NAS. De tekst hieronder is de oorspronkelijke review van 1.1.0.
 
 **Soort:** onafhankelijke ontwerpreview achteraf (contract 1.2 §13), door de ontwerpagent, na de bouwstap HC11
 (ADR-0011, zelfreview van de bouwer) · **Datum:** 9 november 2026 · **Besluit:**
@@ -306,5 +320,7 @@ Voor de eigenaar van `ai-server-manager/design/ontwerptaal` (`bouw/statuspagina.
 
   De PNG's zijn verkleind met pngquant (kleurenpalet, verlies onzichtbaar). Alle 140 afdrukken (14 toestanden × 5 breedtes ×
   2 thema's) staan in `tests/ui/review-uit/afdrukken/` en in het CI-artefact.
+  - **Peil 1.1.1 (10 november 2026):** opnieuw gemaakt uit de herhaalde review (168 afdrukken, 6 breedtes); in de map:
+    alle toestanden op 390 px en `gekoppeld-met-bronnen`, `koppelen-mislukt` en `onleesbaar` op alle breedtes.
 - **Vaste set van de UI-tests (HC11), opnieuw gemaakt na de reparaties:** `docs/screenshots/peil/statuspagina/`.
 - **Referentie (Peil):** `ai-server-manager/design/ontwerptaal/shots/statuspagina*-{licht,donker}-{360,390,768,1440}.png`.
