@@ -21,13 +21,53 @@ PV2 = REPO_ROOT / "docs" / "platform-v2"
 #: vaste bron-commit van ai-server-manager (branch ccr-c133d7a0-kuz1cv) waarop de kopieën zijn gemaakt
 BRON_COMMIT = "0a7143bc0a94ed5317a9655fa785e73a1fb07ba1"
 #: sha256 van de bronbestanden op die commit; een nieuwe kopie overnemen is een stap van de orkestratie (nooit lokaal
-#: aanpassen, ook niet om een link te repareren)
+#: aanpassen, ook niet om een link te repareren). Dezelfde pins staan in CONTRACT_HERKOMST.json (tools/contract_kopie.py)
 KOPIEEN = {
     "PLATFORM_CONTRACTEN.md": "15b30cf17f91b606451ef9c41f02327076ef76ce655ee94e40e3538106962310",
     "CONTRACT_1.3_CONFORMITEIT.md": "f0a2352ddb27088ae668013501c62a1eaaf879efe742a2d4422ffe8d33b43466",
     # historie (contract 1.3 C1.3-ALG-01: "mag als historie blijven staan"), zelfde bron-commit
     "CONTRACT_1.2_CONFORMITEIT.md": "634941340afd2d9a55846076ab468ea4aacddb32dd8be6a7b92dd113661d39a4",
 }
+
+
+def _tool() -> Any:
+    import importlib.util
+    import sys
+
+    name = "hch_contract_kopie"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tools" / "contract_kopie.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_provenance_file_pins_the_same_commit_and_hashes() -> None:
+    herkomst = json.loads((PV2 / "CONTRACT_HERKOMST.json").read_text(encoding="utf-8"))
+    assert herkomst["bron_commit"] == BRON_COMMIT and herkomst["bestanden"] == KOPIEEN
+    assert herkomst["contract"] == "contracts 1.3" and herkomst["bron_repo"] == "lvos04/ai-server-manager"
+    assert _tool().controleer() == []
+
+
+def test_drift_tool_detects_a_local_change(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil
+
+    tool = _tool()
+    kopie = tmp_path / "platform-v2"
+    kopie.mkdir()
+    for naam in [*KOPIEEN, "CONTRACT_HERKOMST.json"]:
+        shutil.copy(PV2 / naam, kopie / naam)
+    monkeypatch.setattr(tool, "PV2", kopie)
+    monkeypatch.setattr(tool, "HERKOMST", kopie / "CONTRACT_HERKOMST.json")
+    assert tool.controleer() == []
+    pad = kopie / "PLATFORM_CONTRACTEN.md"
+    pad.write_bytes(pad.read_bytes().replace(b"contracts 1.3", b"contracts 1.3 (lokaal)", 1))
+    assert tool.controleer() == ["PLATFORM_CONTRACTEN.md: inhoud wijkt af van de pin (lokaal aangepast?)"]
+
+
 #: naast elkaar uitgecheckt (zoals in de bouwomgeving): dan ook rechtstreeks met de werkmap van de bron vergelijken
 SOURCE = REPO_ROOT.parent / "ai-server-manager" / "docs" / "platform-v2"
 

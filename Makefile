@@ -3,7 +3,7 @@ PY ?= .venv/bin/python
 API := apps/api
 IMAGE ?= home-control-hub:dev
 
-.PHONY: lint test e2e interop openapi lock image smoke clean toestanden test-ui schermafdrukken peil-drift ontwerpreview
+.PHONY: lint test e2e interop openapi lock image smoke clean toestanden test-ui schermafdrukken peil-drift contract-drift ontwerpreview
 
 lint:
 	cd $(API) && ../../$(PY) -m ruff check . && ../../$(PY) -m ruff format --check . && ../../$(PY) -m mypy
@@ -25,13 +25,18 @@ test-ui: toestanden
 schermafdrukken: toestanden
 	cd tests/ui && { test -d node_modules || npm ci --no-audit --no-fund; } && SCHERMAFDRUKKEN=1 npx playwright test
 
-# Onafhankelijke ontwerpreview (contract §13; ADR-0012): de DRAAIENDE dienst (API + worker als processen, eigen
+# Onafhankelijke ontwerpreview (contract 1.3 §13; ADR-0012/0014): de DRAAIENDE dienst (API + worker als processen, eigen
 # databases hch_review_<n>) tegen de Hub-simulator; Chromium vult zelf het koppelformulier in en meet per toestand ×
-# 320/360/390/768/1440 × licht/donker: axe (WCAG 2.2 AA), contrast in de pagina, doelen, focus, Peil-statusregels.
+# 320/360/390/768/1024/1440 × licht/donker: axe (WCAG 2.2 AA), contrast in de pagina, doelen, focus, Peil-statusregels;
+# daarna de browsertest van het koppelformulier met de negatieve herkomstgevallen (tests/ui/herkomst.mjs).
 # Uitvoer en afdrukken: tests/ui/review-uit/ (niet in git; docs/ontwerp/PEIL_REVIEW.md vat samen).
 ontwerpreview:
 	cd tests/ui && { test -d node_modules || npm ci --no-audit --no-fund; }
 	$(PY) tests/ui/ontwerpreview.py
+
+# Byte-gelijke kopie van het platformcontract (contract 1.3 kop, C1.3-ALG-01): offline en tegen GitHub.
+contract-drift:
+	python3 tools/contract_kopie.py controleer && python3 tools/contract_kopie.py vergelijk --online
 
 # Versie-gepinde kopie van het Peil-sjabloon (O-14): offline en tegen ai-server-manager op GitHub.
 peil-drift:

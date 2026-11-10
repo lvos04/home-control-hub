@@ -1,6 +1,8 @@
-# CI: lint, typen, tests met PostgreSQL, migraties op/neer, OpenAPI-drift, Peil-drift, pip-audit, dienst-E2E, de
-# statuspagina in Peil in Chromium (axe-core, overloop, CSP, schermafdrukken) en de alles-in-één image bouwen + starten
-# met healthcheck. Acties op commit-SHA gepind.
+# CI (contract 1.3 §10): lint, typen, tests met PostgreSQL (incl. de statische Idempotency-Key-test, de EVIDENCE-test
+# van §11 en de contract-drifttest), migraties op/neer, OpenAPI-drift, contract- en Peil-drift online, pip-audit,
+# dienst-E2E, de statuspagina in Peil 1.1.1 in Chromium (axe-core, overloop, CSP, schermafdrukken), de ontwerpreview
+# met de browsertest van het koppelformulier (negatieve herkomstgevallen) en de alles-in-één image bouwen + starten met
+# healthcheck en rooktest. Acties op commit-SHA gepind.
 name: ci
 on:
   push:
@@ -58,7 +60,11 @@ jobs:
         run: |
           python -m integrations openapi --out docs/openapi/home-control-hub.openapi.json
           git diff --exit-code docs/openapi/
-      - name: Peil-drift (versie-gepinde kopie van het statuspaginasjabloon tegen ai-server-manager, O-14)
+      - name: Contract-drift (byte-gelijke kopie van contracts 1.3 tegen ai-server-manager op de vaste commit)
+        run: |
+          python tools/contract_kopie.py controleer
+          python tools/contract_kopie.py vergelijk --online
+      - name: Peil-drift (versie-gepinde kopie van het statuspaginasjabloon tegen ai-server-manager, O-14/E08)
         run: |
           python tools/peil_kopie.py controleer
           python tools/peil_kopie.py vergelijk --online
@@ -103,7 +109,7 @@ jobs:
         env:
           SCHERMAFDRUKKEN: "1"
         run: npx playwright test
-      - name: Ontwerpreview tegen de draaiende dienst (14 toestanden × 320–1440 × licht/donker; ADR-0012)
+      - name: Ontwerpreview + browsertest herkomst tegen de draaiende dienst (320–1440 × licht/donker; ADR-0012/0014)
         run: python tests/ui/ontwerpreview.py --uit tests/ui/review-uit
       - name: Schermafdrukken en toestanden bewaren
         if: always()

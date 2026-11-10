@@ -1,0 +1,12 @@
+{
+  "contract": "contracts 1.3",
+  "bron_repo": "lvos04/ai-server-manager",
+  "bron_commit": "0a7143bc0a94ed5317a9655fa785e73a1fb07ba1",
+  "bron_ref": "ccr-c133d7a0-kuz1cv",
+  "bestanden": {
+    "PLATFORM_CONTRACTEN.md": "15b30cf17f91b606451ef9c41f02327076ef76ce655ee94e40e3538106962310",
+    "CONTRACT_1.3_CONFORMITEIT.md": "f0a2352ddb27088ae668013501c62a1eaaf879efe742a2d4422ffe8d33b43466",
+    "CONTRACT_1.2_CONFORMITEIT.md": "634941340afd2d9a55846076ab468ea4aacddb32dd8be6a7b92dd113661d39a4"
+  },
+  "toelichting": "Byte-gelijke kopieën in docs/platform-v2 (contract 1.3, kop en C1.3-ALG-01). Nooit lokaal aanpassen; een nieuwe kopie overnemen is een stap van de orkestratie (python3 tools/contract_kopie.py bijwerken). Controle: tools/contract_kopie.py controleer / vergelijk --online en apps/api/tests/unit/test_contract_docs.py."
+}
