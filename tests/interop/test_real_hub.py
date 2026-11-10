@@ -7,7 +7,8 @@ geïnstalleerd) niet is gezet:
 
     HCH_REAL_HUB_PYTHON=/pad/naar/hub-venv/bin/python pytest -q tests/interop -p no:cacheprovider
 
-Getoetst (contract 1.2): eerste beheerder met de setupcode; een verkeerde ``HUB_KEY_FINGERPRINT`` slaat niets op;
+Getoetst (contract 1.2, en sinds de Hub 1.3 volgt ook 1.3: ``schema_version`` ``"1.3"`` en ``rotation_sequence`` in
+``hub-link.json``, en ``service.hub_link.linked`` afgeleverd in de inbox van de echte Hub): eerste beheerder met de setupcode; een verkeerde ``HUB_KEY_FINGERPRINT`` slaat niets op;
 koppelen met enrollment-token + ``HUB_KEY_FINGERPRINT`` uit de Hub, bevestigen met ``services/self`` (§3.3, §3.6);
 gepinde sleutels = de JWKS van de Hub (§4.5); gebruikers-JWT van de Hub geaccepteerd, ``jti``-hergebruik voor een
 tweede mutatie niet (§4.6); service-token inkomend geweigerd (§4.3); ``key-rotations`` (lege lijst) zonder fout;
@@ -230,6 +231,23 @@ def test_real_hub_lifecycle(lab: Lab) -> None:
     record = lab.service_record()
     assert record["status"] == "active" and record["id"] == link["service_id"]
     assert any(t["eerst_gebruikt"] for t in record["tokens"])  # services/self bevestigd met het nieuwe token
+
+    # 1b. contract 1.3: hub-link.json met schema_version "1.3" en rotation_sequence uit het enroll-antwoord (§3.3,
+    #     §3.5); het event van de koppeling (service.hub_link.linked, §7) komt door de inbox van de echte Hub (geen
+    #     weigering, geen dead-letter): de bron controleert vóór verzending dezelfde grenzen als de inbox
+    assert link["schema_version"] == "1.3" and link["pins"]["rotation_sequence"] == 0
+    eng = create_engine(lab.svc_env["HCH_DATABASE_URL"])
+    try:
+
+        def afgeleverd() -> list[Any] | None:
+            with eng.connect() as c:
+                rows = list(c.execute(text("SELECT event_type, delivery_status, last_error FROM outbox_event")))
+            return rows if rows and all(r[1] == "delivered" for r in rows) else None
+
+        rows = _wait(afgeleverd)
+    finally:
+        eng.dispose()
+    assert "service.hub_link.linked" in {r[0] for r in rows}, rows
 
     # 2. gebruikers-JWT van de Hub; jti-hergebruik voor een tweede mutatie geweigerd; service-token geweigerd
     tok = lab.user_jwt()
