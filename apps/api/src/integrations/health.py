@@ -211,21 +211,36 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
             counts = {"healthy": 0, "degraded": 0, "down": 0, "unknown": 0}
             stale = 0
             seen: list[datetime] = []
+            oud: list[datetime] = []
             for row in configured.values():
                 st, why = effective_probe(row, now)
                 stale += why == "meting_verouderd"
                 counts[st] = counts.get(st, 0) + 1
-                if row.last_probe_at is not None and why != "meting_verouderd":
-                    seen.append(ensure_aware(row.last_probe_at))
+                if row.last_probe_at is not None:
+                    (oud if why == "meting_verouderd" else seen).append(ensure_aware(row.last_probe_at))
             src_status = max((k for k, v in counts.items() if v), key=ERNST.__getitem__)
-            src_reason = "meting_verouderd" if stale else (None if src_status == "healthy" else "bron_" + src_status)
+            # §6.2: een verse storing of beperking is de oorzaak (nooit verborgen achter "verouderd"); anders noemt een
+            # verouderde meting zichzelf, met de tijd van de laatste meting en zonder de oude stand
+            if src_status in ("down", "degraded") or (src_status == "unknown" and not stale):
+                src_reason: str | None = "bron_" + src_status
+            else:
+                src_reason = "meting_verouderd" if stale else None
+            detail: dict[str, Any] = {
+                **counts,
+                "verouderd": stale,
+                "ingesteld": len(configured),
+                "totaal": len(ALL_SOURCES),
+            }
+            if oud:
+                detail["laatste_meting_verouderd"] = iso(max(oud))
             checks.append(
                 _check(
                     "bronnen",
                     src_status,
-                    {**counts, "verouderd": stale, "ingesteld": len(configured), "totaal": len(ALL_SOURCES)},
+                    detail,
                     src_reason,
-                    observed_at=min(seen) if seen and not stale else None,
+                    # zo vers als de oudste meting die meetelt: een verouderde meting maakt de check nooit "nu gemeten"
+                    observed_at=min([*seen, *oud]) if seen or oud else None,
                 )
             )
     status = max((c["status"] for c in checks), key=ERNST.__getitem__)

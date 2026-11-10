@@ -150,3 +150,47 @@ def test_worker_writes_a_heartbeat_each_round(make_settings: Any, fake_hub: Any,
     w.run_once()
     with w.db.sessions() as s:
         assert s.get(ServiceState, HEARTBEAT_KEY).value["at"] >= eerste  # type: ignore[union-attr]
+
+
+def test_stale_source_names_its_time_and_never_hides_a_fresh_failure(paired_client: Any, auth: Any) -> None:
+    """§6.2: een verouderde meting is ``unknown`` met ``meting_verouderd`` en de tijd van de laatste meting (de check is
+    nooit "nu gemeten"); een verse storing van een andere bron blijft de oorzaak (``bron_down``), ook als er daarnaast
+    een verouderde meting is."""
+    c, h = paired_client, auth("viewer")
+    _hartslag(c, at=utcnow())
+    oud = (utcnow() - timedelta(minutes=40)).replace(microsecond=0)
+    with c.app.state.db.sessions() as s:
+        s.add(
+            IntegrationSource(
+                source_id="node_red",
+                domain="automation",
+                base_url="http://bron-node-red.test:1880",
+                enabled=True,
+                last_probe_at=oud,
+                last_probe_status="healthy",
+                updated_by="test",
+            )
+        )
+        s.commit()
+    bronnen = _checks(_health(c, h))["bronnen"]
+    assert (bronnen["status"], bronnen["reason_code"]) == ("unknown", "meting_verouderd")
+    assert bronnen["observed_at"] == iso(oud) and bronnen["detail"]["laatste_meting_verouderd"] == iso(oud)
+    assert bronnen["detail"]["healthy"] == 0  # de oude stand gaat niet als actueel naar buiten
+    with c.app.state.db.sessions() as s:
+        s.add(
+            IntegrationSource(
+                source_id="adguard_home",
+                domain="network",
+                base_url="http://bron-adguard.test:3000",
+                enabled=True,
+                last_probe_at=utcnow(),
+                last_probe_status="down",
+                updated_by="test",
+            )
+        )
+        s.commit()
+    health = _health(c, h)
+    bronnen = _checks(health)["bronnen"]
+    assert (bronnen["status"], bronnen["reason_code"], bronnen["detail"]["verouderd"]) == ("down", "bron_down", 1)
+    assert (health["status"], health["reason_code"]) == ("down", "bron_down")
+    assert bronnen["observed_at"] == iso(oud)  # zo vers als de oudste meting die meetelt
