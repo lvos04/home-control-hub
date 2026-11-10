@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import os
 import re
 import shutil
 import sys
@@ -38,6 +39,11 @@ NU = datetime(2026, 11, 9, 11, 56, tzinfo=UTC)
 FP = "MEGG-8GFG-2E4Y-K2RQ"  # testvector uit contract 1.3 §4.5
 TRACE = "3d8a1f4e-6b2c-4e95-a7d0-91c5b8e2f364"
 BRON_MAP = REPO_ROOT.parent / "ai-server-manager" / "design" / "ontwerptaal"
+#: de referentie-renderer ``bouw/sjabloon.py``: in CI het bestand van de GEPINDE bron-commit (``HCH_PEIL_REFERENTIE``,
+#: zie .github/workflows/ci.yml); lokaal de checkout van ai-server-manager naast deze repo. Met
+#: ``HCH_PEIL_REFERENTIE_VERPLICHT=1`` faalt de test als de referentie ontbreekt (CI mag hem niet stil overslaan).
+REFERENTIE = Path(os.environ.get("HCH_PEIL_REFERENTIE") or BRON_MAP / "bouw" / "sjabloon.py")
+REFERENTIE_VERPLICHT = os.environ.get("HCH_PEIL_REFERENTIE_VERPLICHT") == "1"
 
 
 def _tool() -> ModuleType:
@@ -135,9 +141,12 @@ ALLE += ["ontkoppeld", "ingetrokken", "onleesbaar"]
 
 
 def _referentie() -> ModuleType | None:
-    """De referentie-renderer van Peil 1.1.1 (``bouw/sjabloon.py`` in de bron), als die naast deze repo staat."""
-    pad = BRON_MAP / "bouw" / "sjabloon.py"
+    """De referentie-renderer van Peil 1.1.1 (``bouw/sjabloon.py`` in de bron): uit ``HCH_PEIL_REFERENTIE`` of de
+    checkout naast deze repo; ``None`` als hij er niet is (en niet verplicht)."""
+    pad = REFERENTIE
     if not pad.is_file():
+        if REFERENTIE_VERPLICHT:
+            raise FileNotFoundError(f"referentie-renderer verplicht maar niet gevonden: {pad}")
         return None
     spec = importlib.util.spec_from_file_location("peil_sjabloon_referentie", pad)
     assert spec is not None and spec.loader is not None
@@ -260,7 +269,10 @@ def test_render_refuses_broken_templates(kapot: str) -> None:
         peil.render(kapot, {"a": True, "b": True})
 
 
-@pytest.mark.skipif(_referentie() is None, reason="geen lokale checkout van ai-server-manager (bouw/sjabloon.py)")
+@pytest.mark.skipif(
+    not REFERENTIE_VERPLICHT and _referentie() is None,
+    reason="geen referentie-renderer (HCH_PEIL_REFERENTIE of een lokale checkout van ai-server-manager)",
+)
 @pytest.mark.parametrize("soort", ALLE)
 def test_renderer_equals_the_reference_byte_for_byte(soort: str) -> None:
     """Peil 1.1.1 (E07): de Python-renderers van de diensten nemen ``bouw/sjabloon.py`` over; voor elke toestand van deze

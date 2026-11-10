@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -15,7 +16,13 @@ import yaml
 from integrations.cli import export_openapi
 from tests.conftest import REPO_ROOT
 
-APPSTORE_CLI = REPO_ROOT.parent / "appstore-en-fork" / ".venv" / "bin" / "jl-manifest"
+#: de manifestvalidator van appstore-en-fork (C1.3-ASF-08): in CI een eigen venv op een vaste commit (``HCH_JL_MANIFEST``,
+#: zie .github/workflows/ci.yml); lokaal de venv van de checkout naast deze repo. Met
+#: ``HCH_MANIFEST_VALIDATOR_VERPLICHT=1`` faalt de test als de validator ontbreekt (CI mag hem niet stil overslaan).
+APPSTORE_CLI = Path(
+    os.environ.get("HCH_JL_MANIFEST") or REPO_ROOT.parent / "appstore-en-fork" / ".venv" / "bin" / "jl-manifest"
+)
+VALIDATOR_VERPLICHT = os.environ.get("HCH_MANIFEST_VALIDATOR_VERPLICHT") == "1"
 DEPLOY = REPO_ROOT / "deploy"
 FORBIDDEN_HOST_PATHS = ("/", "/mnt", "/etc", "/var/run", "/root")
 
@@ -86,9 +93,13 @@ def test_manifest_follows_contract_1_3() -> None:
     assert all(a["reden_nl"] for a in m["accepted_findings"])
 
 
-@pytest.mark.skipif(not APPSTORE_CLI.is_file(), reason="geen lokale appstore-en-fork met venv (validator)")
+@pytest.mark.skipif(
+    not VALIDATOR_VERPLICHT and not APPSTORE_CLI.is_file(),
+    reason="geen manifestvalidator (HCH_JL_MANIFEST of een lokale appstore-en-fork met venv)",
+)
 def test_manifest_is_valid_for_the_1_3_validator_in_strict_mode() -> None:
     """Dezelfde controle als de release-CI van appstore-en-fork: jl-manifest validate --strict (C1.3-ASF-08)."""
+    assert APPSTORE_CLI.is_file(), f"manifestvalidator verplicht maar niet gevonden: {APPSTORE_CLI}"
     out = subprocess.run(  # noqa: S603 - vaste opdracht, geen shell
         [str(APPSTORE_CLI), "validate", "--strict", str(DEPLOY / "manifest/home-control-hub.manifest.yaml")],
         capture_output=True,
@@ -159,3 +170,14 @@ def test_workflows_pin_actions_by_sha() -> None:
             m = re.search(r"uses:\s*(\S+)", line)
             if m:
                 assert re.search(r"@[0-9a-f]{40}$", m.group(1)), f"{wf.name}: {m.group(1)} niet op SHA gepind"
+
+
+def test_ci_runs_the_validator_and_the_peil_reference_as_mandatory() -> None:
+    """C1.3-HCH-13 en Peil 1.1.1 (E07): in CI draaien de manifestvalidator en de referentie-renderer op vaste commits en
+    verplicht; zonder die stappen zouden de twee tests hierboven en in test_statuspagina_peil.py stil overgeslagen
+    worden."""
+    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert re.search(r"VALIDATOR_COMMIT: [0-9a-f]{40}\n", ci)
+    assert '/bin/jl-manifest" validate --strict deploy/manifest/home-control-hub.manifest.yaml' in ci
+    assert 'echo "HCH_MANIFEST_VALIDATOR_VERPLICHT=1"' in ci and 'echo "HCH_PEIL_REFERENTIE_VERPLICHT=1"' in ci
+    assert '["bron_commit"]' in ci and "/design/ontwerptaal/bouw/sjabloon.py" in ci
