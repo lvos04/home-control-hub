@@ -498,3 +498,11 @@ Een echte Hub (die `rotation_sequence`, de inbox-regels en `sso.access.*` met `i
 een echte Authentik (de `sub`-afleiding komt uit de broncode van Authentik 2026.8.5), een echte browser op het LAN
 tegen de dienst op een echte NAS (Host-header, bron-IP achter de portpublicatie), een echte schermlezer en telefoon, en
 installatie als standaard Custom App op een echte TrueNAS.
+
+### GitHub Actions (contract 1.3)
+
+| Run | Commit | Uitkomst |
+|---|---|---|
+| 42782260548 | e415866 (alle codewijzigingen tot dan) | python en image geslaagd; **statuspagina-ui mislukt**: de ontwerpreview schreef `hub-link.json` met 0644 (sinds 1.3 onleesbaar) en las de reden uit de 1.1.0-opbouw; hersteld in edc8722 |
+| 42783332605 | edc8722 | **geslaagd**: python, statuspagina-ui (Playwright, ontwerpreview 320–1440 + browsertest herkomst), image (bouwen + rooktest) |
+| 42784902419 | 33148a8 | **geslaagd**: python, statuspagina-ui, image |
