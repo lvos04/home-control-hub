@@ -387,6 +387,20 @@ def test_pairing_in_progress_hides_the_form_and_keeps_the_state() -> None:
     assert html.index("</svg>Gekoppeld</span>") < html.index("</svg>Koppelen bezig</span>")
 
 
+def test_orphaned_pairing_code_attempt_does_not_block_the_form() -> None:
+    """Een verweesde koppelcodepoging (afgebroken verzoek, > 2 min) is geen 'Koppelen bezig': het formulier mag weer."""
+    oud = LinkState(
+        pending=Pending(
+            kind="koppelcode",
+            secret_sha256="c" * 64,
+            hub_url="http://hub.test:30400",
+            started_at="2026-01-01T00:00:00Z",
+        )
+    )
+    data = bouw_model(_meting(oud), csrf="c" * 32)
+    assert not data["koppelen_bezig"] and 'action="/koppelen"' in _html(data)
+
+
 def test_unreadable_link_file_is_storing_without_form_and_without_live_region() -> None:
     """Peil 1.1.1 (E01/E05/E06; contract 1.3 §3.5): Storing · Niet gereed; melding met code en pad, zonder rol en
     zonder trace-ID (een toestand die bij het laden al bestond); geen formulier."""

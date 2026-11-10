@@ -57,6 +57,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from . import __version__, audit
 from .domains import DOMAIN_TITLES_NL, DOMAINS
 from .domains.sso import service as sso_service
+from .enrollment import stale_koppelcode
 from .errors import trace_id_for
 from .hublink_store import ERROR_MESSAGES, LINK_FILE, LinkState
 from .peil import MELDING_ICOON, TONEN, TOTAAL_TONEN, SjabloonOntbreekt, render, sjabloon
@@ -542,6 +543,12 @@ def koppeltoestand(link: LinkState) -> str:
     return "ontkoppeld"
 
 
+def koppelen_bezig(link: LinkState) -> bool:
+    """``pending`` ≠ ``null`` (§3.5); een verweesde koppelcodepoging (afgebroken verzoek, > 2 min) telt niet: dan mag
+    het formulier weer (de volgende poging ruimt hem op)."""
+    return link.pending is not None and not stale_koppelcode(link.pending)
+
+
 def _bezig_sinds(link: LinkState, nu: datetime) -> datetime | None:
     if link.pending is None:
         return None
@@ -566,7 +573,7 @@ def _koppel_controle(m: Meting, met_laatste_fout: bool) -> tuple[dict[str, Any] 
         return rij("storing", "Onleesbaar", reden, code="koppelstatus_onleesbaar"), "koppelstatus onleesbaar"
     if toestand == "koppelformulier":
         sinds = _bezig_sinds(link, nu)
-        if link.pending is not None:
+        if link.pending is not None and koppelen_bezig(link):
             via = "met het token uit de Custom App" if link.pending.kind == "token" else "met een koppelcode"
             wanneer = f" sinds {sinds:%H:%M}" if sinds else ""
             reden = f"Er loopt een koppelpoging{wanneer} ({via})."
@@ -641,7 +648,7 @@ def bouw_model(
     gereed = not niet_gereed
     dienst_blok = _dienst_blok(m)
     totaal_toon, totaal_label, toelichting = _totaal(rijen, gereed, niet_gereed, dienst_blok)
-    bezig = m.link.pending is not None and toestand != "koppelstatus_onleesbaar"
+    bezig = koppelen_bezig(m.link) and toestand != "koppelstatus_onleesbaar"
     sinds = _bezig_sinds(m.link, nu) if bezig else None
 
     data: dict[str, Any] = {

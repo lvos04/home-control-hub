@@ -185,3 +185,23 @@ def test_emit_refuses_events_outside_the_contract(paired_client: Any) -> None:
                     payload=payload,
                 )
         s.rollback()
+
+
+def test_partial_read_is_not_yet_a_recovery(paired_client: Any, auth: Any, authentik_fake: AuthentikFake) -> None:
+    """fout → onvolledig → ok: één probleem-event en pas bij 'ok' het herstel (half gelezen is nog geen herstel)."""
+    c, h = paired_client, auth("admin")
+    _klaar(c, h)
+    _sync(c, h)
+    authentik_fake.up = False
+    assert _sync(c, h)["status"] == "fout"
+    authentik_fake.up = True
+    authentik_fake.forbidden.add("/api/v3/core/users/")
+    assert _sync(c, h)["status"] == "onvolledig"
+    assert _events(c, "sso.authentik_sync.recovered") == []
+    authentik_fake.up = False
+    assert _sync(c, h)["status"] == "fout"  # dezelfde storing loopt nog: geen tweede probleem-event
+    authentik_fake.up = True
+    authentik_fake.forbidden.discard("/api/v3/core/users/")
+    assert _sync(c, h)["status"] == "ok"
+    assert len(_events(c, "sso.authentik_sync.failed")) == 1
+    assert len(_events(c, "sso.authentik_sync.recovered")) == 1

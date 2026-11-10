@@ -799,8 +799,10 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
         result["rights_verified"] = {"snapshot_id": rights_read["snapshot_id"], "at": result["finished_at"]}
     elif previous.get("rights_verified"):  # mislukt of half gelezen: de vorige bevestiging blijft (en veroudert)
         result["rights_verified"] = previous["rights_verified"]
-    _state_put(session, SYNC_KEY, result)
-    if result["status"] == "fout" and previous.get("status") != "fout":
+    # 1.3 §7: één probleem-event per storing en één herstel-event met hetzelfde onderwerp zodra de synchronisatie weer
+    # volledig lukt ('onvolledig' is nog geen herstel); 'probleem_open' onthoudt dat over tussenliggende rondes heen
+    open_ = bool(previous.get("probleem_open", previous.get("status") == "fout"))
+    if result["status"] == "fout" and not open_:
         events.emit(
             session,
             event_type="sso.authentik_sync.failed",
@@ -811,8 +813,8 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
             trace_id=tid,
             payload={"reason": result["reason"], "ernst": "middel"},
         )
-    elif result["status"] != "fout" and previous.get("status") == "fout":
-        # 1.3 §7: herstel met hetzelfde onderwerp (integration_source/authentik) als het probleem
+        open_ = True
+    elif result["status"] == "ok" and open_:
         events.emit(
             session,
             event_type="sso.authentik_sync.recovered",
@@ -821,8 +823,11 @@ def sync(session: Session, client: AuthentikClient, actor: Actor, tid: str) -> d
             actor_type=actor[0],
             actor_id=actor[1],
             trace_id=tid,
-            payload={"status": result["status"], "vorige_reden": previous.get("reason"), "ernst": "info"},
+            payload={"status": result["status"], "ernst": "info"},
         )
+        open_ = False
+    result["probleem_open"] = open_
+    _state_put(session, SYNC_KEY, result)
     return result
 
 
