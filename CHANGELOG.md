@@ -1,5 +1,44 @@
 # Wijzigingen
 
+## 0.1.0 — contract 1.3 en Peil 1.1.1 (ADR-0014, nog niet uitgebracht)
+
+**Statuspagina (contract 1.3 §3.7, Peil 1.1.1)**
+- Sjabloon Peil 1.1.1 (gepinde kopie van `ai-server-manager@0a7143b`) met een renderer in één doorgang. Nieuwe
+  toestanden: *koppelstatus onleesbaar* (Storing "Onleesbaar", geen formulier, code en pad, geen live-regio) en
+  *koppelen bezig* (geen formulier, starttijd). Niet ingestelde onderdelen heten "Niet ingesteld" en tellen niet mee;
+  groen heet "Alles gezond".
+- Een koppel-POST wordt alleen aangenomen met een `Host` die een IP-adres, een naam zonder punt of een naam onder
+  `.local`/`.lan`/`.internal`/`.home.arpa` is (anders 403 `host_niet_toegestaan`, DNS-rebinding), met
+  `Sec-Fetch-Site` `same-origin`/`none` en een exacte `Origin` (ontbreekt of `null` → 403 `herkomst_onjuist`).
+  `Referrer-Policy` is nu `same-origin`.
+- Elke POST na de herkomstcontrole telt als poging, ook bij een al gekoppelde dienst (409 `al_gekoppeld`), een
+  onleesbaar koppelbestand (409 `koppelstatus_onleesbaar`) of een lopende poging (409 `koppelen_bezig`). Invoer wordt
+  niet meer afgekapt (te lang = veldfout). Eén logregel per POST. De melding na koppelen werkt alleen met een sleutel van
+  deze browser (15 min).
+
+**API en koppeling (contract 1.3 §3–§7)**
+- Eerst aanmelden, dan body, rol en `Idempotency-Key`: een onleesbare body zonder geldige aanmelding is nu 401 (was 422).
+- `idempotency_key_reused` (422) vervangt `idempotency_key_conflict` (409); `precondition_failed` met `huidige_etag`;
+  een geweigerde noodtoegang is 403 `forbidden` met `details.reason`.
+- `rotation_sequence` uit het enroll-antwoord; `hub-link.json` met `schema_version` `"1.3"`; ook een andere major,
+  ontbrekende verplichte velden of te ruime rechten maken het bestand onleesbaar (fail-closed).
+- Een Hub-hostnaam wordt per verbinding opgelost en gecontroleerd; geen verbinding als hij naar loopback, link-local of
+  `0.0.0.0`/`::` wijst.
+- Connector-health: totaal = slechtste check; vaste namen `database`, `worker`, `jobs`, `hub_link`; de worker schrijft
+  een hartslag; `discover` noemt `limits.max_age_s`.
+- Events: eigen domeinen en de vaste `service.*`-lijst worden vóór verzending gecontroleerd; `service.*` gaat over
+  `{type: service, id: home-control-hub}`; `payload.ernst`; nieuw `sso.authentik_sync.recovered`;
+  `sso.access.*` met `issuer`, `sub` en `preferred_username`.
+- Noodtoegang: `100.64.0.0/10` (CGNAT/Tailscale) telt alleen nog als privé als een beheerder het toestaat
+  (`cgnat_toegestaan`, migratie 0004). Een bestaande registratie met zo'n bereik geeft zonder toestemming geen toegang.
+- Groep → rol-koppelingen dragen `advies: true` (de Hub beheert ze).
+
+**Image, manifest en CI**
+- `healthcheck.py --controle`; de rooktest controleert ook CapPrm, CapAmb en (start als root) CapBnd, en de healthcheck
+  apart.
+- Manifest: kop 1.3, `healthcheck.monitor`, `accepted_findings`.
+- CI: contract-drift online; de ontwerpreview meet ook 1024 px en draait de browsertest van het koppelformulier.
+
 ## 0.1.0 — onafhankelijke review contract 1.2 (QA, ADR-0013, nog niet uitgebracht)
 
 **Gerepareerd**

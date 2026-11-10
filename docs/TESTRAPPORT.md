@@ -437,3 +437,64 @@ GitHub Actions:
   - de statuspagina via `http://<NAS-adres>:30420`.
 - Echte Authentik-accounts (B13-002…005).
 - Een echte schermlezer en een echte telefoon.
+
+## Contract 1.3 en Peil 1.1.1 (2026-11-10, Ubuntu 26.04-bouwmachine)
+
+Conformiteitsronde C1.3-HCH-01…14 (ADR-0014). Python 3.12.16 (venv), PostgreSQL 16 op 127.0.0.1:5432 (client 16 via
+`PATH=/usr/lib/postgresql/16/bin:$PATH`), Node 22, Playwright 1.65 (Chromium), Docker + buildx. Alles tegen de
+Hub-simulator (`tests/e2e/sim_hub.py`, nu volgens 1.3) en de nep-Authentik; geen echte Hub, NAS of Authentik.
+
+### Nulmeting (HEAD 9d886ad, vóór wijzigingen)
+
+| Commando | Uitkomst |
+|---|---|
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q -x -p no:cacheprovider` | 568 geslaagd |
+
+### Eindstand
+
+| Commando | Uitkomst |
+|---|---|
+| `make lint` (ruff check + format, mypy) en ruff over `tests/e2e tests/interop tests/ui deploy/allinone tools` | geen bevindingen; mypy: 63 bronbestanden ok |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH nice -n 10 pytest -q -p no:cacheprovider` | **718 geslaagd** (unit + integratie) |
+| `pytest -q tests/e2e -p no:cacheprovider` (API + worker als processen, Hub-simulator 1.3 met de envelope-regels van §7) | **14 geslaagd**, 0 geweigerde events |
+| `python -m integrations migrate` → `--down base` → `migrate` (nieuwe migratie 0004) | op/neer/op zonder fouten |
+| `python3 tools/contract_kopie.py controleer` en `vergelijk --bron ../ai-server-manager` en `vergelijk --online` | in orde (kopieën = ai-server-manager@0a7143b) |
+| `python3 tools/peil_kopie.py bijwerken … --commit 0a7143b…` en `vergelijk --bron ../ai-server-manager` | Peil 1.1.1, in orde |
+| `tools/authentik_schema_check.py` (officiële schema's van alle release-lijnen, nieuw: `uid`/`uuid` van gebruikers) | 2024.10.5 t/m 2026.8.5: alle ok |
+| `jl-manifest validate --strict deploy/manifest/home-control-hub.manifest.yaml` (1.3-validator van appstore-en-fork, lokaal) | GELDIG, 0 fouten; `digest_pending_release` geaccepteerd |
+| `pip-audit -r apps/api/requirements.lock` | geen bekende kwetsbaarheden |
+| `python tests/ui/genereer_toestanden.py` + `npx playwright test` (12 toestanden × licht/donker × 320–1440) | **24 geslaagd**: axe 0, geen overloop, CSP, meldingsrol, Referrer-Policy |
+| `python tests/ui/ontwerpreview.py` (draaiende dienst, 14 toestanden × 320/360/390/768/1024/1440 × licht/donker) | **168 metingen, 0 overtredingen**; tekst ≥ 8,34:1, randen ≥ 4,86:1, iconen ≥ 5,41:1, focus ≥ 7,79:1 |
+| idem, browsertest `tests/ui/herkomst.mjs` (echt formulier, echte dienst) | negatief 5 gevallen, 0 fouten; positief 1 geval (303), 0 fouten |
+| `flock …/docker-build.lock nice -n 10 docker buildx build --load -f deploy/allinone/Dockerfile -t home-control-hub:dev .` | gebouwd |
+| `deploy/allinone/smoke-test.sh home-control-hub:dev` | **34 geslaagd, 0 mislukt** (nieuw: CapPrm/CapAmb/CapBnd, healthcheck apart, Referrer-Policy, Origin null → 403) |
+
+Tijdens het werk gevonden en hersteld (in deze ronde): de testhulp van de ontwerpreview schreef `hub-link.json` met
+0644. Sinds 1.3 §3.5 is dat onleesbaar (fail-closed) — de review ving dat terecht op. En de review las de reden van een
+rij uit de 1.1.0-opbouw; in 1.1.1 staat die in `.sub > span`.
+
+### Negatieve scenario's (Sim-getest)
+
+- Formulier-POST met `Origin: null`, zonder `Origin`, met een vreemde `Origin`, ander schema of andere poort,
+  `Sec-Fetch-Site: same-site`/`cross-site`, `Host` een publieke domeinnaam of `127.1`, zonder cookie → 403, niets naar
+  de Hub, niets gewijzigd, telt niet als poging (HTTP-tests én Chromium tegen de echte dienst).
+- Zes POST's op een al gekoppelde dienst → 5 × 409 `al_gekoppeld`, dan 429; lopende poging → 409 `koppelen_bezig`;
+  onleesbaar koppelbestand → 409 `koppelstatus_onleesbaar` (bestand blijft onaangeroerd); te lange invoer → 422
+  zonder afkappen.
+- Onleesbare body zonder aanmelding → 401 (was 422); schemafout zonder aanmelding → 401; geen `Idempotency-Key` zonder
+  aanmelding → 401; daarna pas 400/403/422. Een POST met een ongeldige body verbruikt toch de `jti`.
+- Hub-hostnaam die naar loopback, link-local, `0.0.0.0`/`::` of een IPv4-mapped loopback wijst → geen verbinding, ook
+  niet als hij eerder naar een LAN-adres wees (rebinding).
+- Hub roteerde vóór de koppeling met intrekking van de oude sleutel → de dienst begint bij `rotation_sequence` 1 en
+  weigert niets (met 1.2-gedrag zou dat een geweigerde rotatie zijn geweest).
+- Koppelbestand met een andere major, zonder `schema_version`/`state` of met rechten 0644/0660 → onleesbaar.
+- Events buiten het eigen domein, buiten de vaste `service.*`-lijst, `app.*` anders dan `app.health.changed`, of met
+  een ernst buiten de vijf woorden → geweigerd vóór verzending.
+- `100.64.0.0/10` zonder toestemming → 422 bij registreren en geen toegang bij beoordelen.
+
+### Nog steeds NIET GEVALIDEERD
+
+Een echte Hub (die `rotation_sequence`, de inbox-regels en `sso.access.*` met `issuer`/`sub` nog moet bouwen, C1.3-ASM),
+een echte Authentik (de `sub`-afleiding komt uit de broncode van Authentik 2026.8.5), een echte browser op het LAN
+tegen de dienst op een echte NAS (Host-header, bron-IP achter de portpublicatie), een echte schermlezer en telefoon, en
+installatie als standaard Custom App op een echte TrueNAS.

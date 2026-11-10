@@ -4,8 +4,11 @@ Integratiedienst van **TrueNAS Home Platform V2**: B10 netwerk/privacy, B11 Node
 beheerherstel B13-001) en B14 energie/resources. Een zelfstandige API-dienst met alleen een kleine Nederlandse
 statuspagina; alle schermen staan in de Hub (`ai-server-manager`).
 
-**Status (fase P1, platformcontract 1.2):** kern volgens `contracts 1.2` (`docs/platform-v2/PLATFORM_CONTRACTEN.md`;
-koppelen met de Hub volgens §3.3–§3.8, alleen Hub-JWT's tegen gepinde sleutels, image zonder enig rootproces; ADR-0010)
+**Status (fase P1, platformcontract 1.3, Peil 1.1.1):** kern volgens `contracts 1.3`
+(`docs/platform-v2/PLATFORM_CONTRACTEN.md`, byte-gelijke kopie met drifttest; conformiteit C1.3-HCH-01…14 in ADR-0014:
+koppelformulier met herkomst- en Host-beperking, eerst aanmelden, connector-health met vaste checks, events met
+domeinen/werkwoorden/ernst en `issuer`/`sub` in `sso.access.*`, `100.64.0.0/10` alleen met toestemming; koppelen met
+de Hub volgens §3.3–§3.8, alleen Hub-JWT's tegen gepinde sleutels, image zonder enig rootproces; ADR-0010/0013/0014)
 + B13-001 (accountrecovery en admin-toegang; de noodlogin zelf zit in de Hub) en
 B13-002…005 (Authentik via de officiële API: versiedetectie, OIDC-client voor de Hub als R2-voorstel, SSO-dekking per
 app met bron, audit/afwijkingen, configuratie-export, pre-upgrade-gate en herstelcheck) gebouwd en met simulators
@@ -28,9 +31,10 @@ compose, geen terminal. Normaal installeert het platform deze app via de TrueNAS
 | API (`/integrations/v1`), connectorcontract (`/connector/v1`), `/healthz`, `/readyz`, statuspagina `GET /` | `apps/api/src/integrations/` |
 | Auth (§4): alleen Hub-JWT's (gebruiker of dienst-JWT) tegen de gepinde sleutels, vaste `reason`-waarden, `jti` + replaycache | `security/auth.py`, `security/replay.py`, `security/hubkeys.py` |
 | Koppelen (§3): env-token (worker) of koppelcode + vingerafdruk op de statuspagina (alleen vóór de eerste koppeling); `/appdata/secrets/hub-link.json`; bevestigen, intrekken, token- en sleutelrotatie; `GET /connector/v1/hub-link` en `POST …/unlink` | `enrollment.py`, `hublink_store.py`, `status_page.py`, `connector.py` |
-| Statuspagina `GET /` in de ontwerptaal Peil (versie-gepinde kopie van het sjabloon, geen JavaScript; ADR-0011) | `status_page.py`, `peil.py`, `design/ontwerptaal/`, `tools/peil_kopie.py` |
+| Statuspagina `GET /` in de ontwerptaal Peil 1.1.1 (versie-gepinde kopie van het sjabloon, renderer in één doorgang, geen JavaScript; herkomst, `Host`-beperking en pogingen volgens contract 1.3 §3.7; ADR-0011/0014) | `status_page.py`, `peil.py`, `design/ontwerptaal/`, `tools/peil_kopie.py` |
+| Byte-gelijke kopie van het platformcontract 1.3 met drifttest (offline en online) | `docs/platform-v2/CONTRACT_HERKOMST.json`, `tools/contract_kopie.py`, `apps/api/tests/unit/test_contract_docs.py` |
 | UI-tests van de statuspagina (Playwright + axe-core, 320–1440 px, licht/donker) en schermafdrukken | `tests/ui/`, `docs/screenshots/peil/statuspagina/` |
-| Onafhankelijke ontwerpreview van de statuspagina tegen de draaiende dienst (14 toestanden; ADR-0012) | `tests/ui/ontwerpreview.py`/`.mjs`, `docs/ontwerp/PEIL_REVIEW.md`, `docs/ontwerp/peil-review/` |
+| Onafhankelijke ontwerpreview van de statuspagina tegen de draaiende dienst (14 toestanden, 320–1440 incl. 1024; ADR-0012) en de browsertest van het koppelformulier met de negatieve herkomstgevallen (contract 1.3 §3.7 punt 6) | `tests/ui/ontwerpreview.py`/`.mjs`, `tests/ui/herkomst.mjs`, `docs/ontwerp/PEIL_REVIEW.md`, `docs/ontwerp/peil-review/` |
 | Hub-simulator volgens §3.3 (ook de nep-Hub van de integratietests) | `tests/e2e/sim_hub.py` |
 | B13-001: herstelregister, noodtoegang LAN/VPN, zelftest met Authentik offline, versleutelde herstelkit | `domains/sso/` |
 | B13-002…005: Authentik-client (alleen lezen, gecontroleerd tegen de officiële schema's), voorstellen, SSO-mapping, audit, export/gate/herstelcheck | `domains/sso/authentik/`, `oidc_hub.py`, `proposals.py`, `mapping.py`, `authaudit.py`, `backup.py` |
@@ -53,8 +57,10 @@ make test-ui                # statuspagina in Chromium: axe-core, overloop, CSP,
                             # 'cd tests/ui && npx playwright install chromium')
 make schermafdrukken        # idem + afdrukken naar docs/screenshots/peil/statuspagina/
 make peil-drift             # Peil-kopie offline en tegen ai-server-manager op GitHub
+make contract-drift         # contractkopie (contracts 1.3) offline en tegen ai-server-manager op GitHub
 make ontwerpreview          # draaiende dienst + Hub-simulator: 14 toestanden × 320–1440 × licht/donker (axe WCAG 2.2 AA,
-                            # contrast, doelen, focus, tekstafstand, Peil-statusregels) → tests/ui/review-uit/
+                            # contrast, doelen, focus, tekstafstand, Peil-statusregels) + browsertest herkomst
+                            # (tests/ui/herkomst.mjs) → tests/ui/review-uit/
 ```
 
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met

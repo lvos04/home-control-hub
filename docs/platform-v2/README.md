@@ -40,3 +40,14 @@ Onbekende NAS-gegevens (D01–D18) worden nooit met voorbeeldwaarden ingevuld; z
 - `06_TEMPLATES/PROMPTS_PER_APP/PROMPT_B11_AUTOMATISERING.md`
 - `06_TEMPLATES/PROMPTS_PER_APP/PROMPT_B13_AUTHENTIK_SSO.md`
 - `06_TEMPLATES/PROMPTS_PER_APP/PROMPT_B14_ENERGIE_RESOURCE_MANAGER.md`
+
+## Platformcontract (kopieën)
+
+- `PLATFORM_CONTRACTEN.md` — byte-gelijke kopie van `contracts 1.3` uit `lvos04/ai-server-manager`
+- `CONTRACT_1.3_CONFORMITEIT.md` — wat elke repo voor 1.3 moet veranderen (deze repo: hoofdstuk 2, C1.3-HCH-01…15)
+- `CONTRACT_1.2_CONFORMITEIT.md` — historie
+- `CONTRACT_HERKOMST.json` — bron-commit en sha256 van de kopieën; controle met `tools/contract_kopie.py` en
+  `apps/api/tests/unit/test_contract_docs.py` (nooit lokaal aanpassen; een nieuwe kopie overnemen is een stap van de
+  orkestratie)
+- `EVIDENCE.json` — bewijs per Excel-ID en per contractpunt (`C1.3-HCH-<nn>`, contract 1.3 §11)
+- `DELTA_MATRIX.md` — wat bestond, wat gebouwd is en wat ontbreekt

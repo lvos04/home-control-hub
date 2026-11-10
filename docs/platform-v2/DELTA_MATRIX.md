@@ -23,3 +23,9 @@ Review P0 (2026-11-09): aanscherpingen in ADR-0006; geen nieuwe functionaliteit,
 
 P1 B13-002…005 (2026-11-09): zie ADR-0007/ADR-0008. Alles Sim-getest tegen de in-repo nep-Authentik; geen echte
 Authentik, domeinnaam (D17) of NAS.
+
+Contract 1.3 + Peil 1.1.1 (2026-11-10): conformiteitsronde C1.3-HCH-01…14 (ADR-0014). Geen nieuwe domeinfunctionaliteit;
+wel de statuspagina (herkomst, `Host`-beperking, pogingen, Peil 1.1.1), eerst aanmelden, foutcatalogus,
+`rotation_sequence`, adresregels na DNS-resolutie, connector-health met vaste checks en worker-hartslag, events
+(domeinen, werkwoorden, ernst, `issuer`/`sub`), `100.64.0.0/10` alleen met toestemming, healthcheck-controlevlag en
+het manifest. Open: C1.3-HCH-15 (P2). Alles Sim-getest; niets op een echte NAS, Hub of Authentik gevalideerd.
