@@ -552,6 +552,7 @@ een echte NAS, met een echte Authentik of met echte accounts.
 | interop tegen de echte Hub (`HCH_REAL_HUB_PYTHON=…`, alleen lokaal) | 1 passed, met `schema_version` 1.3, `rotation_sequence` en `service.hub_link.linked` afgeleverd in de inbox |
 | image opnieuw bouwen + `smoke-test.sh` | 34 geslaagd, 0 mislukt |
 | GitHub-run 42788378621 (eddcf17) | **geslaagd**: python (720 passed, 1 skipped: de lokale Peil-vergelijking, CI vergelijkt online), statuspagina-ui, image |
+| GitHub-run 42790561744 (65f772c, alle reviewwijzigingen) | **geslaagd**: python (manifest GELDIG; 722 passed, 1 skipped; E2E 14 passed), statuspagina-ui (24 passed; ontwerpreview 168 metingen, 0 overtredingen; herkomst 5 + 1 gevallen, 0 fouten), image (rooktest 34 geslaagd, 0 mislukt) |
 
 ### Nog steeds NIET GEVALIDEERD
 
