@@ -96,6 +96,20 @@ thumbprint en sleutelset-vingerafdruk met de contracttestvectoren (`apps/api/src
 | H13 | Open punt voor een volgende contractversie: scopes per dienst op `GET /connector/v1/items` (nu leest elke ingeschreven dienst alle besluiten; ADR-0010). | `apps/api/src/hub/routers/` (connector) |
 | H14 | Register (P2): `app_id` (vast, §2) apart van de werkelijke TrueNAS-appnaam (gemeten via `app.query` op image-repository, door de gebruiker bevestigd); bij een afwijkende appnaam die naam gebruiken voor `app.update`/hostpoort. | `apps/api/src/hub/models.py` (`Service`), migratie, Hub-UI "Diensten" |
 
+**Stand H5/H6/H12 (P1-webstap, 2026-11-09, ADR-0024):** H5 (scherm Diensten: vingerafdruk + publieke sleutelset,
+koppelcode met aftellen of enrollment-token met `HUB_URL`/`HUB_ENROLLMENT_TOKEN`/`HUB_KEY_FINGERPRINT`, register met
+laatste 4, rotatie aanvragen, ontkoppelen met eerlijke fout, intrekken met getypte app-id), de UI-kant van H6 (scherm
+Noodaccount met TOTP één keer tonen + bevestigen, zelftest met bron-IP, noodlogin-pagina, "OIDC verplicht" uit zonder
+werkend noodaccount) en H12 (Tailwind 4 + shadcn/ui + lucide, `globals.css` op tokens) zijn gebouwd en **Sim-getest**
+(Playwright tegen de echte API met simulators). "Opnieuw koppelen via executor `app.update`" (H5) volgt in P2.
+NIET GEVALIDEERD op een echte NAS of met een echte dienst.
+
+**Stand H7, eerste deel (QA-review P1, 2026-11-10, ADR-0026):** koppelen van de executor via zijn statuspagina
+(koppelcode 30 min + vingerafdruk, pinning) werkte in geen echte browser (`Referrer-Policy: no-referrer` → `Origin:
+null`). Gerepareerd met `same-origin` (exacte Origin-controle blijft) en **Sim-getest in Chromium** tegen de echte Hub-
+API en de echte executor (web-E2E `90-afsluiting.spec.ts`). De schrijfkey, live verifiëren en ontkoppelen/roteren op
+de executorpagina blijven P2.
+
 ---
 
 ## 2. home-control-hub

@@ -4,7 +4,7 @@
   "status": "Bezig",
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_b13_001_recovery.py::test_break_glass_testable_while_authenticator_offline; apps/api/tests/integration/test_b13_001_recovery.py::test_full_recovery_journey_and_readiness; apps/api/tests/integration/test_b13_001_recovery.py::test_recovery_kit_export_verify_without_secrets; apps/api/tests/integration/test_b13_001_recovery.py::test_register_refuses_secrets_and_sso_only_break_glass; apps/api/tests/integration/test_b13_001_recovery.py::test_emergency_access_rules; apps/api/tests/unit/test_recovery_rules.py; tests/e2e/test_service_e2e.py::test_03_b13_001_break_glass_with_authentik_offline; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_every_route_requires_auth_and_a_role; apps/api/tests/integration/test_review_p0.py::test_kit_verify_rejects_hostile_parameters_without_500; apps/api/tests/integration/test_review_p0.py::test_status_page_shows_only_recovery_level; deploy/allinone/smoke-test.sh (23/23); contract 1.2: commit ff2d85c, a872e7f (ADR-0010 besluit 18, ADR-0003 bijgewerkt); HC11: apps/api/tests/integration/test_review_p0.py::test_status_page_shows_only_recovery_level (statuspagina in Peil toont alleen het totaalniveau, geen accounts of aandachtspunten); ontwerpreview (ADR-0012): commit b4b4875; apps/api/tests/unit/test_statuspagina_peil.py::test_recovery_level_always_has_a_reason",
-  "blokkade": "Echte acceptatie vereist: lokale noodlogin in de Hub (ai-server-manager; nog niet gebouwd), Authentik-installatie (I09, D17 onbekend) en een echte oefening op de NAS — NIET GEVALIDEERD (echte NAS/account).",
+  "blokkade": "Echte acceptatie vereist: lokale noodlogin in de Hub (ai-server-manager; nog niet gebouwd), Authentik-installatie (I09, D17 onbekend) en een echte oefening op de NAS — NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
   "opmerking": "Herstelregister zonder geheimen; minstens twee herstelmethodes waarvan één zonder SSO; noodaccount kan niet SSO-only zijn; noodtoegang alleen LAN/VPN-bereiken met sessieduur en herbevestiging; zelftest slaagt met Authentik offline; versleutelde herstelkit (geen sleutels); audit + events. MFA alleen als attestatie. Na review: herstelkit-openen begrensd (geen 500/geheugenuitputting), statuspagina toont alleen het totaalniveau. Contract 1.2 (HC10): de noodlogin zelf zit in de Hub (§4.1, H6) en hangt niet van deze dienst af; deze dienst blijft register en adviseur en sso.recovery.readiness_changed blijft de bron voor de Hub-cache (die alleen mag verscherpen). Ontwerpreview: de statuspagina geeft bij elk totaalniveau van het herstelregister een vaste reden (Onbekend: \"nog niet volledig ingevuld of getest\"), zonder accountnamen of aandachtspunten.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
@@ -102,20 +102,20 @@
  {
   "id": "B11-002",
   "status": "Niet gestart",
-  "validatie": "",
+  "validatie": "Niet getest",
   "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
   "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Triggers met schema-versie. Toelichting validatie: Niet getest: alleen datamodel; 'onbekende schema-versie verdwijnt niet stil' niet gebouwd.",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Triggers met schema-versie. Niet getest: alleen datamodel; 'onbekende schema-versie verdwijnt niet stil' niet gebouwd.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
  {
   "id": "B11-003",
   "status": "Niet gestart",
-  "validatie": "",
+  "validatie": "Niet getest",
   "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
   "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Actieverzoeken met unieke idempotency-key en oorsprongsketen; risk_claim informatief. Toelichting validatie: Niet getest: alleen datamodel; flow-actieverzoeken naar de Hub niet gebouwd.",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Actieverzoeken met unieke idempotency-key en oorsprongsketen; risk_claim informatief. Niet getest: alleen datamodel; flow-actieverzoeken naar de Hub niet gebouwd.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
@@ -132,10 +132,10 @@
  {
   "id": "B11-005",
   "status": "Niet gestart",
-  "validatie": "",
+  "validatie": "Niet getest",
   "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
   "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Onveranderlijke flowversies met checksum; credentials alleen als vault-referentie. Toelichting validatie: Niet getest: alleen datamodel; flowversies/herstel niet gebouwd.",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Onveranderlijke flowversies met checksum; credentials alleen als vault-referentie. Niet getest: alleen datamodel; flowversies/herstel niet gebouwd.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
@@ -162,10 +162,10 @@
  {
   "id": "B14-003",
   "status": "Niet gestart",
-  "validatie": "",
+  "validatie": "Niet getest",
   "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
   "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Werkloads met prioriteitsklasse en reserveringsvensters. Toelichting validatie: Niet getest: alleen datamodel; werkloadplanning niet gebouwd.",
+  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Werkloads met prioriteitsklasse en reserveringsvensters. Niet getest: alleen datamodel; werkloadplanning niet gebouwd.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-09"
  },
