@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Rooktest van de alles-in-één image (ALLEEN ontwikkeling/CI; geen installatiemethode).
 #   deploy/allinone/smoke-test.sh [image]   (standaard home-control-hub:dev)
-# Controleert: start als root → ELK proces (ook PID 1) Uid 568, CapEff 0 en NoNewPrivs 1, zombies worden door PID 1
+# Controleert: start als root → ELK proces (ook PID 1) Uid 568, CapEff/CapPrm/CapAmb 0, NoNewPrivs 1 en — bij een start
+# als root — CapBnd 0 (contract 1.3 §2.2); de healthcheck APART met zijn controlevlag; zombies worden door PID 1
 # opgeruimd, healthcheck 'healthy', /healthz, /readyz, statuspagina in Peil ('Niet gekoppeld' met koppelformulier,
 # eerste signaal niet groen), geheimen 0600/568 en blijvend na herstart, databasegegevens blijvend na herstart én
 # harde kill, start als 568 (Custom User), duidelijke fout bij verkeerde maprechten, te grote verzoeken geweigerd
 # (413, ook chunked).
 # De containers draaien zoals het standaard TrueNAS Custom App-formulier (ix-app): ZONDER --security-opt
-# no-new-privileges en ZONDER --cap-drop, dus met de standaard Docker-capabilities (contract 1.2 §2.2, A6).
+# no-new-privileges en ZONDER --cap-drop, dus met de standaard Docker-capabilities (contract 1.3 §2.2, A8).
 set -euo pipefail
 
 IMAGE="${1:-home-control-hub:dev}"
@@ -54,9 +55,11 @@ run() { # naam, datamap, extra args — bewust geen --security-opt en geen --cap
     --health-interval 3s --health-start-period 60s "$@" "$IMAGE" >/dev/null
 }
 # Elk proces in de container (behalve deze controle zelf en Dockers kortlevende healthcheck-exec, die als eerste naar
-# 568 wisselt): Uid 568 (alle vier velden), CapEff 0000000000000000 en NoNewPrivs 1. Schrijft afwijkingen naar stdout.
+# 568 wisselt): Uid 568 (alle vier velden), CapEff, CapPrm en CapAmb 0000000000000000, NoNewPrivs 1 en — met
+# BND=1 (start als root) — CapBnd 0000000000000000. Schrijft afwijkingen naar stdout.
 PROC_CHECK='
-import os
+import os, sys
+bnd = sys.argv[1] == "1"
 me = os.getpid()
 bad, seen = [], 0
 for p in sorted(int(x) for x in os.listdir("/proc") if x.isdigit()):
@@ -71,15 +74,17 @@ for p in sorted(int(x) for x in os.listdir("/proc") if x.isdigit()):
         continue
     seen += 1
     uids = st["Uid"].split()
-    capeff = st["CapEff"].strip()
+    caps = {k: st.get(k, "?").strip() for k in ("CapEff", "CapPrm", "CapAmb", "CapBnd")}
     nnp = st.get("NoNewPrivs", "?").strip()
-    if uids != ["568"] * 4 or capeff != "0" * 16 or nnp != "1":
-        bad.append(f"{p} uid={uids} capeff={capeff} nnp={nnp} cmd={cmd[:60]}")
+    nul = "0" * 16
+    caps_ok = all(caps[k] == nul for k in ("CapEff", "CapPrm", "CapAmb")) and (not bnd or caps["CapBnd"] == nul)
+    if uids != ["568"] * 4 or not caps_ok or nnp != "1":
+        bad.append(f"{p} uid={uids} caps={caps} nnp={nnp} cmd={cmd[:60]}")
 print("\n".join(bad) if bad else f"OK {seen}")
 '
-procs_ok() { # container
+procs_ok() { # container [bnd: 1 = start als root, dan ook CapBnd 0]
   local out
-  out="$(docker exec -u 568:568 "$1" python -c "$PROC_CHECK" 2>&1)"
+  out="$(docker exec -u 568:568 "$1" python -c "$PROC_CHECK" "${2:-1}" 2>&1)"
   echo "$out" > "$WORK/procs.txt"
   case "$out" in OK*) [ "${out#OK }" -ge 4 ] ;; *) cat "$WORK/procs.txt"; return 1 ;; esac
 }
@@ -96,11 +101,18 @@ time.sleep(0.3)' >/dev/null
   sleep 5
   [ -z "$(docker exec -u 568:568 "$1" sh -c 'for s in /proc/[0-9]*/stat; do awk "\$3==\"Z\"" "$s" 2>/dev/null; done')" ]
 }
-healthcheck_drops_root() { # de healthcheck-exec (als root of 568 gestart door Docker) is daarna 568 + no-new-privs
-  [ "$(docker exec "$1" python -c 'exec(open("/usr/local/lib/hch/healthcheck.py").read().split("port = ")[0])
-import os
-st = dict(l.split(":", 1) for l in open("/proc/self/status").read().splitlines() if ":" in l)
-print(os.getuid(), st["CapEff"].strip(), st["NoNewPrivs"].strip())')" = "568 0000000000000000 1" ]
+# De healthcheck APART (§2.2): hetzelfde commando als de HEALTHCHECK, met de controlevlag, zoals Docker hem start (als
+# de gebruiker van de image). Meldt na de wissel Uid 568, CapEff/CapPrm/CapAmb 0 en NoNewPrivs 1; bij een start als
+# root ook CapBnd 0 (de healthcheck legt zelf de bounding set).
+healthcheck_drops_root() { # container [verwachte CapBnd: 0 = leeg, leeg laten = niet controleren]
+  local out
+  out="$(docker exec "$1" python /usr/local/lib/hch/healthcheck.py --controle)" || { echo "$out"; return 1; }
+  echo "$out" > "$WORK/hc.txt"
+  case "$out" in "Uid=568 CapEff=0000000000000000 CapPrm=0000000000000000 CapAmb=0000000000000000 CapBnd="*" NoNewPrivs=1") ;; *) echo "$out"; return 1 ;; esac
+  if [ "${2:-}" = 0 ]; then case "$out" in *"CapBnd=0000000000000000 "*) ;; *) echo "$out"; return 1 ;; esac; fi
+}
+healthcheck_config_is_exec_form() { # exec-vorm, geen sh -c (§2.2)
+  [ "$(docker inspect -f '{{json .Config.Healthcheck.Test}}' "$1")" = '["CMD","python","/usr/local/lib/hch/healthcheck.py"]' ]
 }
 # Bestanden in de datamap bekijken via een wegwerpcontainer (als root in de container): de datamap is van 568 met
 # 0700/0600, dus een gewone hostgebruiker (zoals de CI-runner) kan ze zelf niet lezen.
@@ -135,17 +147,22 @@ check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingera
 check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"
 check "API zonder token geeft 401 unauthorized (not_linked)" \
   "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"
-check "elk proces: Uid 568, CapEff 0, NoNewPrivs 1 (ook PID 1)" "procs_ok $NAME"
+check "elk proces: Uid 568, CapEff/CapPrm/CapAmb 0, CapBnd 0, NoNewPrivs 1 (ook PID 1)" "procs_ok $NAME 1"
 check "PID 1 is de bewaker en draait als 568" "pid1_is_supervisor_568 $NAME"
 check "verweesde zombies worden door PID 1 opgeruimd" "zombies_reaped $NAME"
-check "healthcheck-exec wisselt naar 568 zonder capabilities" "healthcheck_drops_root $NAME"
+check "healthcheck apart (controlevlag): 568, CapEff/CapPrm/CapAmb 0, CapBnd 0, NoNewPrivs 1" "healthcheck_drops_root $NAME 0"
+check "healthcheck in exec-vorm (geen shell)" "healthcheck_config_is_exec_form $NAME"
 check "postgres, api en worker draaien" \
   "docker top $NAME -eo pid,user,args > $WORK/ps.txt && [ \"\$(grep -cE 'postgres -D|integrations api|integrations worker' $WORK/ps.txt)\" -ge 3 ]"
 check "geen netwerkpoort voor PostgreSQL (alleen unix-socket)" \
   "! docker exec $NAME python -c 'import socket;s=socket.socket();s.settimeout(1);s.connect((\"127.0.0.1\",5432))' 2>/dev/null"
 check "geheimen 0600 en eigenaar 568" \
   "[ \"\$(in_work 'stat -c \"%a %u\" /w/root/secrets/vault.key /w/root/secrets/identity.ed25519' | sort -u)\" = '600 568' ]"
-check "geen lokale ontkoppelcode meer (contract 1.2 §3.7)" "! log_has $NAME 'ontkoppelcode'"
+check "geen lokale ontkoppelcode meer (contract 1.3 §3.7)" "! log_has $NAME 'ontkoppelcode'"
+check "statuspagina: Referrer-Policy same-origin (contract 1.3 §3.7)" \
+  "curl -fsS -D $WORK/kop.txt -o /dev/null http://127.0.0.1:$PORT/ && grep -qi '^referrer-policy: same-origin' $WORK/kop.txt"
+check "koppel-POST met Origin: null geeft 403 herkomst_onjuist (niets naar de Hub)" \
+  "[ \"\$(curl -s -o $WORK/post.txt -w '%{http_code}' -H 'Origin: null' --data 'csrf=x' http://127.0.0.1:$PORT/koppelen)\" = 403 ] && grep -q herkomst_onjuist $WORK/post.txt"
 check "no-new-privileges staat in de app-log" "log_has $NAME 'no-new-privileges aan'"
 check "geen setuid/setgid-bestanden in de image" \
   "[ -z \"\$(docker exec $NAME sh -c 'find / -xdev -perm /6000 -type f 2>/dev/null')\" ]"
@@ -176,8 +193,8 @@ echo "== 4. start direct als 568 op een 568-map"
 docker run --rm -v "$WORK:/w" --entrypoint sh "$IMAGE" -c 'chown 568:568 /w/u568' >/dev/null
 run "$NAME-568" "$WORK/u568" --user 568:568
 check "als 568 gestart en healthy" "wait_healthy $NAME-568"
-check "als 568: elk proces Uid 568, CapEff 0, NoNewPrivs 1" "procs_ok $NAME-568"
-check "als 568: healthcheck-exec zet ook no-new-privileges" "healthcheck_drops_root $NAME-568"
+check "als 568: elk proces Uid 568, CapEff/CapPrm/CapAmb 0, NoNewPrivs 1 (CapBnd mag de standaardset zijn)" "procs_ok $NAME-568 0"
+check "als 568: healthcheck apart zet ook no-new-privileges" "healthcheck_drops_root $NAME-568"
 docker rm -f "$NAME-568" >/dev/null
 
 echo "== 5. verkeerde rechten geven een duidelijke Nederlandse fout"

@@ -83,7 +83,12 @@ def test_dockerfile_pins_base_images_by_digest_and_no_latest() -> None:
     assert "PR_SET_NO_NEW_PRIVS = 38" in sup and "PR_CAPBSET_DROP" in sup and "def reap_orphans" in sup
     assert "os.setgroups([])" in sup
     hc = (DEPLOY / "allinone/healthcheck.py").read_text(encoding="utf-8")
-    assert "os.setuid(UID)" in hc and "prctl(38, 1" in hc
+    assert "os.setuid(UID)" in hc and "PR_SET_NO_NEW_PRIVS = 38" in hc and "PR_CAPBSET_DROP = 24" in hc
+    # contract 1.3 §2.2 (C1.3-HCH-12): exec-vorm en een controlevlag voor de rooktest
+    assert 'CMD ["python", "/usr/local/lib/hch/healthcheck.py"]' in text and "--controle" in hc
+    # de wissel is de eerste handeling: vóór /readyz en vóór de controle
+    main = hc[hc.index("def main()") :]
+    assert main.index("wissel()") < main.index("--controle") < main.index("/readyz")
 
 
 def test_smoke_test_runs_like_the_custom_app_form() -> None:
@@ -95,6 +100,9 @@ def test_smoke_test_runs_like_the_custom_app_form() -> None:
     assert "docker run" in code
     assert "--security-opt" not in code and "--cap-drop" not in code and "--cap-add" not in code
     for needle in ('["568"] * 4', '"0" * 16', '"NoNewPrivs"', "pid1_is_supervisor_568", "zombies_reaped"):
+        assert needle in text, needle
+    # contract 1.3 §2.2: ook CapPrm/CapAmb 0, CapBnd 0 bij een start als root, en de healthcheck apart
+    for needle in ('"CapPrm"', '"CapAmb"', '"CapBnd"', "healthcheck.py --controle", "procs_ok $NAME 1"):
         assert needle in text, needle
 
 
