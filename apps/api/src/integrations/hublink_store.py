@@ -1,4 +1,4 @@
-"""Koppelstatus met de Hub in ``/appdata/secrets/hub-link.json`` (contract 1.2 §3.5).
+"""Koppelstatus met de Hub in ``/appdata/secrets/hub-link.json`` (contract 1.3 §3.5).
 
 - Eén bestand, 0600, in ``/appdata/secrets`` (0700); eigenaar is de procesgebruiker (568 in de image).
 - Schrijven: nieuw bestand in dezelfde map (``O_CREAT|O_EXCL``, 0600) → ``fsync`` → ``rename`` → ``fsync`` van de map,
@@ -8,7 +8,10 @@
   intrekking of rotatie door het ene proces direct voor het andere.
 - **Niet** in de database: een database-herstel brengt geen oude koppeling, oude pins of een ingetrokken token terug,
   en een database-export (B12) bevat geen credentials.
-- Onleesbaar bestand → fail-closed: niets wordt vertrouwd (``not_linked``) en de statuspagina biedt géén
+- ``schema_version``: deze dienst schrijft ``"1.3"``; een lezer accepteert elke ``1.x`` en negeert onbekende velden.
+- Onleesbaar (geen geldige JSON, geen object, een andere major van ``schema_version``, ontbrekende verplichte velden
+  ``schema_version``/``state``, een andere eigenaar dan dit proces of rechten ruimer dan 0600) → fail-closed: niets
+  wordt vertrouwd (``not_linked``) en de statuspagina biedt géén
   koppelformulier (onbekend of de dienst al eens gekoppeld was, dus geldt hij als "al eens gekoppeld"). Herstel gaat
   via een nieuw enrollment-token in het formulier van de Custom App (§3.8).
 - Moet er over een onleesbaar bestand heen geschreven worden (bv. ``pending`` of ``last_error`` van een env-token),
@@ -25,6 +28,7 @@ import fcntl
 import json
 import logging
 import os
+import stat
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -123,8 +127,14 @@ class LastError(_Model):
     at: str
 
 
+#: deze dienst volgt contract 1.3 en schrijft die versie (§3.5); lezen: elke 1.x
+SCHEMA_VERSION = "1.3"
+#: zonder deze velden is het bestand onleesbaar (§3.5 "ontbrekende verplichte velden")
+REQUIRED_FIELDS = ("schema_version", "state")
+
+
 class LinkState(_Model):
-    schema_version: str = "1.2"
+    schema_version: str = SCHEMA_VERSION
     state: State = "nooit_gekoppeld"
     app_id: str = APP_ID
     hub_url: str | None = None
@@ -208,7 +218,7 @@ class HubLinkStore:
         self.dir = secrets_dir
         self.path = secrets_dir / LINK_FILE
         self.lock_path = secrets_dir / LOCK_FILE
-        self._cache: tuple[tuple[int, int, int], LinkState] | None = None
+        self._cache: tuple[tuple[int, int, int, int, int], LinkState] | None = None
         self._mutex = threading.Lock()
 
     # -------------------------------------------------------------- lezen
@@ -222,14 +232,22 @@ class HubLinkStore:
             broken = LinkState()
             broken._corrupt = True
             return broken
-        key = (st.st_ino, st.st_mtime_ns, st.st_size)
+        key = (st.st_ino, st.st_mtime_ns, st.st_size, st.st_uid, st.st_mode)
         with self._mutex:
             if self._cache is not None and self._cache[0] == key:
                 return _clone(self._cache[1])
         try:
+            if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077:
+                raise PermissionError("verkeerde eigenaar of rechten ruimer dan 0600")
             data = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("geen object")
+            missing = [f for f in REQUIRED_FIELDS if f not in data]
+            if missing:
+                raise ValueError(f"verplichte velden ontbreken: {', '.join(missing)}")
+            version = data["schema_version"]
+            if not isinstance(version, str) or version.split(".", 1)[0] != "1":
+                raise ValueError("andere major van schema_version")
             state = LinkState.model_validate(data)
         except (OSError, ValueError, ValidationError) as exc:
             log.error("hub-link.json is onleesbaar (%s); de dienst vertrouwt niets van de Hub", type(exc).__name__)
@@ -260,6 +278,7 @@ class HubLinkStore:
             os.close(fd)
 
     def _write(self, state: LinkState) -> None:
+        state.schema_version = SCHEMA_VERSION  # een dienst schrijft de versie van het contract dat hij volgt (§3.5)
         data = state.model_dump(mode="json")
         payload = (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
         tmp = self.dir / f".hub-link.{uuid.uuid4().hex}.tmp"

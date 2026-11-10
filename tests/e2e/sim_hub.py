@@ -1,4 +1,4 @@
-"""Simulator van de Hub volgens platformcontract 1.2 (§3.3–§3.8, §4.2–§4.5, §7). ALLEEN voor tests.
+"""Simulator van de Hub volgens platformcontract 1.3 (§3.3–§3.8, §4.2–§4.5, §7). ALLEEN voor tests.
 
 Eén implementatie (``HubSim``) voor twee vormen:
 - de integratietests in ``apps/api/tests`` gebruiken hem in-proces via ``httpx.MockTransport``;
@@ -10,11 +10,14 @@ Gedrag volgt de Hub (``ai-server-manager`` ``apps/api/src/hub/routers/services.p
   validation_error``; onbekend/verlopen/al gebruikt/``app_id`` past niet → ``401 invalid_enrollment``; na 10 mislukte
   pogingen (401) binnen 15 min van één bron-IP → ``429 rate_limited`` + ``Retry-After``; toegestane herhaling (zelfde
   geheim, ``app_id`` en sleutel, binnen 60 min, uitgegeven token nooit gebruikt) → 200 met ``enrollment_replayed``.
+  Antwoord volgens 1.3: ``schema_version`` ``"1.3"`` en ``rotation_sequence`` (de huidige reeks van de
+  sleutelrotatie); ``legacy_12 = True`` geeft het antwoord van een Hub 1.2 (``"1.2"``, zonder ``rotation_sequence``).
 - ``GET /api/v1/services/self`` en ``POST /api/v1/services/self/rotate`` (Bearer service-token), met
   ``Hub-Token-Rotation: required`` zolang een rotatie is aangevraagd of een ouder token wordt gebruikt terwijl het
   nieuwste nooit gebruikt is.
 - ``GET /api/v1/auth/jwks`` en ``GET /api/v1/auth/key-rotations?after=n`` (ondertekende statements, §4.5).
-- ``POST /api/v1/events/inbox`` (Bearer service-token) met dezelfde envelope-regels als de Hub (§7).
+- ``POST /api/v1/events/inbox`` (Bearer service-token) met de envelope-regels van §7 (1.3): ook het eigen domein van
+  de bron, de vaste ``service.*``-lijst, ``app`` alleen als ``app.health.changed`` en ``payload.ernst`` (vijf woorden).
 - Gebruikers-JWT's (``token_use: user``) en dienst-JWT's (``token_use: hub_service``) met ``jti``, ``nbf``, ≤ 120 s.
 """
 
@@ -88,8 +91,23 @@ def keyset_fingerprint(jwt_x: list[str], policy_x: list[str]) -> str:
     return "-".join(code[i : i + 4] for i in range(0, 16, 4))
 
 
+#: contract 1.3 §7: domeinen per eigenaar (home-control-hub), gedeeld ``app`` en ``service``
+EIGEN_DOMEINEN = {"sso", "energy", "network", "automation", "flow"}
+SERVICE_EVENTS = {
+    "service.hub_link.linked",
+    "service.hub_link.unlinked",
+    "service.hub_link.revoked",
+    "service.token.rotated",
+    "service.key_rotation.applied",
+    "service.key_rotation.rejected",
+}
+ERNST = {"kritiek", "hoog", "middel", "laag", "info"}
+
+
 def envelope_problems(ev: Any) -> list[str]:
-    """Dezelfde envelope-regels als de inbox van de echte Hub (``apps/api/src/hub/events/envelope.py``, §7)."""
+    """Dezelfde envelope-regels als de inbox van de echte Hub (``apps/api/src/hub/events/envelope.py``, §7), plus de
+    1.3-regels voor deze bron: eigen domein, vaste ``service.*``-namen met ``entity`` = de dienst zelf, ``app`` alleen
+    ``app.health.changed``, ``payload.ernst`` uit de vijf woorden en ``source_event_id`` 1–200 tekens."""
     if not isinstance(ev, dict):
         return ["geen object"]
     problems = []
@@ -112,6 +130,22 @@ def envelope_problems(ev: Any) -> list[str]:
         problems.append("timestamp_utc")
     if len(json.dumps(ev.get("payload") or {}, default=str).encode()) > 16 * 1024:
         problems.append("payload te groot")
+    domein = str(et).split(".", 1)[0] if isinstance(et, str) else ""
+    if domein == "service":
+        if et not in SERVICE_EVENTS:
+            problems.append(f"service-event buiten de vaste lijst: {et!r}")
+        if ent.get("type") != "service" or ent.get("id") != ev.get("source_app"):
+            problems.append("service-event: entity moet {type: service, id: <app_id>} zijn")
+    elif domein == "app":
+        if et != "app.health.changed":
+            problems.append(f"domein app alleen app.health.changed: {et!r}")
+    elif ev.get("source_app") == "home-control-hub" and domein not in EIGEN_DOMEINEN:
+        problems.append(f"domein {domein!r} hoort niet bij home-control-hub")
+    if not 1 <= len(str(ev.get("source_event_id") or "")) <= 200:
+        problems.append("source_event_id")
+    payload = ev.get("payload") or {}
+    if isinstance(payload, dict) and "ernst" in payload and payload["ernst"] not in ERNST:
+        problems.append(f"payload.ernst {payload['ernst']!r}")
     return problems
 
 
@@ -190,6 +224,7 @@ class HubSim:
         self.inbox_status: int | None = None  # forceer een status op de inbox (bv. 503)
         self.window_s = 15 * 60
         self.max_failures = 10
+        self.legacy_12 = False  # True: antwoord van een Hub 1.2 (geen rotation_sequence)
 
     # ------------------------------------------------------------------ sleutels en JWT's
     def jwks(self) -> dict[str, Any]:
@@ -417,25 +452,24 @@ class HubSim:
         token = "svc_" + secrets.token_urlsafe(32)
         self.tokens[sha256_hex(token)] = Token(sha256_hex(token), svc["service_id"], hashed, now)
         self.failures.pop(ip, None)
-        return Reply(
-            200,
-            {
-                "schema_version": "1.2",
-                "service_id": svc["service_id"],
-                "app_id": app_id,
-                "service_token": token,
-                "token_type": "Bearer",
-                "hub_issuer": "hub",
-                "jwks": self.jwks(),
-                "policy_public_key": self.policy_jwk(),
-                "keyset_fingerprint": self.fingerprint(),
-                "jwks_url": "/api/v1/auth/jwks",
-                "events_inbox_url": "/api/v1/events/inbox",
-                "key_rotation_url": "/api/v1/auth/key-rotations",
-                "enrollment_replayed": replay,
-            },
-            {"Cache-Control": "no-store"},
-        )
+        antwoord: dict[str, Any] = {
+            "schema_version": "1.2" if self.legacy_12 else "1.3",
+            "service_id": svc["service_id"],
+        "app_id": app_id,
+        "service_token": token,
+        "token_type": "Bearer",
+        "hub_issuer": "hub",
+        "jwks": self.jwks(),
+        "policy_public_key": self.policy_jwk(),
+        "keyset_fingerprint": self.fingerprint(),
+        "jwks_url": "/api/v1/auth/jwks",
+        "events_inbox_url": "/api/v1/events/inbox",
+            "key_rotation_url": "/api/v1/auth/key-rotations",
+            "enrollment_replayed": replay,
+        }
+        if not self.legacy_12:  # nieuw in 1.3 (§3.3): de huidige reeks van de sleutelrotatie
+            antwoord["rotation_sequence"] = max((i["sequence"] for i in self.rotations), default=0)
+        return Reply(200, antwoord, {"Cache-Control": "no-store"})
 
     @staticmethod
     def _validate(body: Any) -> str | None:

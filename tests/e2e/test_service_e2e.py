@@ -48,7 +48,7 @@ def test_01_ready_and_enrolled_with_one_time_token(stack: Stack) -> None:
     assert reqs[0]["app_id"] == "home-control-hub" and set(reqs[0]["public_key_jwk"]) == {"kty", "crv", "x", "kid"}
     assert ["GET", "/api/v1/services/self"] in state["calls"]
     link = stack.link_file()
-    assert link["schema_version"] == "1.2" and link["via"] == "token" and link["pending"] is None
+    assert link["schema_version"] == "1.3" and link["via"] == "token" and link["pending"] is None  # §3.5 (1.3)
     assert link["pins"]["keyset_fingerprint"] == state["fingerprint"] and link["service_id"] == state["service_id"]
     page = httpx.get(f"{stack.hch}/").text
     assert stack.enroll_tokens[0] not in page and link["service_token"] not in page
