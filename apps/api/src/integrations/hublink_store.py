@@ -283,6 +283,10 @@ class HubLinkStore:
         payload = (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
         tmp = self.dir / f".hub-link.{uuid.uuid4().hex}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # geërfde ACL's van de dataset (bv. NFSv4 op TrueNAS) kunnen de modus ruimer maken dan gevraagd; een ruimer
+        # bestand leest deze dienst zelf als onleesbaar (§3.5), dus de modus expliciet op 0600 zetten waar dat kan
+        with contextlib.suppress(OSError):
+            os.fchmod(fd, 0o600)
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(payload)
@@ -325,12 +329,15 @@ class HubLinkStore:
         aside = self.dir / f"{LINK_FILE}{UNREADABLE_SUFFIX}{utcnow().strftime('%Y%m%dT%H%M%S%fZ')}"
         try:
             os.rename(self.path, aside)
-            os.chmod(aside, 0o600)
         except OSError as exc:
             log.error(
                 "onleesbaar hub-link.json kon niet apart worden gezet (%s); het wordt vervangen", type(exc).__name__
             )
             return
+        # een bestand van een andere eigenaar (ook een reden voor "onleesbaar") kan dit proces niet aanpassen; het staat
+        # dan nog steeds in de map secrets (0700) en is bewaard
+        with contextlib.suppress(OSError):
+            os.chmod(aside, 0o600)
         log.error(
             "onleesbaar hub-link.json bewaard als %s; de koppelstatus blijft onbekend tot opnieuw koppelen", aside.name
         )

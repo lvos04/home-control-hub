@@ -287,6 +287,29 @@ def test_unreadable_file_without_write_is_untouched(tmp_path: Path) -> None:
     assert pub["state"] == "nooit_gekoppeld" and pub["last_error"]["code"] == "koppelstatus_onleesbaar"
 
 
+def test_write_forces_0600_when_the_dataset_widens_the_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Geërfde ACL's van een dataset (bv. NFSv4 op TrueNAS) kunnen een nieuw bestand ruimer maken dan de gevraagde 0600.
+    Zo'n bestand leest de dienst zelf als onleesbaar (§3.5, fail-closed); daarom zet de schrijver de modus expliciet op
+    0600. Hier nagebootst door elk nieuw bestand direct 0660 te geven (echte ZFS-ACL's: NIET GEVALIDEERD)."""
+    import integrations.hublink_store as hs
+
+    echt_open = os.open
+
+    def ruim_open(path: Any, flags: int, mode: int = 0o777, *args: Any, **kwargs: Any) -> int:
+        fd = echt_open(path, flags, mode, *args, **kwargs)
+        if flags & os.O_CREAT and str(path).endswith(".tmp"):
+            os.fchmod(fd, 0o660)  # zoals een geërfde ACE die groep-rechten geeft
+        return fd
+
+    monkeypatch.setattr(hs.os, "open", ruim_open)
+    store = HubLinkStore(tmp_path)
+    store.update(
+        lambda st: st.model_copy(update={"last_error": LastError(code="rate_limited", at="2026-11-10T09:00:00Z")})
+    )
+    assert stat.S_IMODE((tmp_path / "hub-link.json").stat().st_mode) == 0o600
+    assert not HubLinkStore(tmp_path).read().corrupt
+
+
 # ------------------------------------------------------------------ sleutelrotatie (§4.5)
 def _pins(sim: Any) -> Any:
     jwks = [validate_hub_jwk(k) for k in sim.jwks()["keys"]]
