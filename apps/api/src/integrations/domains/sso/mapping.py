@@ -5,6 +5,9 @@ Regels (fail-closed):
 - Groep → rol alleen voor apps die OIDC (gaan) ondersteunen en alleen met een rol uit de catalogus van die app.
 - Vertrouwde-header-SSO bestaat niet in dit model (nooit toegestaan).
 - Rollen/privileges wijzigen is een beheerdershandeling (rol ``admin``); de Hub (service) en AI kunnen dat niet.
+- **Alleen advies** (contract 1.3 §4.1, C1.3-HCH-11): de koppeling groep → rol stelt een beheerder in de **Hub** in
+  (eigen tabel, audit). Deze dienst toont zijn koppelingen als advies (en gebruikt ze voor de bindingen in het
+  OIDC-voorstel en de rechtenkaart); ze geven nergens zelf toegang. Elke koppeling zegt dat in ``advies``.
 """
 
 from __future__ import annotations
@@ -52,12 +55,21 @@ def setting_dict(row: SsoAppSetting | None) -> dict[str, Any]:
     }
 
 
+#: contract 1.3 §4.1: wie de koppeling groep → rol werkelijk vastlegt
+ADVIES_NL = (
+    "Advies: de koppeling groep → rol stelt een beheerder in de Hub in (eigen tabel, audit); deze koppeling geeft zelf "
+    "geen toegang."
+)
+
+
 def mapping_dict(m: SsoGroupRoleMapping) -> dict[str, Any]:
     return {
         "id": str(m.id),
         "app_id": m.app_id,
         "authentik_group": m.authentik_group,
         "role": m.role,
+        "advies": True,
+        "advies_nl": ADVIES_NL,
         "version": m.version,
         "etag": etag(m.version),
         "created_at": iso(m.created_at),

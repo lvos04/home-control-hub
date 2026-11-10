@@ -7,16 +7,22 @@
 - Het Hub-adres volgt dezelfde regels voor ``HUB_URL`` en voor de statuspagina: ``http(s)://<host>[:<poort>]`` zonder
   pad, query, fragment of inloggegevens; geen loopback, geen link-local (``169.254.0.0/16``, ``fe80::/10``) en geen
   ``0.0.0.0``/``::`` (loopback alleen met de ontwikkelvlag ``HCH_ALLOW_LOOPBACK_HUB``).
+- **Ook na DNS-resolutie, bij elke verbinding** (contract 1.3 §3.2): bij een hostnaam lost de dienst de naam zelf op,
+  controleert **elk** opgelost adres op dezelfde verboden bereiken en verbindt dan met dat adres (``Host``-header en
+  TLS-SNI blijven de naam). Zo kan een naam die later (DNS-rebinding) naar loopback of link-local wijst, nooit een
+  verbinding naar zo'n adres opleveren.
 """
 
 from __future__ import annotations
 
 import contextlib
 import ipaddress
+import logging
 import re
-from collections.abc import Iterator
+import socket
+from collections.abc import Callable, Iterator
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -27,8 +33,45 @@ from .config import Settings
 _NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*")
 
 
+log = logging.getLogger("integrations.hubclient")
+
+#: (host, poort) → opgeloste IP-adressen (tekst); te vervangen in tests
+Resolver = Callable[[str, int], list[str]]
+
+
 class HubUrlError(ValueError):
     """Ongeldig adres; de boodschap is Nederlands en mag aan de gebruiker getoond worden."""
+
+
+class ForbiddenAddressError(httpx.ConnectError):
+    """De hostnaam van de Hub wijst (nu) naar een verboden adres (§3.2): geen verbinding, telt als storing."""
+
+
+def resolve_host(host: str, port: int) -> list[str]:
+    """Alle adressen van ``host`` (IPv4 en IPv6), in de volgorde van de resolver, zonder dubbele."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise httpx.ConnectError(f"naam niet op te lossen ({type(exc).__name__})") from exc
+    out: list[str] = []
+    for info in infos:
+        addr = str(info[4][0]).split("%", 1)[0]
+        if addr not in out:
+            out.append(addr)
+    return out
+
+
+def forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_loopback: bool) -> str | None:
+    """De reden waarom de dienst niet met dit adres mag verbinden (§3.2), of ``None``."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_unspecified:
+        return "0.0.0.0/::"
+    if ip.is_link_local:
+        return "link-local"
+    if ip.is_loopback and not allow_loopback:
+        return "loopback"
+    return None
 
 
 def validate_hub_url(
@@ -41,7 +84,7 @@ def validate_hub_url(
     url = (url or "").strip()
     if not url:
         raise HubUrlError(f"{label} ontbreekt.")
-    if len(url) > 500 or any(ch.isspace() for ch in url):
+    if len(url) > 512 or any(ch.isspace() for ch in url):  # §3.7: Hub-adres ≤ 512 tekens
         raise HubUrlError(f"{label} is te lang of bevat spaties.")
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
@@ -93,11 +136,20 @@ def validate_hub_url(
 
 
 class HubClient:
-    """Maakt HTTP-clients voor Hub-aanroepen (één poging per aanroep; zie de moduledocstring)."""
+    """Maakt HTTP-clients voor Hub-aanroepen (één poging per aanroep; zie de moduledocstring).
 
-    def __init__(self, settings: Settings, transport: httpx.BaseTransport | None = None) -> None:
+    ``resolver``: standaard de systeemresolver, maar alleen zonder eigen ``transport``; tests met een nep-transport
+    (namen als ``hub.test``) geven een eigen resolver mee om de DNS-regel te toetsen."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        transport: httpx.BaseTransport | None = None,
+        resolver: Resolver | None = None,
+    ) -> None:
         self.settings = settings
         self.transport = transport
+        self.resolver: Resolver | None = resolver if resolver is not None else (None if transport else resolve_host)
 
     @contextlib.contextmanager
     def client(self) -> Iterator[httpx.Client]:
@@ -127,5 +179,33 @@ class HubClient:
         headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
     ) -> httpx.Response:
+        url, hdrs, extensions = self._pin_address(base_url, path, dict(headers or {}))
         with self.client() as c:
-            return c.request(method, f"{base_url}{path}", json=json, headers=headers, params=params)
+            return c.request(method, url, json=json, headers=hdrs, params=params, extensions=extensions)
+
+    def _pin_address(self, base_url: str, path: str, headers: dict[str, str]) -> tuple[str, dict[str, str], Any]:
+        """§3.2: bij een hostnaam het opgeloste adres controleren en daarmee verbinden (per verbinding opnieuw)."""
+        parts = urlsplit(base_url)
+        host = (parts.hostname or "").rstrip(".")
+        url = f"{base_url}{path}"
+        try:
+            ipaddress.ip_address(host)
+            return url, headers, {}  # al een IP-adres: gecontroleerd door validate_hub_url
+        except ValueError:
+            pass
+        if self.resolver is None or not host:
+            return url, headers, {}
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        addrs = self.resolver(host, port)
+        if not addrs:
+            raise httpx.ConnectError("naam niet op te lossen")
+        for addr in addrs:
+            reden = forbidden_ip(ipaddress.ip_address(addr), self.settings.allow_loopback_hub)
+            if reden is not None:
+                log.warning("Hub-adres %s wijst naar een verboden adres (%s); geen verbinding (§3.2)", host, reden)
+                raise ForbiddenAddressError(f"{host} wijst naar een verboden adres ({reden})")
+        ip = addrs[0]
+        netloc = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+        url = urlunsplit((parts.scheme, netloc, parts.path.rstrip("/") + path, "", ""))
+        headers.setdefault("Host", parts.netloc)
+        return url, headers, ({"sni_hostname": host} if parts.scheme == "https" else {})
