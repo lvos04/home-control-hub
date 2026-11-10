@@ -455,7 +455,7 @@ Hub-simulator (`tests/e2e/sim_hub.py`, nu volgens 1.3) en de nep-Authentik; geen
 | Commando | Uitkomst |
 |---|---|
 | `make lint` (ruff check + format, mypy) en ruff over `tests/e2e tests/interop tests/ui deploy/allinone tools` | geen bevindingen; mypy: 63 bronbestanden ok |
-| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH nice -n 10 pytest -q -p no:cacheprovider` | **718 geslaagd** (unit + integratie) |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH nice -n 10 pytest -q -p no:cacheprovider` | **720 geslaagd** (unit + integratie) |
 | `pytest -q tests/e2e -p no:cacheprovider` (API + worker als processen, Hub-simulator 1.3 met de envelope-regels van §7) | **14 geslaagd**, 0 geweigerde events |
 | `python -m integrations migrate` → `--down base` → `migrate` (nieuwe migratie 0004) | op/neer/op zonder fouten |
 | `python3 tools/contract_kopie.py controleer` en `vergelijk --bron ../ai-server-manager` en `vergelijk --online` | in orde (kopieën = ai-server-manager@0a7143b) |
