@@ -159,8 +159,11 @@ const METING = () => {
     klasse: [...p.classList].find((c) => c.startsWith('pil-')) || '',
     icoon: p.querySelector('svg use')?.getAttribute('href') || '',
     woord: (p.textContent || '').replace(/\s+/g, ' ').trim(),
-    rij: (p.closest('li')?.querySelector('.naam')?.textContent || p.closest('section')?.querySelector('h2')?.textContent || '').trim(),
-    reden: (p.closest('li')?.querySelector('.reden')?.textContent || '').trim(),
+    // Peil 1.1.1: de naam eindigt op een verborgen ':' (schermlezerscheiding) en de reden staat in .sub > span
+    rij: (p.closest('li')?.querySelector('.naam')?.textContent || p.closest('section')?.querySelector('h2')?.textContent || '')
+      .trim()
+      .replace(/:$/, ''),
+    reden: (p.closest('li')?.querySelector('.sub > span')?.textContent || '').trim(),
   }));
   const gereedDt = [...document.querySelectorAll('.feiten dt')].find((dt) => dt.textContent === 'Gereed');
   const se = document.scrollingElement;

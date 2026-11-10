@@ -105,6 +105,7 @@ class Dienst:
         pad = self.data / "secrets" / "hub-link.json"
         tmp = pad.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.chmod(tmp, 0o600)  # contract 1.3 §3.5: ruimere rechten = onleesbaar (fail-closed)
         os.replace(tmp, pad)
 
     def pagina(self) -> str:
