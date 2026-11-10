@@ -8,7 +8,8 @@ statuspagina; alle schermen staan in de Hub (`ai-server-manager`).
 (`docs/platform-v2/PLATFORM_CONTRACTEN.md`, byte-gelijke kopie met drifttest; conformiteit C1.3-HCH-01…14 in ADR-0014:
 koppelformulier met herkomst- en Host-beperking, eerst aanmelden, connector-health met vaste checks, events met
 domeinen/werkwoorden/ernst en `issuer`/`sub` in `sso.access.*`, `100.64.0.0/10` alleen met toestemming; koppelen met
-de Hub volgens §3.3–§3.8, alleen Hub-JWT's tegen gepinde sleutels, image zonder enig rootproces; ADR-0010/0013/0014)
+de Hub volgens §3.3–§3.8, alleen Hub-JWT's tegen gepinde sleutels, image zonder enig rootproces; ADR-0010/0013/0014;
+onafhankelijke review van contract 1.3 in ADR-0015)
 + B13-001 (accountrecovery en admin-toegang; de noodlogin zelf zit in de Hub) en
 B13-002…005 (Authentik via de officiële API: versiedetectie, OIDC-client voor de Hub als R2-voorstel, SSO-dekking per
 app met bron, audit/afwijkingen, configuratie-export, pre-upgrade-gate en herstelcheck) gebouwd en met simulators

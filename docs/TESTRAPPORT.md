@@ -506,3 +506,55 @@ installatie als standaard Custom App op een echte TrueNAS.
 | 42782260548 | e415866 (alle codewijzigingen tot dan) | python en image geslaagd; **statuspagina-ui mislukt**: de ontwerpreview schreef `hub-link.json` met 0644 (sinds 1.3 onleesbaar) en las de reden uit de 1.1.0-opbouw; hersteld in edc8722 |
 | 42783332605 | edc8722 | **geslaagd**: python, statuspagina-ui (Playwright, ontwerpreview 320–1440 + browsertest herkomst), image (bouwen + rooktest) |
 | 42784902419 | 33148a8 | **geslaagd**: python, statuspagina-ui, image |
+
+## Onafhankelijke review contract 1.3 — QA (2026-11-10, Ubuntu 26.04-bouwmachine)
+
+Onafhankelijke controle na de bouwronde (ADR-0015). Alles **Sim-getest** of lokaal tegen de echte Hub-code; niets op
+een echte NAS, met een echte Authentik of met echte accounts.
+
+### Nulmeting (HEAD `40fb53f`, vóór wijzigingen)
+
+| Commando | Uitkomst |
+|---|---|
+| `ruff check`/`ruff format --check` (apps/api, tests, deploy, tools) en `mypy` | in orde; mypy 63 bestanden zonder fouten |
+| `cd apps/api && PATH=/usr/lib/postgresql/16/bin:$PATH pytest -q -p no:cacheprovider` | 720 passed (lokaal, met de checkouts naast deze repo) |
+| GitHub-run 42785941983 (40fb53f), stap unit en integratie | **708 passed, 12 skipped**: manifestvalidator en Peil-referentierenderer draaiden niet in CI |
+| `pytest -q tests/e2e -p no:cacheprovider` | 14 passed |
+| `python -m integrations migrate` → `--down base` → `migrate` (eigen database) | op/neer/op zonder fouten, revisie 0004 |
+| OpenAPI-export + `git diff --exit-code docs/openapi/` | geen drift |
+| `tools/contract_kopie.py controleer`/`vergelijk --bron`/`--online`; `tools/peil_kopie.py` idem | in orde (byte-gelijk aan ai-server-manager `0a7143b`; bron ongewijzigd tot `5e21775`) |
+| `actionlint .github/workflows/*.yml`; `pip-audit -r apps/api/requirements.lock` | in orde; geen bekende kwetsbaarheden |
+| `genereer_toestanden.py` + `npx playwright test` | 24 passed |
+| `ontwerpreview.py` (draaiende dienst + browsertest herkomst) | 168 metingen, 0 overtredingen; herkomst negatief 5/0 fouten, positief 1/0 fouten |
+| image bouwen (flock, nice) + `smoke-test.sh` | 34 geslaagd, 0 mislukt |
+| `jl-manifest validate --strict` (appstore-en-fork `cca4403`, eigen venv) | GELDIG, 0 fouten (alleen het geaccepteerde `digest_pending_release`) |
+| interop tegen de echte Hub (ai-server-manager `5e21775`, eigen venv) | 1 passed |
+
+### Gevonden en gerepareerd (ADR-0015)
+
+1. CI sloeg 12 tests stil over (validator en Peil-referentie). Nu verplicht op vaste commits.
+2. Connector-check `bronnen`: bij een verouderde meting kreeg de check `observed_at` = nu. Een verse `down` stond
+   onder de reden `meting_verouderd`. Nu: de tijd van de meting en de juiste oorzaak.
+3. `hub-link.json` krijgt expliciet 0600 (`fchmod`), tegen geërfde ACL's die het bestand onleesbaar zouden maken.
+4. Juiste logregel bij het apart zetten van een onleesbaar bestand.
+5. Manifestnotitie noemt migratie 0004.
+6. Interoptest uitgebreid met de 1.3-punten van de echte Hub.
+
+### Eindstand
+
+| Commando | Uitkomst |
+|---|---|
+| lint + `mypy` | in orde |
+| `pytest -q` met `HCH_PEIL_REFERENTIE(_VERPLICHT)` en `HCH_JL_MANIFEST`/`HCH_MANIFEST_VALIDATOR_VERPLICHT` (zoals CI) | **723 passed, 0 skipped** |
+| dezelfde tests met een ontbrekende referentie/validator en de verplicht-vlag | 11 failed (zoals bedoeld: nooit stil overgeslagen) |
+| nieuwe test zonder de `fchmod` | faalt (zoals bedoeld); met de wijziging groen |
+| `pytest -q tests/e2e` | 14 passed |
+| interop tegen de echte Hub (`HCH_REAL_HUB_PYTHON=…`, alleen lokaal) | 1 passed, met `schema_version` 1.3, `rotation_sequence` en `service.hub_link.linked` afgeleverd in de inbox |
+| image opnieuw bouwen + `smoke-test.sh` | 34 geslaagd, 0 mislukt |
+| GitHub-run 42788378621 (eddcf17) | **geslaagd**: python (720 passed, 1 skipped: de lokale Peil-vergelijking, CI vergelijkt online), statuspagina-ui, image |
+
+### Nog steeds NIET GEVALIDEERD
+
+Een echte NAS (Custom App-formulier, Host-header en bron-IP achter de portpublicatie, ZFS-ACL's van de dataset op
+`hub-link.json`), een echte Authentik (`issuer`/`sub` in `sso.access.*`), een echte browser op het LAN, een echte
+schermlezer en telefoon.

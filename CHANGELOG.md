@@ -1,5 +1,23 @@
 # Wijzigingen
 
+## 0.1.0 — onafhankelijke review contract 1.3 (QA, ADR-0015, nog niet uitgebracht)
+
+**Gerepareerd**
+- CI sloeg 12 tests stil over: de controle van het manifest met de 1.3-validator van appstore-en-fork en de
+  byte-gelijkheid van de renderer met de Peil-referentie `bouw/sjabloon.py`. CI installeert nu de validator op een vaste
+  commit en haalt de referentie op de gepinde Peil-commit; ontbreekt een van beide, dan faalt CI.
+- Connector-health: de check `bronnen` gaf een verouderde meting het tijdstip van de vraag als `observed_at` en meldde
+  `meting_verouderd` ook als een andere bron vers `down` was. Nu: `observed_at` = de oudste meting die meetelt,
+  `detail.laatste_meting_verouderd`, en een verse storing blijft de oorzaak (`bron_down`).
+- `hub-link.json` krijgt na het aanmaken expliciet modus 0600, zodat geërfde ACL's van een dataset het bestand niet
+  ruimer maken (dan zou de dienst zijn eigen koppeling als onleesbaar lezen). Op een echte NAS: NIET GEVALIDEERD.
+- Juiste logregel als een onleesbaar koppelbestand wel apart is gezet maar zijn rechten niet aangepast konden worden.
+- Manifest: de upgradenotitie noemt migratie `0004`.
+
+**Extra getest**
+- Interop met de echte Hub (ai-server-manager, contract 1.3): `hub-link.json` 1.3 met `rotation_sequence`, en
+  `service.hub_link.linked` afgeleverd in de inbox van de echte Hub (alleen lokaal).
+
 ## 0.1.0 — contract 1.3 en Peil 1.1.1 (ADR-0014, nog niet uitgebracht)
 
 **Statuspagina (contract 1.3 §3.7, Peil 1.1.1)**

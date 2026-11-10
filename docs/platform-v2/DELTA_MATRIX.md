@@ -29,3 +29,7 @@ wel de statuspagina (herkomst, `Host`-beperking, pogingen, Peil 1.1.1), eerst aa
 `rotation_sequence`, adresregels na DNS-resolutie, connector-health met vaste checks en worker-hartslag, events
 (domeinen, werkwoorden, ernst, `issuer`/`sub`), `100.64.0.0/10` alleen met toestemming, healthcheck-controlevlag en
 het manifest. Open: C1.3-HCH-15 (P2). Alles Sim-getest; niets op een echte NAS, Hub of Authentik gevalideerd.
+
+Review contract 1.3 (2026-11-10, ADR-0015): geen nieuwe functionaliteit. Manifestvalidator en Peil-referentierenderer
+draaien nu verplicht in CI; de connector-check `bronnen` noemt bij een verouderde meting de tijd van die meting en laat
+een verse storing de oorzaak; `hub-link.json` krijgt expliciet 0600. Interop met de echte Hub (1.3) lokaal geslaagd.
