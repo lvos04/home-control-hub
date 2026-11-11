@@ -318,23 +318,29 @@ def test_one_dry_run_at_a_time_and_replay_gives_the_same_run(linked: Any, auth: 
 
 
 def test_dry_run_refusals(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
-    setup_node_red(linked, fake_hub, auth, flows=[*simple_flow(), *exec_flow()])
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow())
     b11.snapshot(linked, auth)
     good = b11.flow_by_tab(linked, auth, TAB)
-    blocked = b11.flow_by_tab(linked, auth, "tabexec000000001")
     r = start(linked, auth, good["id"], sample_ids=["bestaat-niet", "energie-meting"])
     assert r.status_code == 422 and r.json()["code"] == "voorbeeld_onbekend"
     assert r.json()["details"]["onbekend"] == ["bestaat-niet"]
     r = start(linked, auth, good["id"], sample_ids=[f"s{i}" for i in range(21)])
     assert r.status_code == 422
-    r = start(linked, auth, blocked["id"])
-    assert r.status_code == 409 and r.json()["code"] == "flow_geblokkeerd"
-    assert r.json()["details"]["reden"] == "verboden_node"
     assert start(linked, auth, good["id"], role="viewer").status_code == 403
     assert start(linked, auth, good["id"], role="family").status_code == 403
     assert start(linked, auth, str(uuid.uuid4())).status_code == 404
     assert linked.post(f"{A}/flows/{good['id']}/runs", json={}).status_code == 401
     assert linked.get(f"{A}/runs/{uuid.uuid4()}", headers=auth("viewer")).status_code == 404
+    # een verboden node in een ander tabblad: die flow, en (grof blokkeren) ook de schone flow, start geen proefrun
+    node_red_fake.deploy([*simple_flow(), *exec_flow()])
+    b11.snapshot(linked, auth)
+    blocked = b11.flow_by_tab(linked, auth, "tabexec000000001")
+    r = start(linked, auth, blocked["id"])
+    assert r.status_code == 409 and r.json()["code"] == "flow_geblokkeerd"
+    assert r.json()["details"]["reden"] == "verboden_node"
+    r = start(linked, auth, good["id"])
+    assert r.status_code == 409 and r.json()["code"] == "flow_geblokkeerd"
+    assert r.json()["details"]["reden"] == "bron_geblokkeerd"
     assert linked.get(f"{A}/runs", headers=auth("viewer")).json()["items"] == []
 
 

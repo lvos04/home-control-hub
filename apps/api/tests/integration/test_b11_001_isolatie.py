@@ -15,7 +15,7 @@ import pytest
 from tests import b11
 from tests.b11 import A
 from tests.conftest import NODE_RED_URL, idem, setup_node_red
-from tests.fakes.node_red_fake import exec_flow, node, simple_flow
+from tests.fakes.node_red_fake import bypass_scenarios, clean_tab_id, exec_flow, node, simple_flow
 
 
 # ------------------------------------------------------------------------------------------------ toegang tot de editor
@@ -263,6 +263,80 @@ def test_wire_to_a_node_that_does_not_exist_blocks_until_it_is_gone(
     node_red_fake.deploy(simple_flow())
     b11.snapshot(linked, auth)
     assert b11.flow_detail(linked, auth, flow["id"])["status"] == "gepauzeerd"
+
+
+def _every_flow_blocked(linked: Any, auth: Any, result: dict[str, Any]) -> None:
+    listed = [f for f in b11.flows(linked, auth) if f["status"] != "verwijderd"]
+    assert listed and all(f["status"] == "geblokkeerd" for f in listed), listed
+    assert sorted(result["geblokkeerd"]) == sorted(f["source_flow_id"] for f in listed)
+
+
+def _blocked_and_asks_nothing(linked: Any, auth: Any, flow_id: str, token: str, reason: str, cause: str) -> None:
+    """Geblokkeerd met deze reden en oorzaak (bij ``bron_geblokkeerd``: de oorzaak elders); geen nieuw token, geen
+    actie, niets naar de Hub."""
+    flow = b11.flow_detail(linked, auth, flow_id)
+    assert flow["status"] == "geblokkeerd" and flow["blocked_reason"] == reason, flow
+    assert flow["current_version"]["policy_status"] == "geblokkeerd"
+    found = {f.get("oorzaak", f["code"]) for f in flow["current_version"]["findings"]}
+    assert cause in found, flow["current_version"]
+    r = b11.request_action(
+        linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+    )
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd", r.text
+    r = linked.post(
+        f"{A}/flows/{flow_id}/tokens",
+        json={"label": "nog een", "allowed_actions": ["notification.send"]},
+        headers=idem(auth("admin")),
+    )
+    assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict", r.text
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
+@pytest.mark.parametrize("name", ["sc1", "sc2", "sc3", "sc4", "sc5", "sc6"])
+def test_something_wrong_anywhere_blocks_every_flow_of_the_source(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, name: str
+) -> None:
+    """R-VEILIG-3 (herreview 3), besluit van de gebruiker "grof blokkeren": langs deze zes routes levert de echte
+    Node-RED 5.0.9 een bericht uit de bron af in het schone tabblad. Nu is elke flow van de bron geblokkeerd tot het
+    weg is; daarna gepauzeerd (een beheerder hervat zelf), zoals bij elke bevinding."""
+    clean = clean_tab_id(int(name[2]))
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow(tab_id=clean, label="Schoon"))
+    b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, clean, "notification.send")
+    assert flow["status"] == "actief"
+
+    node_red_fake.deploy(bypass_scenarios("exec")[name])
+    _every_flow_blocked(linked, auth, b11.snapshot(linked, auth))
+    if name == "sc5":  # de tweede node met dezelfde id staat in het schone tabblad zelf
+        _blocked_and_asks_nothing(linked, auth, flow["id"], token, "dubbele_id", "dubbele_id")
+    else:
+        _blocked_and_asks_nothing(linked, auth, flow["id"], token, "bron_geblokkeerd", "verboden_node")
+
+    node_red_fake.deploy(simple_flow(tab_id=clean, label="Schoon"))
+    assert b11.snapshot(linked, auth)["geblokkeerd"] == []
+    assert b11.flow_detail(linked, auth, flow["id"])["status"] == "gepauzeerd"
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [
+        pytest.param({"id": 5, "type": "inject", "z": "tab0000000000001", "wires": []}, id="id als getal"),
+        pytest.param({"id": "los00000exec0001", "type": ["exec"], "z": "tab0000000000001"}, id="type als lijst"),
+        pytest.param(5, id="geen object"),
+    ],
+)
+def test_a_node_of_the_wrong_shape_blocks_every_flow_instead_of_stopping_the_sync(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, odd: Any
+) -> None:
+    """Vormfout in id of type, of een element dat geen object is: de dienst leest de configuratie toch en blokkeert
+    alles (vóór dit herstel mislukte de synchronisatie en bleven de flows zoals ze waren)."""
+    two = [*simple_flow(), *simple_flow(tab_id="tabander00000002", label="Ander")]
+    setup_node_red(linked, fake_hub, auth, flows=two)
+    b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, "tabander00000002", "notification.send")
+    node_red_fake.deploy([*two, odd])
+    _every_flow_blocked(linked, auth, b11.snapshot(linked, auth))
+    _blocked_and_asks_nothing(linked, auth, flow["id"], token, "bron_geblokkeerd", "vorm_ongeldig")
 
 
 def test_blocked_flow_stays_paused_after_the_node_is_removed(

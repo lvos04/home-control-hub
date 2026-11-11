@@ -66,7 +66,8 @@ def test_health_follows_isolation_sync_and_blocked_flows(
     worker.automation_step(300.0)
     check = checks(linked, fake_hub)["automatisering"]
     assert check["status"] == "degraded" and check["reason_code"] == "flow_geblokkeerd"
-    assert check["detail"]["flows"]["geblokkeerd"] == 1
+    # grof blokkeren (besluit gebruiker, R-VEILIG-3 herreview 3): ook de schone flow van dezelfde bron
+    assert check["detail"]["flows"]["geblokkeerd"] == 2
     assert node_red_fake.writes == [], "de worker schrijft nooit naar Node-RED"
 
 

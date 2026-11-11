@@ -54,7 +54,8 @@ CRED_FILE = "flows_cred.json"
 MAX_CRED_BYTES = 4 * 1024 * 1024
 MAX_DIFF_ROWS = 200
 ISOLATION_MAX_AGE = timedelta(minutes=15)
-POLICY_REASONS = ("verboden_node", "module_niet_toegestaan", "onbekend_type", "verwijzing_onbekend")
+#: redenen van het flowbeleid: is de oorzaak weg, dan wordt de flow gepauzeerd (nooit vanzelf weer actief)
+POLICY_REASONS = policy.BLOCK_REASONS
 SYSTEM_ACTOR = "home-control-hub"
 
 
@@ -178,7 +179,7 @@ def create_snapshot(
         ciphertext=ciphertext,
         size_bytes=len(plaintext),
         node_count=len(flows),
-        flow_count=sum(1 for n in flows if n.get("type") == "tab"),
+        flow_count=sum(1 for n in flows if isinstance(n, dict) and n.get("type") == "tab"),
         policy_summary=summary,
         node_red_version=node_red_version,
         has_credentials=credentials.blob is not None,
@@ -241,8 +242,9 @@ def _brief(node: dict[str, Any]) -> dict[str, Any]:
 
 def diff_flows(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> dict[str, Any]:
     """Verschil per node: toegevoegd, verwijderd, gewijzigd (alleen veldnamen). Nooit waarden."""
-    a = {str(n.get("id")): n for n in before}
-    b = {str(n.get("id")): n for n in after}
+    # een element dat geen object is, telt niet als node; de flowscan blokkeert zo'n configuratie (vorm_ongeldig)
+    a = {str(n.get("id")): n for n in before if isinstance(n, dict)}
+    b = {str(n.get("id")): n for n in after if isinstance(n, dict)}
     added = [_brief(b[i]) for i in sorted(set(b) - set(a))]
     removed = [_brief(a[i]) for i in sorted(set(a) - set(b))]
     changed = []

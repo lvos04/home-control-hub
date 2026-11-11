@@ -217,9 +217,11 @@ def test_01_editor_alleen_beheerder_en_exec_flow_geblokkeerd(stack: Stack) -> No
     STATE["snap_exec"] = _snapshot(stack)
     blocked = _flow(stack, EXEC_TAB)
     assert blocked["status"] == "geblokkeerd", blocked
-    assert _flow(stack, TAB)["status"] != "geblokkeerd"
-    # de worker meldt de geblokkeerde flow aan de Hub
-    assert _wait(lambda: len(_hub_inbox(stack, "flow.policy.blocked")) == 1), "blokkade niet bij de Hub gemeld"
+    # grof blokkeren (besluit gebruiker, R-VEILIG-3 herreview 3): ook de schone flow van dezelfde bron
+    clean = _flow(stack, TAB)
+    assert clean["status"] == "geblokkeerd" and clean["blocked_reason"] == "bron_geblokkeerd", clean
+    # de worker meldt de geblokkeerde flows aan de Hub
+    assert _wait(lambda: len(_hub_inbox(stack, "flow.policy.blocked")) == 2), "blokkade niet bij de Hub gemeld"
     # een geblokkeerde flow krijgt geen token
     r = httpx.put(
         f"{stack.hch}{A}/flows/{blocked['id']}/owner",
@@ -237,6 +239,14 @@ def test_01_editor_alleen_beheerder_en_exec_flow_geblokkeerd(stack: Stack) -> No
     httpx.post(f"{stack.node_red}/sim/deploy", json={"flows": _flows_v1(), "credentials": creds})
     STATE["snap1"] = _snapshot(stack)
     assert STATE["snap1"]["credentials_status"] == "meegenomen"
+    # het beleid is weer in orde: de schone flow staat gepauzeerd tot een beheerder hem bewust hervat
+    assert _flow(stack, TAB)["status"] == "gepauzeerd"
+    r = httpx.put(
+        f"{stack.hch}{A}/flows/{clean['id']}/state",
+        json={"status": "actief", "reden": "exec-flow verwijderd"},
+        headers=_idem(admin, **{"If-Match": "*"}),
+    )
+    assert r.status_code == 200 and r.json()["status"] == "actief", r.text
     assert _nr_state(stack)["writes"] == [], "tot hier heeft de dienst alleen gelezen"
 
 

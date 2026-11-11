@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from integrations.domains.automation import actions, eventcatalog, inbox, policy, samples, snapshots
-from tests.fakes.node_red_fake import exec_flow, node, simple_flow, tab
+from tests.fakes.node_red_fake import bypass_scenarios, clean_tab_id, exec_flow, node, simple_flow, tab
 
 
 def env(**overrides: Any) -> dict[str, Any]:
@@ -416,11 +416,18 @@ def test_scan_blocks_exec_and_unknown_and_foreign_modules() -> None:
     ]
     result = policy.scan(flows, MODULES, ALLOWED)
     by_tab = {t.tab_id: t for t in result.tabs}
-    assert by_tab["tab0000000000001"].blocked is False and by_tab["tab0000000000001"].blocked_reason is None
+    # grof blokkeren (besluit gebruiker, R-VEILIG-3 herreview 3): het schone tabblad is meegeblokkeerd, met de oorzaken
+    clean = by_tab["tab0000000000001"]
+    assert clean.blocked and clean.blocked_reason == policy.SOURCE_BLOCKED
+    assert [(f["oorzaak"], f["plaats"]) for f in clean.findings] == [
+        ("verboden_node", "tabexec000000001"),
+        ("module_niet_toegestaan", "tabvreemd0000001"),
+        ("onbekend_type", "tabvreemd0000001"),
+    ]
     assert by_tab["tabexec000000001"].blocked_reason == "verboden_node"
     codes = sorted(f["code"] for f in by_tab["tabvreemd0000001"].findings)
     assert codes == ["module_niet_toegestaan", "onbekend_type"]
-    assert result.summary()["geblokkeerd"] == 2 and result.node_count == len(flows)
+    assert result.summary()["geblokkeerd"] == 3 and result.node_count == len(flows)
     # dezelfde module wél toegestaan: alleen het onbekende type blijft over
     again = policy.scan(flows, MODULES, ("node-red", "contrib-x"))
     assert [f["code"] for f in {t.tab_id: t for t in again.tabs}["tabvreemd0000001"].findings] == ["onbekend_type"]
@@ -504,7 +511,10 @@ def test_scan_follows_link_nodes_in_both_directions_through_subflows_and_dynamic
     ]
     by_tab = {t.tab_id: t for t in policy.scan(via_sub, LINK_MODULES, ALLOWED).tabs}
     assert by_tab["tabsub0000000001"].blocked and by_tab["tabmidden000001"].blocked
-    assert not by_tab["tabvrij000000001"].blocked
+    assert by_tab["tabsub0000000001"].blocked_reason == by_tab["tabmidden000001"].blocked_reason == "verboden_node"
+    # niet verbonden: toch geblokkeerd (grof blokkeren), maar als meegeblokkeerd, niet via een link
+    assert by_tab["tabvrij000000001"].blocked_reason == policy.SOURCE_BLOCKED
+    assert not any("via_link" in f for f in by_tab["tabvrij000000001"].findings)
     # een dynamische link call kiest pas tijdens het draaien: verbonden met elk tabblad met een link in
     dynamic = [
         tab("tabdyn0000000001", "Dynamisch"),
@@ -590,7 +600,10 @@ def test_scan_follows_every_reference_to_another_tab(flows: list[dict[str, Any]]
     by_tab = {t.tab_id: t for t in policy.scan(flows, WIRE_MODULES, ALLOWED).tabs}
     clean = by_tab[CLEAN]
     assert clean.blocked and clean.blocked_reason == code, clean.findings
-    assert [(f["code"], f.get("via_link")) for f in clean.findings] == [(code, other)]
+    # een node in een spooktabblad heeft daarnaast zelf de bevinding tabblad_onbekend (grof blokkeren)
+    ghost_nodes = [n for n in flows if n.get("z") == GHOST] if other == GHOST else []
+    expected = [(code, other)] + [("tabblad_onbekend", other)] * len(ghost_nodes)
+    assert sorted((f["code"], f.get("via_link")) for f in clean.findings) == sorted(expected)
     assert by_tab[other].blocked and by_tab[other].blocked_reason == code
 
 
@@ -599,13 +612,19 @@ def test_scan_treats_a_node_with_an_unknown_tab_as_its_own_tab() -> None:
     by_tab = {t.tab_id: t for t in result.tabs}
     ghost = by_tab[GHOST]
     assert ghost.label == GHOST and ghost.node_count == 2 and ghost.node_types == ["link out", "x"]
-    assert [f["node_id"] for f in ghost.findings] == ["spook000contrib1"]
+    assert [(f["code"], f["node_id"]) for f in ghost.findings] == [
+        ("module_niet_toegestaan", "spook000contrib1"),
+        ("tabblad_onbekend", "spook000contrib1"),
+        ("tabblad_onbekend", "spook000linkout1"),
+    ]
     assert result.global_findings == [], "de bevinding staat op het spooktabblad zelf, niet in de ongebruikte lijst"
     assert result.summary()["geblokkeerd"] == 2
-    # een losse node zonder tabblad en zonder draad raakt het schone tabblad niet, maar is zelf wel geblokkeerd
+    # een losse node zonder tabblad en zonder draad: zelf geblokkeerd, en het schone tabblad nu ook (grof blokkeren)
     alone = [*simple_flow(), node("spook000contrib1", "x", GHOST, x=10, y=10)]
     by_tab = {t.tab_id: t for t in policy.scan(alone, WIRE_MODULES, ALLOWED).tabs}
-    assert not by_tab["tab0000000000001"].blocked and by_tab[GHOST].blocked
+    assert by_tab[GHOST].blocked_reason == "module_niet_toegestaan"
+    assert by_tab["tab0000000000001"].blocked_reason == policy.SOURCE_BLOCKED
+    assert {f["plaats"] for f in by_tab["tab0000000000001"].findings} == {GHOST}
 
 
 @pytest.mark.parametrize(
@@ -671,6 +690,246 @@ def test_scan_checksum_changes_only_with_the_flow_itself() -> None:
     shuffled = [dict(reversed(list(n.items()))) for n in simple_flow()]
     assert policy.flows_checksum(simple_flow()) == policy.flows_checksum(shuffled)
     assert policy.flows_checksum(simple_flow()) != policy.flows_checksum(changed)
+
+
+# ------------------------------------------------------- grof blokkeren (R-VEILIG-3 herreview 3, besluit gebruiker)
+BYPASS_MODULES = {
+    **WIRE_MODULES,
+    "catch": "node-red",
+    "json": "node-red",
+    "tls-config": "node-red",
+    "mqtt-broker": "node-red",
+}
+SCENARIOS = ("sc1", "sc2", "sc3", "sc4", "sc5", "sc6")
+TAB2 = "tabander00000002"  # eigen voorvoegsel: simple_flow maakt de node-id's uit de eerste 8 tekens
+
+
+def _clean_of(name: str) -> str:
+    return clean_tab_id(int(name[2]))
+
+
+def _causes(result: policy.ScanResult) -> set[str]:
+    """Alle oorzaken die de scan ergens noemt (eigen bevindingen, die van elders en die buiten elk tabblad)."""
+    found = {f.get("oorzaak", f["code"]) for t in result.tabs for f in t.findings}
+    return found | {f["code"] for f in result.global_findings}
+
+
+def _assert_source_blocked(result: policy.ScanResult) -> None:
+    """Besluit 'grof blokkeren': elk tabblad van de bron is geblokkeerd, met een reden die na herstel weer pauzeert."""
+    assert result.tabs, "zonder tabbladen bewijst deze controle niets"
+    assert all(t.blocked for t in result.tabs), [(t.tab_id, t.findings) for t in result.tabs]
+    assert {t.blocked_reason for t in result.tabs} <= set(snapshots.POLICY_REASONS)
+    for t in result.tabs:
+        if t.blocked_reason == policy.SOURCE_BLOCKED:
+            # meegeblokkeerd: elke bevinding noemt de oorzaak elders en waar die staat, nooit het tabblad zelf
+            assert all(f["code"] == policy.SOURCE_BLOCKED and f["plaats"] != t.tab_id for f in t.findings), t.findings
+            assert all(f["oorzaak"] != policy.SOURCE_BLOCKED for f in t.findings), t.findings
+
+
+@pytest.mark.parametrize("bad_type", ["x", "exec", None], ids=["module", "exec", "zonder-verboden-node"])
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_scan_blocks_every_tab_of_the_source_for_each_route_of_the_review(name: str, bad_type: str | None) -> None:
+    """R-VEILIG-3 (herreview 3): langs deze zes routes levert de echte Node-RED 5.0.9 een bericht af in het schone
+    tabblad. Besluit van de gebruiker: staat ergens in de configuratie iets verbodens of iets wat de dienst niet kan
+    plaatsen, dan zijn alle tabbladen geblokkeerd. Ook zonder verboden node is elke route zelf zo'n plek."""
+    result = policy.scan(bypass_scenarios(bad_type)[name], BYPASS_MODULES, ALLOWED)
+    _assert_source_blocked(result)
+    clean = {t.tab_id: t for t in result.tabs}[_clean_of(name)]
+    # sc5: de tweede node met dezelfde id staat in het schone tabblad zelf; die bevinding krijgt dat tabblad zelf
+    assert clean.blocked_reason == ("dubbele_id" if name == "sc5" else policy.SOURCE_BLOCKED), clean.findings
+    expected = {
+        "sc1": "niet_plaatsbaar",
+        "sc2": "niet_plaatsbaar",
+        "sc3": "vorm_ongeldig",
+        "sc4": "verwijzing_onbekend",
+        "sc5": "dubbele_id",
+        "sc6": "vorm_ongeldig",
+    }[name]
+    assert expected in {f.get("oorzaak", f["code"]) for f in clean.findings}, clean.findings
+    if bad_type is not None:
+        verboden = "module_niet_toegestaan" if bad_type == "x" else "verboden_node"
+        assert verboden in _causes(result), [(t.tab_id, t.findings) for t in result.tabs]
+
+
+def test_scan_blocks_every_tab_of_the_combined_configuration_of_the_review() -> None:
+    """Alle routes samen (zoals de proef op de echte image), met en zonder verboden node; ook Schoon7 en Vies7."""
+    for bad_type in ("x", None):
+        flows = [n for name in (*SCENARIOS, "sc7") for n in bypass_scenarios(bad_type)[name]]
+        result = policy.scan(flows, BYPASS_MODULES, ALLOWED)
+        _assert_source_blocked(result)
+        tab_ids = {t.tab_id for t in result.tabs}
+        assert {clean_tab_id(n) for n in range(1, 8)} <= tab_ids
+
+
+def test_scan_control_wire_between_tabs_stays_blocked_and_is_clean_without_a_forbidden_node() -> None:
+    """Controle sc7: de gewone draad blijft gevolgd (de bevinding van de bron, met ``via_link``); zonder verboden node
+    is een draad tussen twee schone tabbladen gewoon toegestaan."""
+    by_tab = {t.tab_id: t for t in policy.scan(bypass_scenarios("x")["sc7"], BYPASS_MODULES, ALLOWED).tabs}
+    clean = by_tab[clean_tab_id(7)]
+    assert clean.blocked and clean.blocked_reason == "module_niet_toegestaan"
+    assert [f.get("via_link") for f in clean.findings] == ["tabvies000000007"]
+    clean_only = policy.scan(bypass_scenarios(None)["sc7"], BYPASS_MODULES, ALLOWED)
+    assert [t.blocked for t in clean_only.tabs] == [False, False] and clean_only.global_findings == []
+
+
+def _with(*extra: Any) -> list[Any]:
+    """Twee schone tabbladen plus iets wat de dienst niet kan plaatsen of wat niet mag."""
+    return [*simple_flow(), *simple_flow(tab_id=TAB2, label="Ook schoon"), *extra]
+
+
+@pytest.mark.parametrize(
+    ("flows", "cause"),
+    [
+        pytest.param(_with(node("los", "inject", "tab0000000000001") | {"id": 5}), "vorm_ongeldig", id="id als getal"),
+        pytest.param(_with(node("los", "inject", "tab0000000000001") | {"id": ["Q"]}), "vorm_ongeldig", id="id lijst"),
+        pytest.param(_with(node("", "inject", "tab0000000000001")), "vorm_ongeldig", id="lege id"),
+        pytest.param(
+            _with(node("los00000exec0001", "exec", TAB2) | {"type": ["exec"]}), "vorm_ongeldig", id="type lijst"
+        ),
+        pytest.param(_with(node("los", "debug", "x") | {"z": {"id": TAB2}}), "vorm_ongeldig", id="z als object"),
+        pytest.param(_with(node("los", "debug", "x") | {"z": 7}), "vorm_ongeldig", id="z als getal"),
+        pytest.param(
+            _with(node("los", "inject", TAB2) | {"wires": [[["tab00000debug001"]]]}), "vorm_ongeldig", id="wires genest"
+        ),
+        pytest.param(_with(node("los", "inject", TAB2) | {"wires": {"0": [TAB2]}}), "vorm_ongeldig", id="wires object"),
+        pytest.param(_with(node("los", "inject", TAB2) | {"wires": None}), "vorm_ongeldig", id="wires null"),
+        pytest.param(_with(node("los", "link out", TAB2, links="tab00000debug001")), "vorm_ongeldig", id="links tekst"),
+        pytest.param(_with(node("los", "link out", TAB2, links=[5])), "vorm_ongeldig", id="links met getal"),
+        pytest.param(_with(5), "vorm_ongeldig", id="geen object: getal"),
+        pytest.param(_with(None), "vorm_ongeldig", id="geen object: null"),
+        pytest.param(_with(["tab0000000000001"]), "vorm_ongeldig", id="geen object: lijst"),
+        pytest.param(_with(node("tab00000debug001", "debug", TAB2)), "dubbele_id", id="dubbele id in twee tabbladen"),
+        pytest.param(_with(tab(TAB2, "Nog eens")), "dubbele_id", id="dubbele tabblad-id"),
+        pytest.param(_with(node("spook0000debug01", "debug", "spook00000000001")), "tabblad_onbekend", id="spook-z"),
+        pytest.param(
+            _with({"id": "cfgjunction00001", "type": "junction", "wires": [["tab00000debug001"]]}),
+            "niet_plaatsbaar",
+            id="configuratienode met draad",
+        ),
+        pytest.param(
+            _with(
+                node("los", "inject", TAB2, [["cfgtls0000000001"]]), {"id": "cfgtls0000000001", "type": "tls-config"}
+            ),
+            "niet_plaatsbaar",
+            id="draad naar een configuratienode",
+        ),
+        pytest.param(_with(node("los", "inject", TAB2, [[TAB2]])), "niet_plaatsbaar", id="draad naar een tabblad"),
+        pytest.param(_with(node("los", "inject", TAB2, [["bestaatniet00001"]])), "verwijzing_onbekend", id="niets"),
+        pytest.param(_with({"id": "los", "type": "subflow:bestaat-niet"}), "onbekend_type", id="subflow buiten tab"),
+        pytest.param(
+            _with(
+                {"id": "sub0000000000001", "type": "subflow", "name": "Ongebruikt"},
+                node("s", "exec", "sub0000000000001"),
+            ),
+            "verboden_node",
+            id="ongebruikte subflow met exec",
+        ),
+        pytest.param(_with({"id": "cfg0000000000002", "type": "x"}), "module_niet_toegestaan", id="ongebruikte config"),
+    ],
+)
+def test_scan_blocks_every_tab_when_something_cannot_be_placed_or_is_forbidden(flows: list[Any], cause: str) -> None:
+    """Vormfout in id/type/z/wires/links, geen object, dubbele id, een node zonder plaatsbaar tabblad, een draad naar
+    iets wat geen node in een tabblad is, of iets verbodens buiten elk tabblad: alle tabbladen geblokkeerd."""
+    result = policy.scan(flows, BYPASS_MODULES, ALLOWED)
+    _assert_source_blocked(result)
+    assert cause in _causes(result), [(t.tab_id, t.findings) for t in result.tabs]
+
+
+def test_scan_of_a_source_blocked_tab_names_the_cause_and_its_place_and_versions_with_it() -> None:
+    """De melding zegt welk tabblad de oorzaak is; de checksum (en dus de versie) van het meegeblokkeerde tabblad
+    volgt de oorzaken en is na het weghalen precies die van ervoor."""
+    before = {t.tab_id: t for t in policy.scan(_with(), MODULES, ALLOWED).tabs}
+    assert not before[TAB2].blocked
+    bad = {t.tab_id: t for t in policy.scan(_with(*exec_flow()), MODULES, ALLOWED).tabs}
+    assert bad["tabexec000000001"].blocked_reason == "verboden_node"
+    assert [(f["code"], f["oorzaak"], f["plaats"], f["node_id"], f["node_type"]) for f in bad[TAB2].findings] == [
+        (policy.SOURCE_BLOCKED, "verboden_node", "tabexec000000001", "tabexec0exec0001", "exec")
+    ]
+    assert bad[TAB2].checksum != before[TAB2].checksum, "nieuwe versie met de bevinding"
+    after = {t.tab_id: t for t in policy.scan(_with(), MODULES, ALLOWED).tabs}
+    assert after[TAB2].checksum == before[TAB2].checksum and not after[TAB2].blocked
+
+
+def test_scan_leaves_a_clean_configuration_active() -> None:
+    """Een gewone, schone configuratie blijft actief: link-nodes, een junction, een subflow met in/uit, een groep,
+    configuratienodes (gebruikt en ongebruikt), een uitgeschakeld tabblad en een draad tussen schone tabbladen."""
+    flows = [
+        *simple_flow(),
+        node("tab00000junct001", "junction", "tab0000000000001", [["tab00000linkout1"]]),
+        node("tab00000linkout1", "link out", "tab0000000000001", mode="link", links=["tabanderlinkin01"]),
+        node("tab00000http0001", "http request", "tab0000000000001", tls="cfgtls0000000001"),
+        {"id": "tab00000groep001", "type": "group", "z": "tab0000000000001", "nodes": ["tab00000http0001"]},
+        node("tab00000catch001", "catch", "tab0000000000001", scope=["tab00000functi01"]),
+        {"id": "cfgtls0000000001", "type": "tls-config", "name": "tls"},
+        {"id": "cfgbroker0000001", "type": "mqtt-broker", "name": "ongebruikt"},
+        {"id": "cfgglobal0000001", "type": "global-config", "env": [], "modules": {}},
+        *simple_flow(tab_id=TAB2, label="Ook schoon"),
+        node("tabanderlinkin01", "link in", TAB2, [["tabandersubflow1"]], links=["tab00000linkout1"]),
+        node("tabandersubflow1", "subflow:sub0000000000001", TAB2, [["tabandercall0001"]]),
+        node("tabandercall0001", "link call", TAB2, [["tabanderdebug001"]], links=["tabanderlinkin01"]),
+        node("tabanderdyn00001", "link call", TAB2, linkType="dynamic", links=[]),
+        {
+            "id": "sub0000000000001",
+            "type": "subflow",
+            "name": "Doorgeef",
+            "in": [{"x": 50, "y": 30, "wires": [{"id": "sub00000junct001"}]}],
+            "out": [{"x": 250, "y": 30, "wires": [{"id": "sub00000junct001", "port": 0}]}],
+        },
+        node("sub00000junct001", "junction", "sub0000000000001", [[]]),
+        tab("tabuit0000000001", "Uitgeschakeld", disabled=True),
+        node("tabuit00debug001", "debug", "tabuit0000000001"),
+        {"id": "tab00000comment1", "type": "comment", "z": "tab0000000000001", "name": "uitleg", "wires": []},
+        *bypass_scenarios(None)["sc7"],
+    ]
+    result = policy.scan(flows, BYPASS_MODULES, ALLOWED)
+    assert len(result.tabs) == 5
+    assert [(t.tab_id, t.findings) for t in result.tabs if t.blocked] == []
+    assert result.global_findings == [] and result.summary()["geblokkeerd"] == 0
+
+
+_SEED_SCRIPT = """
+import json, sys
+from integrations.domains.automation import policy
+flows, modules = json.load(sys.stdin)
+res = policy.scan(flows, modules, ("node-red",))
+print(json.dumps([[t.tab_id, t.blocked, t.findings, t.checksum] for t in res.tabs] + [res.global_findings]))
+"""
+
+
+def test_scan_outcome_does_not_depend_on_the_hash_seed() -> None:
+    """R-VEILIG-3 (herreview 3): met een dubbele id in twee echte tabbladen hing de uitkomst af van de volgorde van
+    een set (PYTHONHASHSEED). Nu: voor elke seed dezelfde uitkomst, en het schone tabblad is altijd geblokkeerd."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    dubbel = [
+        tab("tabvies000000005", "Vies5"),
+        tab(clean_tab_id(5), "Schoon5"),
+        node("vies5inject00001", "inject", "tabvies000000005", [["dubbel0000000005"]]),
+        node("vies5contrib0001", "x", "tabvies000000005", [["dubbel0000000005"]]),
+        node("dubbel0000000005", "link out", "tabvies000000005", mode="link", links=[]),
+        node("dubbel0000000005", "link in", clean_tab_id(5), [["schoon5debug001"]], links=[]),
+        node("schoon5debug001", "debug", clean_tab_id(5)),
+    ]
+    combined = [n for name in (*SCENARIOS, "sc7") for n in bypass_scenarios("x")[name]]
+    for flows in (dubbel, combined):
+        outputs = set()
+        for seed in range(10):
+            done = subprocess.run(  # noqa: S603 - vaste interpreter, vast script
+                [sys.executable, "-c", _SEED_SCRIPT],
+                input=json.dumps([flows, BYPASS_MODULES]),
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONHASHSEED": str(seed)},
+                check=True,
+                timeout=120,
+            )
+            outputs.add(done.stdout)
+        assert len(outputs) == 1, f"{len(outputs)} verschillende uitkomsten over 10 seeds"
+        tabs = json.loads(outputs.pop())[:-1]
+        assert tabs and all(blocked for _tab, blocked, _f, _c in tabs), tabs
 
 
 # ------------------------------------------------------------------------------ credentials-bestand (B11-005, R-VEILIG-4)

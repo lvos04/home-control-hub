@@ -479,6 +479,104 @@ def exec_flow(tab_id: str = "tabexec000000001", label: str = "Shell (verboden)")
     ]
 
 
+def clean_tab_id(n: int) -> str:
+    return f"tabschoon000000{n}"
+
+
+def bypass_scenarios(bad_type: str | None = "exec") -> dict[str, list[dict[str, Any]]]:
+    """R-VEILIG-3 (herreview 3): zes routes in de configuratie waarlangs de echte Node-RED 5.0.9 (gepinde image)
+    een bericht uit een bron in een schoon tabblad ``clean_tab_id(n)`` aflevert zonder gewone draad of link tussen
+    twee tabbladen, plus de controle ``sc7`` (een gewone draad tussen twee tabbladen). Met ``bad_type`` staat in elke
+    bron een node van dat type (exec, of een type uit een module buiten de allowlist); met ``None`` is het de
+    configuratie zoals de echte Node-RED hem draaide (zonder verboden node)."""
+
+    def at(node_id: str, node_type: str, z: Any, wires: Any, **props: Any) -> dict[str, Any]:
+        return {"id": node_id, "type": node_type, "z": z, "name": "", "x": 100, "y": 100, "wires": wires, **props}
+
+    def bad(node_id: str, z: Any, wires: Any) -> list[dict[str, Any]]:
+        return [] if bad_type is None else [at(node_id, bad_type, z, wires)]
+
+    vies = {n: f"tabvies00000000{n}" for n in range(1, 8)}
+    schoon = {n: clean_tab_id(n) for n in range(1, 8)}
+    return {
+        # draad naar een junction zonder z (Node-RED: een configuratienode die gewoon draait en doorstuurt)
+        "sc1": [
+            tab(vies[1], "Vies1"),
+            tab(schoon[1], "Schoon1"),
+            at("vies1inject00001", "inject", vies[1], [["cfgjunction00001"]]),
+            {"id": "cfgjunction00001", "type": "junction", "wires": [["schoon1debug0001"]]},
+            at("schoon1debug0001", "debug", schoon[1], []),
+            *bad("vies1verboden01", vies[1], [["cfgjunction00001"]]),
+        ],
+        # link out naar een 'link in' zonder z
+        "sc2": [
+            tab(vies[2], "Vies2"),
+            tab(schoon[2], "Schoon2"),
+            at("vies2inject00001", "inject", vies[2], [["vies2linkout0001"]]),
+            at("vies2linkout0001", "link out", vies[2], [], mode="link", links=["cfglinkin0000002"]),
+            {
+                "id": "cfglinkin0000002",
+                "type": "link in",
+                "links": ["vies2linkout0001"],
+                "wires": [["schoon2debug001"]],
+            },
+            at("schoon2debug001", "debug", schoon[2], []),
+            *bad("vies2verboden01", vies[2], [["vies2linkout0001"]]),
+        ],
+        # een uitgang als tekst: Node-RED loopt de tekens langs en levert af aan de node met id "Q"
+        "sc3": [
+            tab(vies[3], "Vies3"),
+            tab(schoon[3], "Schoon3"),
+            at("vies3inject00001", "inject", vies[3], ["QZ"]),
+            at("Q", "debug", schoon[3], []),
+            *bad("vies3verboden01", vies[3], ["QZ"]),
+        ],
+        # draad naar de id <instantie>-<node> die Node-RED een node in een subflow-instantie pas tijdens het draaien geeft
+        "sc4": [
+            tab(vies[4], "Vies4"),
+            tab(schoon[4], "Schoon4"),
+            {
+                "id": "subflow000000004",
+                "type": "subflow",
+                "name": "Doorgeef4",
+                "in": [{"x": 50, "y": 30, "wires": [{"id": "sub4junction0001"}]}],
+                "out": [{"x": 250, "y": 30, "wires": [{"id": "sub4junction0001", "port": 0}]}],
+            },
+            at("sub4junction0001", "junction", "subflow000000004", [[]]),
+            at("schoon4instantie", "subflow:subflow000000004", schoon[4], [["schoon4debug001"]]),
+            at("schoon4debug001", "debug", schoon[4], []),
+            at("vies4inject00001", "inject", vies[4], [["schoon4instantie-sub4junction0001"]]),
+            *bad("vies4verboden01", vies[4], [["schoon4instantie-sub4junction0001"]]),
+        ],
+        # dubbele id: 'link out' in een tabblad dat niet bestaat en 'link in' in het schone tabblad (zelfde id)
+        "sc5": [
+            tab(schoon[5], "Schoon5"),
+            at("spook5inject0001", "inject", "spook00000000005", [["dubbel0000000005"]]),
+            at("dubbel0000000005", "link out", "spook00000000005", [], mode="link", links=[]),
+            at("dubbel0000000005", "link in", schoon[5], [["schoon5debug001"]], links=[]),
+            at("schoon5debug001", "debug", schoon[5], []),
+            *bad("spook5verboden1", "spook00000000005", [["dubbel0000000005"]]),
+        ],
+        # z als lijst: Node-RED zet zo'n node in het schone tabblad; zijn fout komt bij de catch-node daar
+        "sc6": [
+            tab(schoon[6], "Schoon6"),
+            at("schoon6catch001", "catch", schoon[6], [["schoon6debug001"]], scope=None, uncaught=False),
+            at("schoon6debug001", "debug", schoon[6], []),
+            at("lijst6inject0001", "inject", [schoon[6]], [["lijst6json000001"]]),
+            at("lijst6json000001", "json", [schoon[6]], [[]], property="payload", action="obj"),
+            *bad("lijst6verboden1", [schoon[6]], [["lijst6json000001"]]),
+        ],
+        # controle: een gewone draad naar een node in een ander tabblad
+        "sc7": [
+            tab(vies[7], "Vies7"),
+            tab(schoon[7], "Schoon7"),
+            at("vies7inject00001", "inject", vies[7], [["schoon7debug001"]]),
+            at("schoon7debug001", "debug", schoon[7], []),
+            *bad("vies7verboden01", vies[7], [["schoon7debug001"]]),
+        ],
+    }
+
+
 # ----------------------------------------------------------------------------------------------- ASGI (dienst-E2E)
 def asgi_app(fake: NodeRedFake) -> Any:
     """Dezelfde nep-Node-RED als ASGI-app (voor de dienst-E2E via uvicorn), plus ``/sim/*``-bediening."""

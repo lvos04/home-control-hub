@@ -86,10 +86,12 @@ class NodeRedError(Exception):
 
 @dataclass(frozen=True)
 class FlowsDoc:
-    """De volledige flowconfiguratie zoals Node-RED hem geeft (zonder credentials: die geeft de API nooit terug)."""
+    """De volledige flowconfiguratie zoals Node-RED hem geeft (zonder credentials: die geeft de API nooit terug). De
+    elementen worden hier niet gekeurd: een element met een andere vorm is configuratie, en de flowscan blokkeert dan
+    alle flows (``policy.scan``, ``vorm_ongeldig``) in plaats van dat de synchronisatie stopt."""
 
     rev: str
-    flows: list[dict[str, Any]]
+    flows: list[Any]
 
 
 class NodeRedClient:
@@ -289,10 +291,6 @@ class NodeRedClient:
             raise NodeRedError("antwoord_ongeldig", 200, "/flows")
         rev, flows = data.get("rev"), data.get("flows")
         if not isinstance(rev, str) or not REV_RE.fullmatch(rev) or not isinstance(flows, list):
-            raise NodeRedError("antwoord_ongeldig", 200, "/flows")
-        if not all(
-            isinstance(n, dict) and isinstance(n.get("id"), str) and isinstance(n.get("type"), str) for n in flows
-        ):
             raise NodeRedError("antwoord_ongeldig", 200, "/flows")
         return FlowsDoc(rev=rev, flows=flows)
 

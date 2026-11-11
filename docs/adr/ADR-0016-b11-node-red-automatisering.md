@@ -78,38 +78,46 @@ Deze ronde bouwt de vijf werkpakketten:
 - Een meting ouder dan 15 minuten telt niet meer: de stand is dan `onbekend`.
 - **De editor:** `GET …/automation/editor` geeft het adres alleen aan een beheerder (viewer en operator: 403). Node-RED
   zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
-- **Exec-node:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt (de node draait niet,
-  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Tabbladen
-  die met elkaar **verbonden** zijn delen hun bevindingen. Verbonden is (ook via een subflow of via een ander
-  tabblad, transitief): een gewone draad (`wires`) naar een node in een ander tabblad (gemeten op de gepinde image:
-  Node-RED levert zo'n bericht gewoon af, `Flow.getNode` vraagt een onbekende id aan de bovenliggende flow), een
-  link-node (`link out`, `link in`, `link call`; een `link call` met `linkType: dynamic` telt als verbonden met elk
-  tabblad met een `link in`) of een eigenschap die naar een node in een ander tabblad wijst (zoals een
-  configuratienode die daar staat). Een node met een `z` die geen tabblad of subflow is, draait in Node-RED in een
-  tabblad dat het zelf aanmaakt (`parseConfig`, `addedTabs`); de scan behandelt zo'n `z` als een eigen tabblad met
-  eigen bevindingen. Een draad of link naar een id die nergens in de configuratie staat (bijvoorbeeld de id
-  `<instantie>-<node>` die Node-RED een node in een subflow-instantie pas tijdens het draaien geeft) is zelf een
-  bevinding `verwijzing_onbekend` (fail-closed). Een flow met een verboden node, een onbekend type, een module
-  buiten de allowlist of zo'n onbekende verwijzing (in het eigen tabblad of in een verbonden tabblad) wordt
-  **geblokkeerd**, en een event `flow.policy.blocked` gaat naar de Hub. Een geblokkeerde flow krijgt geen events (ook
-  afleveringen die al wachtten, blijven staan) en geen nieuwe tokens; elk actieverzoek wordt geweigerd (403) en
-  vastgelegd, met reden `flow_geblokkeerd`, of de eigen reden als het verzoek ook om een andere reden niet mag
-  (bijvoorbeeld `onbekende_actie`); er gaat dan niets naar de Hub. Een bestaand token blijft
-  bestaan, maar opent alleen nog: de eigen stand lezen (`GET …/flow-api/me` toont de status en de reden, en
-  `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het bevestigen (`ack`/`nack`) van een aflevering die al
-  vóór de blokkade was opgehaald; die wordt niet opnieuw afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets
-  naar de flow en niets van de flow naar de Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een
-  beheerder of operator hem bewust hervat.
-- **Grens van de blokkade per tabblad:** de scan ziet alleen wat in de configuratie staat. Wat tabbladen tijdens het
-  draaien delen zonder dat het daar staat, kan hij niet zien: de global context, een `http in` in het ene tabblad
-  die een `http request` uit het andere naar Node-RED zelf ontvangt, mqtt of websocket via een broker, tcp/udp en
-  bestanden. Een geblokkeerd tabblad blijft in Node-RED zelf draaien en kan zo een niet-geblokkeerd tabblad voeden;
-  deze dienst houdt dat niet tegen. De harde grens ligt daarom bij Node-RED zelf: met het manifest van
-  jelly-leon-platform (`install/manifests/node-red.manifest.yaml`) laadt Node-RED alleen de kernnodes uit
-  `nodesIncludes` (geen exec, function, file, mqtt, `http in`, websocket, tcp of udp; wel `http request`), staat
-  installeren via het palet uit en kunnen function-nodes geen externe modules laden. Van de kanalen hierboven blijft
-  dan vooral de global context over (bereikbaar met de change-node). De scan is daarbovenop de vangst voor wat
-  Node-RED toch aanneemt. Die kanalen zijn niet getest, alleen vastgesteld uit de werking van Node-RED.
+- **Exec-node en grof blokkeren:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt
+  (de node draait niet, maar de flow staat er). Daarom scant de dienst elke gelezen configuratie zelf: elke node (in
+  een tabblad, in een subflow of als configuratienode, gebruikt of niet) tegen de verboden typen, de geïnstalleerde
+  typen en de allowlist, én of hij elke node kan plaatsen. Niet te plaatsen is: een element dat geen object is met
+  `id` en `type` als niet-lege tekst, `z` als tekst (of zonder `z`: een configuratienode), `wires` als lijst van
+  lijsten met teksten en `links` als lijst met teksten (`vorm_ongeldig`); een dubbele id (`dubbele_id`); een node met
+  een `z` die geen tabblad of subflow is (`tabblad_onbekend`); een draad of link naar een id die nergens staat,
+  bijvoorbeeld de id `<instantie>-<node>` die Node-RED een node in een subflow-instantie pas tijdens het draaien
+  geeft (`verwijzing_onbekend`); en een draad of link van of naar iets wat geen node in een tabblad of subflow is,
+  zoals een configuratienode zonder `z` of een tabblad zelf (`niet_plaatsbaar`). **Besluit van de gebruiker
+  (2026-11-11, "grof blokkeren"):** staat er **ergens** in de configuratie iets verbodens of iets wat de dienst niet
+  kan plaatsen, dan worden **alle** flows van de bron geblokkeerd tot het weg is. Reden: Node-RED levert berichten
+  tussen tabbladen ook af langs wegen die een scan per tabblad niet betrouwbaar volgt (gemeten op de gepinde image:
+  een junction of `link in` zonder `z`, een uitgang als tekst, een draad naar een subflow-instantie-id, een dubbele
+  id, een `z` als lijst); de dienst bootst Node-RED niet na om een uitzondering te maken. Voor de melding blijft de
+  precieze uitkomst per tabblad: het tabblad met de oorzaak, of dat er via een subflow, een configuratienode, een
+  gewone draad, een link-node of een eigenschap mee verbonden is, krijgt de bevinding zelf (`verboden_node`,
+  `onbekend_type`, `module_niet_toegestaan` of een van de codes hierboven; een niet te plaatsen node met de `z` van
+  een bekend tabblad telt voor dat tabblad); elk ander tabblad krijgt de reden `bron_geblokkeerd`, met per oorzaak
+  de code, de node en de plaats (tabblad, subflow of `configuratie`). Zo'n flow wordt **geblokkeerd**, en per flow
+  gaat een event `flow.policy.blocked` naar de Hub. Een geblokkeerde flow krijgt geen events (ook afleveringen die
+  al wachtten, blijven staan) en geen nieuwe tokens; elk actieverzoek wordt geweigerd (403) en vastgelegd, met reden
+  `flow_geblokkeerd`, of de eigen reden als het verzoek ook om een andere reden niet mag (bijvoorbeeld
+  `onbekende_actie`); er gaat dan niets naar de Hub. Een bestaand token blijft bestaan, maar opent alleen nog: de eigen stand lezen
+  (`GET …/flow-api/me` toont de status en de reden, en `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het
+  bevestigen (`ack`/`nack`) van een aflevering die al vóór de blokkade was opgehaald; die wordt niet opnieuw
+  afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en niets van de flow naar de
+  Hub. Is de oorzaak weg, dan blijft elke flow die geblokkeerd was gepauzeerd tot een beheerder of operator hem
+  bewust hervat (ook een flow die alleen `bron_geblokkeerd` was).
+- **Grens van de blokkade:** de blokkade geldt voor wat deze dienst doet (events afleveren, actieverzoeken
+  doorsturen, tokens uitgeven); Node-RED zelf blijft de flows draaien. Omdat bij elke bevinding alle flows van de
+  bron geblokkeerd zijn, maakt het voor de blokkade niet uit langs welke weg tabbladen tijdens het draaien berichten
+  delen zonder dat het in de configuratie staat (de global context, een `http in` in het ene tabblad die een
+  `http request` uit het andere naar Node-RED zelf ontvangt, mqtt of websocket via een broker, tcp/udp en bestanden):
+  een niet-geblokkeerd tabblad naast een geblokkeerd bestaat niet. Wat de scan niet ziet, is wat een toegestane node
+  tijdens het draaien doet. De harde grens ligt daarom bij Node-RED zelf: met het manifest van jelly-leon-platform
+  (`install/manifests/node-red.manifest.yaml`) laadt Node-RED alleen de kernnodes uit `nodesIncludes` (geen exec,
+  function, file, mqtt, `http in`, websocket, tcp of udp; wel `http request`), staat installeren via het palet uit en
+  kunnen function-nodes geen externe modules laden. De scan is daarbovenop de vangst voor wat Node-RED toch aanneemt.
+  Die kanalen zijn niet getest, alleen vastgesteld uit de werking van Node-RED.
 
 ### 3. Eventtypencatalogus en afleveren (B11-002)
 

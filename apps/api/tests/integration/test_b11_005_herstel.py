@@ -287,7 +287,7 @@ def test_snapshot_with_a_now_forbidden_flow_cannot_be_restored(
 ) -> None:
     setup_node_red(linked, fake_hub, auth, flows=[*simple_flow(), *exec_flow()])
     bad = b11.snapshot(linked, auth)
-    assert bad["geblokkeerd"] == ["tabexec000000001"]
+    assert bad["geblokkeerd"] == ["tab0000000000001", "tabexec000000001"]  # grof blokkeren: de hele bron
     node_red_fake.deploy(simple_flow())
     b11.snapshot(linked, auth)
     r = b11.propose_restore(linked, auth, bad["snapshot"]["id"])

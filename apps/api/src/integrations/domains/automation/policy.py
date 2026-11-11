@@ -4,15 +4,16 @@ Drie onderdelen, alle drie fail-closed:
 
 1. **Flowscan** (:func:`scan`): elke node in de configuratie van Node-RED wordt gecontroleerd tegen de verboden typen
    (``exec``: shell-uitvoering), de toegestane modules (standaard alleen de kern ``node-red``) en de geïnstalleerde
-   typen. Een bevinding blokkeert de flow (tabblad): geen afleveringen, geen actieverzoeken, geen token. Bevindingen in
-   een subflow of een configuratienode gelden voor elke flow die hem gebruikt. Tabbladen die met elkaar verbonden
-   zijn (een gewone draad, een link-node of een eigenschap die naar een node in het andere tabblad wijst) delen hun
-   bevindingen: berichten lopen dan van het ene tabblad naar het andere. Een node met een ``z`` die geen tabblad is
-   draait in een tabblad dat Node-RED zelf aanmaakt en wordt zo gescand; een draad of link naar een id die nergens
-   staat is zelf een bevinding (``verwijzing_onbekend``). Let op: Node-RED 5 **accepteert** een flow met een
-   uitgesloten ``exec``-node gewoon (de node draait dan niet); daarom is deze eigen scan nodig. Wat tabbladen tijdens
-   het draaien delen zonder dat het in de configuratie staat (global context, een ``http in`` die ``http request``
-   naar Node-RED zelf doet, mqtt via een broker) kan geen scan zien; dat is de grens van de blokkade per tabblad.
+   typen, en de scan controleert of hij elke node kan plaatsen (vorm, dubbele id, tabblad, draden en links).
+   **Grof blokkeren** (besluit van de gebruiker, 2026-11-11): staat er ergens in de configuratie iets verbodens of
+   iets wat de dienst niet kan plaatsen, dan zijn **alle** flows (tabbladen) van de bron geblokkeerd tot het weg is:
+   geen afleveringen, geen actieverzoeken, geen token. De precieze uitkomst per tabblad blijft voor de melding: het
+   tabblad met de oorzaak (of dat er via een subflow, configuratienode, draad, link of eigenschap mee verbonden is)
+   krijgt die bevinding zelf, elk ander tabblad ``bron_geblokkeerd`` met de oorzaak en de plaats ervan. De scan bootst
+   Node-RED niet na om een uitzondering te maken. Let op: Node-RED 5 **accepteert** een flow met een uitgesloten
+   ``exec``-node gewoon (de node draait dan niet); daarom is deze eigen scan nodig. Wat tabbladen tijdens het draaien
+   delen zonder dat het in de configuratie staat (global context, een ``http in`` die ``http request`` naar Node-RED
+   zelf doet, mqtt via een broker) kan geen scan zien; zie ADR-0016 kop 2.
 2. **Isolatiecontrole** (:func:`check_isolation`): meet via de admin-API of de editor een aanmelding vraagt, of een
    anonieme lezer 401 krijgt, of de ``exec``-node ontbreekt, of het installeren van modules uit staat, of credentials
    met een eigen ``credentialSecret`` versleuteld zijn en of het dienstaccount alleen zijn minimale rechten heeft.
@@ -29,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -81,6 +82,22 @@ SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read
 PROFILE_REF = "vault://automation/node-red-profiel"
 BCRYPT_ROUNDS = 10
 MAX_FINDINGS = 50
+#: reden van een tabblad zonder eigen bevinding dat meegeblokkeerd is omdat elders in de configuratie iets staat
+SOURCE_BLOCKED = "bron_geblokkeerd"
+#: plaats van een oorzaak buiten elk tabblad en elke subflow (een configuratienode of een niet te plaatsen element)
+CONFIG_PLACE = "configuratie"
+#: elke reden waarmee de scan een flow blokkeert; is de oorzaak weg, dan wordt zo'n flow gepauzeerd (snapshots)
+BLOCK_REASONS = (
+    "verboden_node",
+    "module_niet_toegestaan",
+    "onbekend_type",
+    "verwijzing_onbekend",
+    "niet_plaatsbaar",
+    "tabblad_onbekend",
+    "vorm_ongeldig",
+    "dubbele_id",
+    SOURCE_BLOCKED,
+)
 
 
 def canonical(value: Any) -> bytes:
@@ -92,7 +109,7 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def flows_checksum(flows: list[dict[str, Any]]) -> str:
+def flows_checksum(flows: list[Any]) -> str:
     return sha256_hex(canonical(flows))
 
 
@@ -144,13 +161,19 @@ class ScanResult:
         }
 
 
-def _finding(code: str, node: dict[str, Any], **extra: Any) -> dict[str, Any]:
+def _finding(code: str, node: Any, **extra: Any) -> dict[str, Any]:
+    if not isinstance(node, dict):
+        return {"code": code, "node_id": "", "node_type": "", **extra}
     return {"code": code, "node_id": str(node.get("id"))[:64], "node_type": str(node.get("type"))[:80], **extra}
 
 
-def _node_findings(node: dict[str, Any], modules: dict[str, str], allowed: tuple[str, ...]) -> list[dict[str, Any]]:
+def _node_findings(
+    node: dict[str, Any], modules: dict[str, str], allowed: tuple[str, ...], subflows: Collection[str]
+) -> list[dict[str, Any]]:
     node_type = str(node.get("type"))
-    if node_type in STRUCTURAL_TYPES or node_type.startswith("subflow:"):
+    if node_type.startswith("subflow:"):
+        return [] if node_type.split(":", 1)[1] in subflows else [_finding("onbekend_type", node)]
+    if node_type in STRUCTURAL_TYPES:
         return []
     if node_type in FORBIDDEN_NODE_TYPES:
         return [_finding("verboden_node", node)]
@@ -162,71 +185,131 @@ def _node_findings(node: dict[str, Any], modules: dict[str, str], allowed: tuple
     return []
 
 
+def _shape_problems(node: Any) -> list[str]:
+    """De velden die Node-RED zelf leest en die niet de vorm hebben die deze dienst kan plaatsen (leeg: in orde): een
+    object met ``id`` en ``type`` als niet-lege tekst, ``z`` tekst of afwezig, ``wires`` een lijst van lijsten met
+    teksten en ``links`` een lijst met teksten. Wat Node-RED met een andere vorm doet, wordt niet nagebootst."""
+    if not isinstance(node, dict):
+        return ["node"]
+    bad = [key for key in ("id", "type") if not (isinstance(node.get(key), str) and node.get(key))]
+    if node.get("z") is not None and not isinstance(node.get("z"), str):
+        bad.append("z")
+    wires = node.get("wires", [])
+    if not (isinstance(wires, list) and all(isinstance(p, list) and all(isinstance(t, str) for t in p) for p in wires)):
+        bad.append("wires")
+    links = node.get("links", [])
+    if not (isinstance(links, list) and all(isinstance(t, str) for t in links)):
+        bad.append("links")
+    return bad
+
+
 def _references(node: dict[str, Any]) -> set[str]:
     """Alle tekstwaarden op het eerste niveau van een node (verwijzingen naar configuratienodes zijn zulke waarden)."""
     return {v for k, v in node.items() if isinstance(v, str) and k not in ("id", "type", "z", "name", "info")}
 
 
 def _targets(node: dict[str, Any]) -> set[str]:
-    """Elke id waar een node een bericht naartoe stuurt: ``wires`` (alle uitgangen, ook van een junction) en bij een
-    link-node ``links``. Node-RED zoekt zo'n id over **alle** flows heen (``Flow.getNode`` vraagt een onbekende id aan
-    de bovenliggende flow); een draad is dus net zo goed een verbinding tussen tabbladen als een link-node."""
-    out: set[str] = set()
-    wires = node.get("wires")
-    for port in wires if isinstance(wires, list) else []:
-        out |= {str(t) for t in (port if isinstance(port, list) else [port])}
-    links = node.get("links")
-    if node.get("type") in LINK_TYPES and isinstance(links, list):
-        out |= {str(t) for t in links}
+    """Elke id waar een node (met een geldige vorm) een bericht naartoe stuurt: ``wires`` (alle uitgangen, ook van een
+    junction) en bij een link-node ``links``. Node-RED zoekt zo'n id over **alle** flows heen (``Flow.getNode`` vraagt
+    een onbekende id aan de bovenliggende flow); een draad is dus net zo goed een verbinding tussen tabbladen."""
+    out = {t for port in node.get("wires") or [] for t in port}
+    if node.get("type") in LINK_TYPES:
+        out |= set(node.get("links") or [])
     return out
 
 
-def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: tuple[str, ...]) -> ScanResult:
+def scan(flows: list[Any], modules: dict[str, str], allowed_modules: tuple[str, ...]) -> ScanResult:
     """Controleert de volledige configuratie; geeft per tabblad bevindingen (blokkerend) en waarschuwingen.
 
-    Fail-closed, zoals Node-RED de configuratie zelf leest (``@node-red/runtime`` ``flows/util.js`` ``parseConfig``):
+    **Grof blokkeren** (besluit van de gebruiker, 2026-11-11): staat er **ergens** in de configuratie iets verbodens
+    (een verboden node, een onbekend type, een module buiten de allowlist; in een tabblad, een subflow of een
+    configuratienode, gebruikt of niet) of iets wat de dienst niet kan plaatsen, dan is **elk** tabblad van de bron
+    geblokkeerd tot het weg is. Niet te plaatsen is: een element met een andere vorm dan :func:`_shape_problems`
+    toestaat (``vorm_ongeldig``), een dubbele id (``dubbele_id``), een node met een ``z`` die geen tabblad of subflow
+    is (``tabblad_onbekend``), een draad of link naar een id die nergens staat (``verwijzing_onbekend``) en een draad
+    of link van of naar iets wat geen node in een tabblad of subflow is, zoals een configuratienode zonder ``z`` of
+    een tabblad zelf (``niet_plaatsbaar``). De scan bootst Node-RED niet na om een uitzondering te maken.
 
-    - een node met een ``z`` die geen tabblad of subflow is, draait in een tabblad dat Node-RED zelf aanmaakt
-      (``addedTabs``): hier is dat een eigen tabblad met de ``z`` als naam, met eigen bevindingen;
-    - een draad (``wires``), een link (``links``) of een eigenschap die naar een node in een ander tabblad, een
-      subflow of zo'n eigen tabblad wijst, verbindt de twee: verbonden tabbladen delen hun bevindingen (``via_link``);
-    - een draad of link naar een id die nergens in de configuratie staat (bijvoorbeeld de id die Node-RED een node in
-      een subflow-instantie pas tijdens het draaien geeft) is een eigen bevinding ``verwijzing_onbekend``.
+    De precieze uitkomst blijft voor de melding (welk tabblad de oorzaak is): een tabblad met de oorzaak zelf, of dat
+    er via een subflow, een configuratienode, een draad, een link of een eigenschap mee verbonden is, krijgt die
+    bevinding (``via_subflow``, ``via_config``, ``via_link``); elk ander tabblad krijgt ``bron_geblokkeerd`` met de
+    oorzaak en de plaats ervan (tabblad, subflow of ``configuratie``). Een niet te plaatsen node met de ``z`` van een
+    bekend tabblad of subflow telt voor dat tabblad (bevinding en checksum). Bevindingen buiten elk tabblad
+    (ongebruikte configuratienode of subflow, niet te plaatsen element zonder bekende ``z``) staan ook in
+    ``global_findings``. De uitkomst hangt alleen af van de configuratie zelf (volgorde van het document,
+    gesorteerde id's), niet van de volgorde van een set.
     """
-    real_tabs = [n for n in flows if n.get("type") == "tab"]
-    subflows = {str(n["id"]) for n in flows if n.get("type") == "subflow"}
-    members: dict[str, list[dict[str, Any]]] = {c: [] for c in {str(t["id"]) for t in real_tabs} | subflows}
+    unplaced_nodes: list[tuple[Any, dict[str, Any]]] = []
+    placeable: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in flows:
+        problems = _shape_problems(node)
+        if problems:
+            unplaced_nodes.append((node, _finding("vorm_ongeldig", node, velden=problems)))
+        elif node["id"] in seen:
+            unplaced_nodes.append((node, _finding("dubbele_id", node)))
+        else:
+            seen.add(node["id"])
+            placeable.append(node)
+    real_tabs = [n for n in placeable if n["type"] == "tab"]
+    subflow_ids = [str(n["id"]) for n in placeable if n["type"] == "subflow"]
+    subflows = set(subflow_ids)
+    members: dict[str, list[dict[str, Any]]] = {c: [] for c in [*(str(t["id"]) for t in real_tabs), *subflow_ids]}
     config_nodes: dict[str, dict[str, Any]] = {}
     ghost_tabs: dict[str, dict[str, Any]] = {}
-    for node in flows:
-        if node.get("type") in ("tab", "subflow"):
+    for node in placeable:
+        if node["type"] in ("tab", "subflow"):
             continue
-        z = str(node.get("z") or "")
+        z = node.get("z") or ""
         if not z:
-            config_nodes[str(node["id"])] = node  # configuratienode zonder z: geldt voor wie hem gebruikt
+            config_nodes[node["id"]] = node  # configuratienode zonder z: geldt voor wie hem gebruikt
             continue
-        if z not in members:  # spooktabblad: Node-RED maakt het zelf aan en laat de node draaien
+        if z not in members:  # node zonder plaatsbaar tabblad: eigen (spook)tabblad voor de melding
             members[z] = []
             ghost_tabs[z] = {"id": z, "type": "tab", "label": z, "disabled": False}
         members[z].append(node)
     tabs = [*real_tabs, *ghost_tabs.values()]
-    own: dict[str, list[dict[str, Any]]] = {
-        c: [f for node in nodes for f in _node_findings(node, modules, allowed_modules)] for c, nodes in members.items()
+    own: dict[str, list[dict[str, Any]]] = {}
+    for c, placed in members.items():
+        own[c] = []
+        for node in placed:
+            own[c].extend(_node_findings(node, modules, allowed_modules, subflows))
+            if c in ghost_tabs:
+                own[c].append(_finding("tabblad_onbekend", node))
+    # niet te plaatsen (vorm of dubbele id): met een bekende z telt de bevinding voor dat tabblad (en zijn checksum)
+    # voor de melding, anders buiten elk tabblad; blokkeren doet hij hoe dan ook alles
+    unplaced: list[dict[str, Any]] = []
+    strays: dict[str, list[Any]] = {}
+    for node, shape in unplaced_nodes:
+        found = [shape, *(_node_findings(node, modules, allowed_modules, subflows) if isinstance(node, dict) else [])]
+        z = node.get("z") if isinstance(node, dict) else None
+        if isinstance(z, str) and z in members:
+            own[z].extend(found)
+            strays.setdefault(z, []).append(node)
+        else:
+            unplaced.extend(found)
+    config_findings = {
+        cid: [
+            *_node_findings(node, modules, allowed_modules, subflows),
+            *(_finding("niet_plaatsbaar", node, ref=ref[:64]) for ref in sorted(_targets(node))),
+        ]
+        for cid, node in config_nodes.items()
     }
-    config_findings = {cid: _node_findings(node, modules, allowed_modules) for cid, node in config_nodes.items()}
-    container_of = {str(node.get("id")): c for c, nodes in members.items() for node in nodes}
+    container_of = {node["id"]: c for c, nodes in members.items() for node in nodes}
     edges: dict[str, set[str]] = {c: set() for c in members}
-    link_in = {c for c, nodes in members.items() if any(n.get("type") == "link in" for n in nodes)}
+    link_in = {c for c, nodes in members.items() if any(n["type"] == "link in" for n in nodes)}
     for c, c_nodes in members.items():
         for node in c_nodes:
             others: set[str] = set()
             for ref in sorted(_targets(node)):
                 if ref in container_of:
                     others.add(container_of[ref])
-                elif ref not in config_nodes:
+                elif ref in config_nodes or ref in members:
+                    own[c].append(_finding("niet_plaatsbaar", node, ref=ref[:64]))
+                else:
                     own[c].append(_finding("verwijzing_onbekend", node, ref=ref[:64]))
             others |= {container_of[ref] for ref in _references(node) if ref in container_of}
-            if node.get("type") == "link call" and node.get("linkType") == "dynamic":
+            if node["type"] == "link call" and node.get("linkType") == "dynamic":
                 others |= link_in  # kiest pas tijdens het draaien welk ``link in`` hij aanroept: elk telt
             for other in others - {c}:
                 edges[c].add(other)
@@ -235,7 +318,7 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
         c: {
             str(node["type"]).split(":", 1)[1]
             for node in nodes
-            if str(node.get("type")).startswith("subflow:") and str(node["type"]).split(":", 1)[1] in subflows
+            if str(node["type"]).startswith("subflow:") and str(node["type"]).split(":", 1)[1] in subflows
         }
         for c, nodes in members.items()
     }
@@ -257,10 +340,12 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
 
     linked = _linked_tabs(sorted(str(t["id"]) for t in tabs), closure, edges)
     used_config: set[str] = set()
+    reached: set[str] = set()
     result: list[TabScan] = []
     for tab in sorted(tabs, key=lambda t: str(t["id"])):
         tab_id = str(tab["id"])
         reach = closure(tab_id)
+        reached |= reach
         findings: list[dict[str, Any]] = []
         nodes: list[dict[str, Any]] = []
         configs: set[str] = set()
@@ -272,27 +357,20 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
         for cid in sorted(configs):
             findings.extend({**f, "via_config": True} for f in config_findings[cid])
         used_config |= configs
-        unknown_subflows = sorted(
-            {
-                str(node["type"])
-                for container in reach
-                for node in members[container]
-                if str(node.get("type")).startswith("subflow:") and str(node["type"]).split(":", 1)[1] not in subflows
-            }
-        )
-        findings.extend({"code": "onbekend_type", "node_id": "", "node_type": t[:80]} for t in unknown_subflows)
         own_nodes = members[tab_id]
         warnings = [_finding("risicovolle_node", n) for n in nodes if str(n.get("type")) in RISKY_TYPES]
         closure_doc = {
             "tab": tab,
             "nodes": sorted(own_nodes, key=lambda n: str(n["id"])),
             "subflows": [
-                [n for n in flows if n.get("type") == "subflow" and str(n["id"]) == s]
+                [n for n in placeable if n["type"] == "subflow" and str(n["id"]) == s]
                 + sorted(members[s], key=lambda n: str(n["id"]))
                 for s in sorted(reach - {tab_id})
             ],
             "config": [config_nodes[c] for c in sorted(configs)],
         }
+        if any(c in strays for c in reach):
+            closure_doc["niet_te_plaatsen"] = [[c, strays[c]] for c in sorted(reach) if c in strays]
         result.append(
             TabScan(
                 tab_id=tab_id,
@@ -306,8 +384,13 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
             )
         )
     _share_linked_findings(result, linked)
+    causes = [(c, f) for c in sorted(members) for f in own[c]]
+    causes += [(CONFIG_PLACE, f) for cid in sorted(config_findings) for f in config_findings[cid]]
+    causes += [(CONFIG_PLACE, f) for f in unplaced]
+    _block_the_whole_source(result, causes)
     unused = [f for cid, fs in sorted(config_findings.items()) if cid not in used_config for f in fs]
-    return ScanResult(tabs=result, global_findings=unused, node_count=len(flows))
+    unused += [{**f, "via_subflow": s} for s in subflow_ids if s not in reached for f in own[s]]
+    return ScanResult(tabs=result, global_findings=[*unused, *unplaced], node_count=len(flows))
 
 
 def _linked_tabs(
@@ -347,6 +430,28 @@ def _share_linked_findings(result: list[TabScan], linked: dict[str, set[str]]) -
         shared = [{**f, "via_link": o} for o in others for f in own[o][0]]
         t.findings = [*own[t.tab_id][0], *shared][:MAX_FINDINGS]
         t.checksum = sha256_hex(canonical({"tabblad": own[t.tab_id][1], "verbonden": [[o, own[o][1]] for o in others]}))
+
+
+def _block_the_whole_source(result: list[TabScan], causes: list[tuple[str, dict[str, Any]]]) -> None:
+    """Grof blokkeren: is er ergens een oorzaak, dan krijgt elk tabblad zonder eigen bevinding ``bron_geblokkeerd``
+    met per oorzaak de code, de node en de plaats. Zijn checksum volgt die oorzaken (een nieuwe oorzaak of het
+    weghalen ervan geeft een nieuwe versie); zonder oorzaak is hij precies die van het tabblad zelf."""
+    if not causes:
+        return
+    for t in result:
+        if t.findings:
+            continue
+        t.findings = [
+            {
+                "code": SOURCE_BLOCKED,
+                "oorzaak": f["code"],
+                "plaats": place,
+                "node_id": f["node_id"],
+                "node_type": f["node_type"],
+            }
+            for place, f in causes
+        ][:MAX_FINDINGS]
+        t.checksum = sha256_hex(canonical({"tabblad": t.checksum, "bron": t.findings}))
 
 
 # ---------------------------------------------------------------------------------------------------- isolatiecontrole

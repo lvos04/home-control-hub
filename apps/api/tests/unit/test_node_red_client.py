@@ -248,7 +248,7 @@ def test_client_retries_reads_but_reports_unreachable(fake: NodeRedFake) -> None
     [
         (b"geen json", "antwoord_ongeldig"),
         (b'{"flows": [], "rev": "KORT"}', "antwoord_ongeldig"),
-        (b'{"flows": [{"id": 1, "type": "tab"}], "rev": "0123456789abcdef"}', "antwoord_ongeldig"),
+        (b'{"flows": {"id": "tab0000000000001"}, "rev": "0123456789abcdef"}', "antwoord_ongeldig"),
         (b"[]", "antwoord_ongeldig"),
     ],
 )
@@ -262,6 +262,31 @@ def test_client_rejects_unexpected_flow_answers(fake: NodeRedFake, body: bytes, 
     with pytest.raises(NodeRedError) as err:
         c.get_flows()
     assert err.value.reason == reason  # nooit een lege lijst als 'geen flows'
+
+
+def test_client_passes_nodes_of_any_shape_on_to_the_scan_which_blocks_every_flow(fake: NodeRedFake) -> None:
+    """R-VEILIG-3 (herreview 3, grof blokkeren): een node met een id of type van een andere vorm, of een element dat
+    geen object is, is configuratie. De client geeft hem door (vroeger: antwoord_ongeldig, waardoor de synchronisatie
+    stopte en de flows bleven zoals ze waren) en de flowscan blokkeert dan elke flow (vorm_ongeldig)."""
+    body = json.dumps(
+        {
+            "flows": [*simple_flow(), {"id": 1, "type": "inject", "z": "tab0000000000001"}, ["exec"], None],
+            "rev": "0123456789abcdef",
+        }
+    ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/flows":
+            return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+        return fake.handle(request)
+
+    c = NodeRedClient(BASE, policy.SERVICE_USER, SERVICE_PW, SETTINGS, httpx.MockTransport(handler), lambda _s: None)
+    doc = c.get_flows()
+    assert doc.flows[-3:] == [{"id": 1, "type": "inject", "z": "tab0000000000001"}, ["exec"], None]
+    result = policy.scan(doc.flows, _modules(fake), ("node-red",))
+    # de node met de id als getal staat in het tabblad zelf; de twee andere elementen buiten elk tabblad
+    assert [(t.tab_id, t.blocked_reason) for t in result.tabs] == [("tab0000000000001", "vorm_ongeldig")]
+    assert [f["code"] for f in result.global_findings] == ["vorm_ongeldig", "vorm_ongeldig"], result.global_findings
 
 
 def test_client_turns_a_broken_compressed_answer_into_its_own_error(fake: NodeRedFake) -> None:
@@ -397,10 +422,11 @@ def test_scan_blocks_an_exec_node_even_when_node_red_accepts_the_flow(fake: Node
     c.post_flows(c.get_flows().rev, [*simple_flow(), *exec_flow()])  # Node-RED weigert dit niet (gemeten)
     result = policy.scan(c.get_flows().flows, _modules(fake), ("node-red",))
     by_label = {t.label: t for t in result.tabs}
-    assert by_label["Melding bij storing"].blocked is False
+    # grof blokkeren (besluit gebruiker, R-VEILIG-3 herreview 3): het schone tabblad is meegeblokkeerd
+    assert by_label["Melding bij storing"].blocked_reason == policy.SOURCE_BLOCKED
     blocked = by_label["Shell (verboden)"]
     assert blocked.blocked and blocked.blocked_reason == "verboden_node"
-    assert result.summary()["geblokkeerd"] == 1
+    assert result.summary()["geblokkeerd"] == 2
 
 
 def test_scan_blocks_exec_also_when_the_node_is_still_loaded() -> None:

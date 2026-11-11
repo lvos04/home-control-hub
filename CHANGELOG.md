@@ -12,12 +12,13 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   anonieme lezer moet 401 krijgen, besluit C-11), het editor-adres alleen voor een beheerder. Het
   beveiligingsprofiel (`POST …/automation/hardening-profile`) is geen installatiestap: besluit C-12 kiest een
   voorziening zonder geheim in het formulier via de manifeststandaard; het profiel vervalt daarna of wordt
-  daaraan gelijkgetrokken. Flows met een exec-node, een onbekend type of een module buiten de allowlist worden
-  geblokkeerd, en ook elk tabblad dat daarmee verbonden is (een gewone draad, een link-node of een eigenschap naar
-  een node in dat tabblad, ook via een subflow). Een node buiten elk bekend tabblad telt als eigen tabblad; een draad
-  of link naar een id die nergens staat blokkeert (`verwijzing_onbekend`). Wat tabbladen tijdens het draaien delen
-  (global context, http naar Node-RED zelf, mqtt) ziet de scan niet; zie ADR-0016 kop 2. Een Node-RED zonder
-  aanmelding wordt geweigerd.
+  daaraan gelijkgetrokken. Grof blokkeren (besluit van de gebruiker): staat er ergens in de configuratie van
+  Node-RED een exec-node, een onbekend type of een module buiten de allowlist, of iets wat de dienst niet kan
+  plaatsen (een vormfout in id, type, z, wires of links, een dubbele id, een node buiten elk bekend tabblad, een
+  draad of link naar een id die nergens staat of naar iets wat geen node in een tabblad is), dan worden **alle**
+  flows van Node-RED geblokkeerd tot het weg is. Het tabblad met de oorzaak (of dat ermee verbonden is) krijgt die
+  bevinding zelf, elk ander tabblad de reden `bron_geblokkeerd` met de oorzaak en de plaats; daarna blijven ze
+  gepauzeerd tot een beheerder ze hervat. Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
 - **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
   afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
 - **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst

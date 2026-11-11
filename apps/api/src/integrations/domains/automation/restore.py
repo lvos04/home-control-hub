@@ -114,6 +114,8 @@ def restore_view(row: AutomationRestore) -> dict[str, Any]:
 def _policy_problems(scan: policy.ScanResult) -> list[dict[str, Any]]:
     problems = [{"flow": t.label[:80], **f} for t in scan.tabs for f in t.findings]
     problems.extend(scan.global_findings)
+    # eerst de oorzaken zelf; een tabblad dat alleen meegeblokkeerd is (bron_geblokkeerd) telt ook, maar daarna
+    problems.sort(key=lambda f: f.get("code") == policy.SOURCE_BLOCKED)
     return problems[:20]
 
 
