@@ -24,6 +24,7 @@ from sqlalchemy import create_engine, text
 
 from integrations.config import Settings
 from tests.fakes.authentik_fake import AuthentikFake
+from tests.fakes.node_red_fake import NodeRedFake
 
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 TEST_DB_NAME = os.environ.get("HCH_TEST_DB_NAME", "hch_test_api")
@@ -33,6 +34,7 @@ ENV_TOKEN = "enr_" + ("hchTestEnvToken_" * 3)[:43]  # testwaarde (alleen de nep-
 PAIR_CODE = "KOPP-ELCO-DE42"  # normaliseert naar 12 Crockford-tekens (O→0, L→1)
 HUB_URL = "http://hub.test:30400"
 AUTHENTIK_URL = "http://authentik.test:9000"
+NODE_RED_URL = "http://nodered.test:1880"
 SIM_CLIENT_IP = "192.0.2.10"  # RFC 5737-documentatieadres; alleen voor de rate-limit van de nep-Hub
 #: wat een browser bij een formulier-POST van de eigen pagina meestuurt (contract 1.3 §3.7): Origin = schema://Host van
 #: de TestClient (``http://testserver``; 'testserver' is een naam zonder punt en dus een toegestane Host)
@@ -132,12 +134,13 @@ class HubKeys:
 
 @dataclass
 class FakeHub:
-    """Nep-Hub (``HubSim`` uit ``tests/e2e/sim_hub.py``) + nep-Authentik voor ``httpx.MockTransport``."""
+    """Nep-Hub (``HubSim`` uit ``tests/e2e/sim_hub.py``) + nep-Authentik + nep-Node-RED voor ``httpx.MockTransport``."""
 
     keys: HubKeys
     up: bool = True
     authentik_up: bool = True
     authentik: AuthentikFake = field(default_factory=AuthentikFake)
+    node_red: NodeRedFake = field(default_factory=NodeRedFake)
     client_ip: str = SIM_CLIENT_IP
     requests: list[httpx.Request] = field(default_factory=list)
     # paden waarvan de Hub het verzoek wél verwerkt maar het antwoord verloren gaat (crash/time-out halverwege)
@@ -186,6 +189,8 @@ class FakeHub:
             if not self.authentik_up:
                 raise httpx.ConnectError("verbinding geweigerd", request=request)
             return self.authentik.handle(request)
+        if url.host == "nodered.test":
+            return self.node_red.handle(request)  # gooit zelf ConnectError als de nep-Node-RED uit staat
         if url.host != "hub.test":
             raise httpx.ConnectError("onbekende host", request=request)
         if not self.up:
@@ -216,6 +221,14 @@ def fake_hub(hub_keys: HubKeys) -> FakeHub:
 @pytest.fixture
 def authentik_fake(fake_hub: FakeHub) -> AuthentikFake:
     return fake_hub.authentik
+
+
+@pytest.fixture
+def node_red_fake(fake_hub: FakeHub, tmp_path: Path) -> NodeRedFake:
+    """De nep-Node-RED achter ``NODE_RED_URL``; schrijft zijn ``flows_cred.json`` in een eigen tijdelijke datamap."""
+    fake_hub.node_red.data_dir = tmp_path / "node-red-data"
+    fake_hub.node_red.data_dir.mkdir()
+    return fake_hub.node_red
 
 
 @pytest.fixture
@@ -337,6 +350,12 @@ def paired_client(client: Any, fake_hub: FakeHub) -> Any:
     return client
 
 
+@pytest.fixture
+def linked(paired_client: Any) -> Any:
+    """Korte naam voor de gekoppelde app (de B11-tests gebruiken hem overal)."""
+    return paired_client
+
+
 class TokenHeaders(dict[str, str]):
     """Authorization-header die bij **elk** verzoek (en elke ``idem``/``fresh``) een nieuwe JWT maakt, zoals de Hub:
     een JWT (``jti``) mag voor hooguit één mutatie gebruikt worden (§4.6). Tests die hergebruik willen bewijzen,
@@ -356,6 +375,33 @@ def auth(hub_keys: HubKeys) -> Callable[..., dict[str, str]]:
         return TokenHeaders(lambda: hub_keys.token(list(roles), sub=sub))
 
     return _auth
+
+
+def setup_node_red(
+    client: Any,
+    fake_hub: FakeHub,
+    auth: Callable[..., dict[str, str]],
+    *,
+    harden: bool = True,
+    flows: list[dict[str, Any]] | None = None,
+    credentials: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Zoals de beheerder het doet: beveiligingsprofiel opvragen, Node-RED met die argumenten (her)starten en de bron
+    instellen. Geeft het profiel terug (met het eenmalig getoonde beheerwachtwoord)."""
+    r = client.post("/integrations/v1/automation/hardening-profile", json={}, headers=idem(auth("admin")))
+    assert r.status_code == 201, r.text
+    profile: dict[str, Any] = r.json()
+    if harden:
+        fake_hub.node_red.apply_arguments(profile["arguments"])
+    if flows is not None:
+        fake_hub.node_red.deploy(flows, credentials)
+    r = client.put(
+        "/integrations/v1/sources/node_red",
+        json={"base_url": NODE_RED_URL, "enabled": True},
+        headers=idem(auth("admin"), **{"If-Match": "*"}),
+    )
+    assert r.status_code == 200, r.text
+    return profile
 
 
 def fresh(headers: dict[str, str]) -> dict[str, str]:

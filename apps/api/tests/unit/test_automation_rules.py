@@ -1,0 +1,366 @@
+"""B11 — de vaste regels van de automatisering, zonder database of netwerk.
+
+Eventcatalogus (B11-002), voorbeeld-events (B11-004), de harde weigerlijst en scope van flow-tokens (B11-003, EX18,
+EX27, EX45), de flowscan (B11-001) en de kleine rekenregels van de wachtrij.
+"""
+
+from __future__ import annotations
+
+import copy
+import uuid
+from datetime import timedelta
+from typing import Any
+
+import pytest
+
+from integrations.domains.automation import actions, eventcatalog, inbox, policy, samples
+from tests.fakes.node_red_fake import exec_flow, node, simple_flow, tab
+
+
+def env(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "schema_version": "1.0",
+        "event_id": str(uuid.uuid4()),
+        "source_app": "home-control-hub",
+        "source_event_id": "test:1",
+        "event_type": "energy.reading.recorded",
+        "entity": {"type": "meter", "id": "meter-1"},
+        "timestamp_utc": "2026-01-01T12:00:00Z",
+        "trace_id": str(uuid.uuid4()),
+        "correlation_id": None,
+        "actor": {"type": "system", "id": "test"},
+        "classification": "internal",
+        "payload": {"vermogen_w": 100},
+        "payload_ref": None,
+    }
+    base.update(overrides)
+    return base
+
+
+# ------------------------------------------------------------------------------------------- eventcatalogus (B11-002)
+def test_valid_envelope_in_own_domain_is_deliverable() -> None:
+    verdict = eventcatalog.classify(env())
+    assert verdict.status == "geldig" and verdict.deliverable
+
+
+def test_unknown_schema_version_is_kept_and_named_not_dropped() -> None:
+    # de vorm van een onbekende versie kennen we niet: zelfs met vreemde velden wordt hij bewaard en gemeld
+    verdict = eventcatalog.classify(env(schema_version="9.9", nieuw_veld={"x": 1}, payload="geen object"))
+    assert verdict.status == "onbekende_schema_versie" and not verdict.deliverable
+    assert verdict.detail == {"schema_version": "9.9", "ondersteund": ["1.0"]}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "status", "reden"),
+    [
+        ({"event_type": "weer.meting.recorded"}, "onbekend_type", "domein_onbekend"),
+        ({"event_type": "app.iets.changed"}, "onbekend_type", "geen_vast_type_in_gedeeld_domein"),
+        ({"source_app": "mediaguard"}, "buiten_domein", "bron_is_geen_eigenaar"),
+        ({"source_app": "media-source-optimizer", "event_type": "media.item.added"}, "buiten_domein", None),
+        ({"source_app": "my-house", "event_type": "energy.reading.recorded"}, "buiten_domein", None),
+        (
+            {
+                "source_app": "onbekende-app",
+                "event_type": "app.health.changed",
+                "entity": {"type": "app", "id": "onbekende-app"},
+                "payload": {"status": "down"},
+            },
+            "buiten_domein",
+            "bron_onbekend",
+        ),
+    ],
+)
+def test_events_outside_the_catalog_are_classified(overrides: dict[str, Any], status: str, reden: str | None) -> None:
+    verdict = eventcatalog.classify(env(**overrides))
+    assert verdict.status == status and not verdict.deliverable
+    if reden is not None:
+        assert verdict.detail["reden"] == reden
+
+
+def test_typed_event_payload_is_checked() -> None:
+    good = env(
+        source_app="mediaguard",
+        event_type="app.health.changed",
+        entity={"type": "app", "id": "mediaguard"},
+        payload={"status": "down"},
+    )
+    assert eventcatalog.classify(good).status == "geldig"
+    bad_status = copy.deepcopy(good)
+    bad_status["payload"]["status"] = "kapot"
+    verdict = eventcatalog.classify(bad_status)
+    assert verdict.status == "ongeldige_payload" and verdict.detail["getypeerd"] is True
+    other_app = copy.deepcopy(good)
+    other_app["entity"]["id"] = "jelly-leon"  # een app meldt alleen zijn eigen gezondheid
+    verdict = eventcatalog.classify(other_app)
+    assert verdict.status == "buiten_domein" and verdict.detail["reden"] == "niet_over_de_eigen_app"
+    service = env(event_type="service.token.rotated", entity={"type": "service", "id": "mediaguard"}, payload={})
+    assert eventcatalog.classify(service).status == "buiten_domein"
+    service["entity"] = {"type": "service", "id": "home-control-hub"}
+    assert eventcatalog.classify(service).status == "geldig"
+    service["entity"] = {"type": "app", "id": "home-control-hub"}
+    assert eventcatalog.classify(service).status == "ongeldige_payload"
+    assert eventcatalog.classify(env(payload={"ernst": "paniek"})).status == "ongeldige_payload"
+    assert eventcatalog.classify(env(payload={"ernst": "hoog"})).status == "geldig"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "veld"),
+    [
+        ({"event_id": "geen-uuid"}, "event_id"),
+        ({"source_app": "Hoofdletters"}, "source_app"),
+        ({"source_event_id": ""}, "source_event_id"),
+        ({"event_type": "GEEN.geldig"}, "event_type"),
+        ({"entity": {"type": "meter"}}, "entity"),
+        ({"entity": {"type": "Met Spatie", "id": "x"}}, "entity.type"),
+        ({"timestamp_utc": "2026-01-01 12:00"}, "timestamp_utc"),
+        ({"trace_id": "x"}, "trace_id"),
+        ({"correlation_id": "x"}, "correlation_id"),
+        ({"actor": {"type": "robot", "id": "x"}}, "actor.type"),
+        ({"classification": "geheim"}, "classification"),
+        ({"payload": [1, 2]}, "payload"),
+        ({"payload": {"x": "y" * (16 * 1024)}}, "payload"),
+        ({"payload_ref": 5}, "payload_ref"),
+        ({"extra": 1}, "extra"),
+    ],
+)
+def test_malformed_envelopes_are_rejected_with_the_field(overrides: dict[str, Any], veld: str) -> None:
+    with pytest.raises(eventcatalog.EnvelopeError) as caught:
+        eventcatalog.classify(env(**overrides))
+    assert veld in [f["veld"] for f in caught.value.fouten]
+
+
+def test_missing_required_field_and_non_object() -> None:
+    broken = env()
+    del broken["actor"]
+    with pytest.raises(eventcatalog.EnvelopeError) as caught:
+        eventcatalog.classify(broken)
+    assert {"veld": "actor", "probleem": "verplicht veld ontbreekt"} in caught.value.fouten
+    with pytest.raises(eventcatalog.EnvelopeError):
+        eventcatalog.classify("geen object")  # type: ignore[arg-type]
+
+
+def test_trigger_rules() -> None:
+    assert eventcatalog.trigger_problem("energy.reading.recorded", "1.0") is None
+    assert eventcatalog.trigger_problem("app.health.changed", "1.0") is None
+    assert "schema-versie" in str(eventcatalog.trigger_problem("energy.reading.recorded", "2.0"))
+    assert "catalogus" in str(eventcatalog.trigger_problem("weer.meting.recorded", "1.0"))
+    assert "vaste typen" in str(eventcatalog.trigger_problem("app.iets.changed", "1.0"))
+    assert "geldig eventtype" in str(eventcatalog.trigger_problem("Energy", "1.0"))
+    assert "geldig eventtype" in str(eventcatalog.trigger_problem("a." * 70 + "b", "1.0"))
+
+
+def test_catalog_view_is_complete_and_honest() -> None:
+    view = eventcatalog.catalog_view()
+    assert view["envelope"]["schema_versions"] == ["1.0"] and view["envelope"]["max_payload_bytes"] == 16384
+    assert set(view["envelope"]["required"]) | set(view["envelope"]["optional"]) == set(eventcatalog.ENVELOPE_FIELDS)
+    assert view["owners"]["home-control-hub"] == ["sso", "energy", "network", "automation", "flow"]
+    assert "media-source-optimizer" not in view["owners"] and "my-house" not in view["owners"]
+    types = [item["event_type"] for item in view["items"]]
+    assert len(types) == len(set(types)) and "app.health.changed" in types
+    for item in view["items"]:
+        assert item["soort"] in ("probleem", "herstel", "informatie") and item["sources"]
+        assert item["schema_versions"] == ["1.0"] and item["contract_ref"]
+    assert any("MSO en my_house" in note for note in view["notes_nl"])
+    assert eventcatalog.owners_of("media") == ["jelly-leon", "mediaguard"]
+    assert eventcatalog.owners_of("app") == sorted(eventcatalog.OWNER_DOMAINS)
+    assert eventcatalog.verb_kind("failed") == "probleem" and eventcatalog.verb_kind("recorded") == "informatie"
+
+
+# ----------------------------------------------------------------------------------------- voorbeeld-events (B11-004)
+def test_samples_are_fixed_valid_and_marked_as_examples() -> None:
+    assert samples.checksum() == samples.SAMPLES_SHA256
+    verified = samples.verified()
+    assert list(verified) == [
+        "energie-meting",
+        "netwerk-nieuw-apparaat",
+        "backup-mislukt",
+        "app-gezondheid",
+        "download-mislukt",
+        "toegang-ingetrokken",
+    ]
+    for sample in verified.values():
+        envelope = sample["envelope"]
+        assert envelope["payload"]["voorbeeld"] is True and envelope["actor"] == {"type": "system", "id": "voorbeeld"}
+        assert envelope["classification"] != "sensitive"
+        assert eventcatalog.classify(envelope).status == "geldig", sample["id"]
+    # geen echte waarden: geen IP-adres, geen poolnaam, alleen .invalid-adressen
+    text = str(samples.SAMPLES)
+    assert "192.168." not in text and "tank" not in text
+
+
+def test_samples_cannot_be_changed_by_a_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    copy_ = samples.verified()
+    copy_["energie-meting"]["envelope"]["payload"]["vermogen_w"] = 999_999
+    assert samples.verified()["energie-meting"]["envelope"]["payload"]["vermogen_w"] == 420
+    changed = copy.deepcopy(samples.SAMPLES)
+    changed[0]["envelope"]["payload"]["vermogen_w"] = 1
+    monkeypatch.setattr(samples, "SAMPLES", changed)
+    with pytest.raises(samples.SamplesChanged):
+        samples.verified()
+
+
+# ------------------------------------------------------------------------- harde weigerlijst (B11-003, EX27, EX45)
+@pytest.mark.parametrize(
+    ("action_id", "target", "parameters", "reden"),
+    [
+        ("zfs.dataset.delete", {"type": "dataset", "id": "x"}, {}, "destructief_verboden"),
+        ("zfs.dataset.destroy", {}, {}, "destructief_verboden"),
+        ("zfs.pool.wipe", {}, {}, "destructief_verboden"),
+        ("media.library.purge", {}, {}, "destructief_verboden"),
+        ("app.uninstall_data", {}, {}, "destructief_verboden"),
+        ("disk.format", {}, {}, "destructief_verboden"),
+        ("energy.boiler.switch", {}, {}, "boiler_nooit"),
+        ("device.switch.set", {"type": "device", "id": "Boiler-zolder"}, {}, "boiler_nooit"),
+        ("device.switch.set", {"type": "device", "id": "stekker-3"}, {"entity": "switch.warmwater"}, "boiler_nooit"),
+        ("device.switch.set", {"type": "device", "id": "x"}, {"naam": {"diep": ["water_heater"]}}, "boiler_nooit"),
+        ("system.shell.run", {}, {}, "shell_verboden"),
+        ("system.sudo.run", {}, {}, "shell_verboden"),
+        ("app.exec", {}, {}, "shell_verboden"),
+        ("docker.container.start", {}, {}, "shell_verboden"),
+        ("host.ssh_command", {}, {}, "shell_verboden"),
+        ("policy.rule.update", {}, {}, "beleid_verboden"),
+        ("sso.user.create", {}, {}, "beleid_verboden"),
+        ("app.rbac.update", {}, {}, "beleid_verboden"),
+        ("claude.overage.enable", {}, {}, "betaald_verboden"),
+        ("store.purchase.create", {}, {}, "betaald_verboden"),
+    ],
+)
+def test_hard_refusals(action_id: str, target: dict[str, Any], parameters: dict[str, Any], reden: str) -> None:
+    assert actions.local_refusal(action_id, target, parameters) == reden
+    assert reden in actions.REFUSALS_NL
+
+
+@pytest.mark.parametrize(
+    ("action_id", "target", "parameters"),
+    [
+        ("notification.send", {"type": "user", "id": "user-1"}, {"tekst": "De boiler verbruikt veel stroom"}),
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {}),
+        ("zfs.snapshot.create", {"type": "dataset", "id": "x"}, {"naam": "voor-update"}),
+        ("app.update", {"type": "app", "id": "shelly-dashboard"}, {}),  # 'sh' alleen als los segment verboden
+        ("device.switch.set", {"type": "device", "id": "lamp-1"}, {"aan": True}),
+    ],
+)
+def test_ordinary_actions_are_not_refused_locally(
+    action_id: str, target: dict[str, Any], parameters: dict[str, Any]
+) -> None:
+    assert actions.local_refusal(action_id, target, parameters) is None
+
+
+def test_boiler_in_a_notification_target_is_still_refused() -> None:
+    # alleen de vrije tekst van een melding is uitgezonderd; het doel wordt altijd bekeken
+    assert actions.local_refusal("notification.send", {"type": "device", "id": "boiler"}, {}) == "boiler_nooit"
+
+
+def test_token_scope_rules() -> None:
+    assert actions.scope_problem("notification.send") is None
+    assert actions.scope_problem("app.*") is None
+    assert actions.scope_problem("zfs.snapshot.create") is None
+    for bad in ("*", "App.Restart", "app..x", "app.*.x", "a" * 90, "zfs.dataset.delete", "energy.boiler.*", "shell.*"):
+        assert actions.scope_problem(bad) is not None, bad
+    assert actions.in_scope("app.restart", ["app.*"])
+    assert actions.in_scope("notification.send", ["notification.send"])
+    assert not actions.in_scope("application.restart", ["app.*"]), "een patroon geldt per segment, niet per voorvoegsel"
+    assert not actions.in_scope("app.restart", ["notification.send"])
+    assert not actions.in_scope("app.restart", [])
+
+
+def test_risk_preview_ignores_the_claim_of_the_flow() -> None:
+    preview = actions.risk_preview("app.update", "R0")
+    assert preview["klasse_min"] == "R2" and preview["goedkeuring_vereist"] is True
+    assert preview["risk_claim"] == "R0" and preview["risk_claim_genegeerd"] is True
+    assert actions.risk_preview("notification.send", None)["goedkeuring_vereist"] is False
+    unknown = actions.risk_preview("device.switch.set", "R0")
+    assert unknown["bekend"] is False and unknown["klasse_min"] is None and unknown["goedkeuring_vereist"] is None
+
+
+def test_dedupe_key_binds_flow_event_action_and_exact_parameters() -> None:
+    flow, event = uuid.uuid4(), uuid.uuid4()
+    key = actions.dedupe_key(flow, event, "app.restart", {"type": "app", "id": "a"}, {"x": 1, "y": 2})
+    assert key == actions.dedupe_key(flow, event, "app.restart", {"id": "a", "type": "app"}, {"y": 2, "x": 1})
+    assert key != actions.dedupe_key(flow, uuid.uuid4(), "app.restart", {"type": "app", "id": "a"}, {"x": 1, "y": 2})
+    assert key != actions.dedupe_key(uuid.uuid4(), event, "app.restart", {"type": "app", "id": "a"}, {"x": 1, "y": 2})
+    assert key != actions.dedupe_key(flow, event, "app.stop", {"type": "app", "id": "a"}, {"x": 1, "y": 2})
+    assert key != actions.dedupe_key(flow, event, "app.restart", {"type": "app", "id": "b"}, {"x": 1, "y": 2})
+    assert key != actions.dedupe_key(flow, event, "app.restart", {"type": "app", "id": "a"}, {"x": 1, "y": 3})
+
+
+# ------------------------------------------------------------------------------------------------- wachtrij (EX46)
+def test_backoff_grows_and_is_capped() -> None:
+    assert [inbox.backoff(n).total_seconds() for n in (0, 1, 2, 3, 4)] == [30, 30, 60, 120, 240]
+    assert inbox.backoff(50) == timedelta(hours=1)
+    assert inbox.MAX_ATTEMPTS == 10
+
+
+def test_origin_chain_only_keeps_wellformed_unique_flow_entries() -> None:
+    a, b = inbox.chain_entry(uuid.uuid4()), inbox.chain_entry(uuid.uuid4())
+    assert inbox.clean_chain([a, b, a, "flow:nee", 7, None, "user:x"]) == [a, b]
+    assert inbox.clean_chain("flow:x") == [] and inbox.clean_chain(None) == []
+    many = [inbox.chain_entry(uuid.uuid4()) for _ in range(40)]
+    assert len(inbox.clean_chain(many)) == inbox.MAX_CHAIN * 2
+
+
+# ----------------------------------------------------------------------------------------------- flowscan (B11-001)
+MODULES = {"inject": "node-red", "function": "node-red", "debug": "node-red", "exec": "node-red", "x": "contrib-x"}
+ALLOWED = ("node-red",)
+
+
+def test_scan_blocks_exec_and_unknown_and_foreign_modules() -> None:
+    flows = [
+        *simple_flow(),
+        *exec_flow(),
+        tab("tabvreemd0000001", "Vreemd"),
+        node("vreemd0000000001", "x", "tabvreemd0000001"),
+        node("vreemd0000000002", "bestaat-niet", "tabvreemd0000001"),
+    ]
+    result = policy.scan(flows, MODULES, ALLOWED)
+    by_tab = {t.tab_id: t for t in result.tabs}
+    assert by_tab["tab0000000000001"].blocked is False and by_tab["tab0000000000001"].blocked_reason is None
+    assert by_tab["tabexec000000001"].blocked_reason == "verboden_node"
+    codes = sorted(f["code"] for f in by_tab["tabvreemd0000001"].findings)
+    assert codes == ["module_niet_toegestaan", "onbekend_type"]
+    assert result.summary()["geblokkeerd"] == 2 and result.node_count == len(flows)
+    # dezelfde module wél toegestaan: alleen het onbekende type blijft over
+    again = policy.scan(flows, MODULES, ("node-red", "contrib-x"))
+    assert [f["code"] for f in {t.tab_id: t for t in again.tabs}["tabvreemd0000001"].findings] == ["onbekend_type"]
+
+
+def test_scan_follows_subflows_and_config_nodes() -> None:
+    flows = [
+        tab("tabschoon0000001", "Lijkt schoon"),
+        node("schoon0000000001", "subflow:sub0000000000001", "tabschoon0000001"),
+        {"id": "sub0000000000001", "type": "subflow", "name": "Verstopt"},
+        node("sub00000exec0001", "exec", "sub0000000000001", command="true"),
+        tab("tabconfig0000001", "Met configuratie"),
+        node("config0000000001", "inject", "tabconfig0000001", broker="cfg0000000000001"),
+        {"id": "cfg0000000000001", "type": "x", "name": "vreemde configuratie"},
+        {"id": "cfg0000000000002", "type": "x", "name": "ongebruikt"},
+        tab("tabweg0000000001", "Verwijst naar niets"),
+        node("weg0000000000001", "subflow:bestaat-niet", "tabweg0000000001"),
+    ]
+    result = policy.scan(flows, MODULES, ALLOWED)
+    by_tab = {t.tab_id: t for t in result.tabs}
+    hidden = by_tab["tabschoon0000001"].findings
+    assert [f["code"] for f in hidden] == ["verboden_node"] and hidden[0]["via_subflow"] == "sub0000000000001"
+    via_config = by_tab["tabconfig0000001"].findings
+    assert [f["code"] for f in via_config] == ["module_niet_toegestaan"] and via_config[0]["via_config"] is True
+    assert [f["code"] for f in by_tab["tabweg0000000001"].findings] == ["onbekend_type"]
+    assert [f["node_id"] for f in result.global_findings] == ["cfg0000000000002"]
+
+
+def test_scan_checksum_changes_only_with_the_flow_itself() -> None:
+    base = policy.scan(simple_flow(), MODULES, ALLOWED).tabs[0].checksum
+    other_tab = [
+        *simple_flow(),
+        tab("tabander00000001", "Ander"),
+        node("ander00000000001", "debug", "tabander00000001"),
+    ]
+    assert policy.scan(other_tab, MODULES, ALLOWED).tabs[0].checksum == base
+    changed = simple_flow()
+    for n in changed:
+        if n["type"] == "function":
+            n["func"] = "return null;"
+    assert policy.scan(changed, MODULES, ALLOWED).tabs[0].checksum != base
+    # de checksum van het geheel hangt niet af van de volgorde van de velden binnen een node
+    shuffled = [dict(reversed(list(n.items()))) for n in simple_flow()]
+    assert policy.flows_checksum(simple_flow()) == policy.flows_checksum(shuffled)
+    assert policy.flows_checksum(simple_flow()) != policy.flows_checksum(changed)
