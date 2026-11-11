@@ -247,7 +247,10 @@ TRUNCATE = (
     "TRUNCATE service_state, idempotency_record, outbox_event, vault_secret, integration_source, audit_event, "
     "sso_admin_account, sso_recovery_method, sso_emergency_access, sso_break_glass_activation, sso_break_glass_drill, "
     "sso_recovery_kit_export, jwt_jti_use, sso_app_setting, sso_group_role_mapping, sso_proposal, "
-    "sso_authentik_snapshot, sso_auth_event, sso_anomaly RESTART IDENTITY CASCADE"
+    "sso_authentik_snapshot, sso_auth_event, sso_anomaly, automation_flow, automation_snapshot, "
+    "automation_flow_version, automation_trigger, automation_flow_token, automation_event, automation_delivery, "
+    "automation_flow_run, automation_action_request, automation_replay_key, automation_rate_limit, "
+    "automation_flow_owner, automation_restore, automation_execution_nonce RESTART IDENTITY CASCADE"
 )
 
 
