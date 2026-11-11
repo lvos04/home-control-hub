@@ -1,0 +1,235 @@
+# ADR-0016 — B11 Node-RED-automatisering (B11-001…005, fase P2)
+
+Status: aanvaard · Datum: 2026-11-11 · Fase: P2 · Bouwplan `B11_AUTOMATISERING.md`, installatie `I10_NODE_RED.md`,
+platformcontract `contracts 1.3` (§4, §5, §6, §7, §8) · Volgt op ADR-0015
+
+## Context
+
+Tot nu toe had B11 alleen een datamodel en een inventaris; de data-endpoints gaven `501 capability_unavailable`.
+Deze ronde bouwt de vijf werkpakketten:
+
+| ID | Acceptatie uit de Excel |
+|---|---|
+| B11-001 flow-netwerkisolatie | Viewer kan de editor niet bereiken en een custom exec-node is geblokkeerd |
+| B11-002 eventtypencatalogus | Een event met onbekende schema-versie verdwijnt niet stil |
+| B11-003 veilige acties | Een flow mag zonder admin geen dataset-delete uitvoeren |
+| B11-004 simulatie en tests | Geen echte apparaten gewijzigd tijdens een test |
+| B11-005 herstel en versiebeheer | Undo herstelt oude flows inclusief credentials zonder geheimen te loggen |
+
+**Wat wel en niet is gemeten**
+
+- Alles is getest met een in-repo Node-RED-simulator (`apps/api/tests/fakes/node_red_fake.py`) en een Hub-simulator
+  (`tests/e2e/sim_hub.py`): **Sim-getest**.
+- De aannames over Node-RED zelf zijn daarnaast nagemeten tegen de **gepinde officiële image** in lokale
+  Docker-containers op de ontwikkelmachine (`tools/node_red_verify.py`, 39 controles, uitkomst in
+  `docs/b11/node-red-verificatie.json`). De simulator volgt precies die gemeten feiten
+  (`test_fake_matches_the_verified_image_facts`). Die meting is gedaan met het eigen profiel van deze dienst
+  (gebruiker 1000, eigen argumenten), niet met het manifest van `jelly-leon-platform` (zie besluit 1).
+- NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
+- **NIET GEVALIDEERD (echte NAS):** de installatie via het Custom App-formulier, de netwerkafscherming op de NAS, de
+  dataset-rechten, een echte Hub die actieverzoeken beoordeelt en echte apparaten.
+
+## Besluiten
+
+### 1. Node-RED is een eigen standaard Custom App; deze dienst leest en bewaakt
+
+- **Installatieweg (bijgewerkt 2026-11-11, besluiten C-11 en C-12 van de gebruiker):** Node-RED wordt geïnstalleerd
+  als standaard Custom App volgens het manifest van `jelly-leon-platform` (`install/manifests/node-red.manifest.yaml`,
+  ADR-0023 daar; installatiestap I10 hoort bij die repo), nooit met YAML of compose. Dat manifest draait Node-RED als
+  568:568 en zet de instellingen via de omgevingsvariabele `FLOWS`. `deploy/truenas/NODE_RED_CUSTOM_APP.md` verwijst
+  daarnaar en beschrijft alleen wat in deze dienst wordt ingesteld; het bevat geen eigen formuliervelden.
+- **Besluit C-11:** geen anonieme toegang tot de editor; alleen bruikbaar via een beheerder. De controle
+  `anoniem_geweigerd` (401) blijft zoals hij is. Het manifest van `jelly-leon-platform` volgt dit pas na stap
+  S-P2-410 (tot dan "anoniem alleen lezen"); tot die tijd geeft de controle tegen een volgens dat manifest
+  geïnstalleerde Node-RED een afwijking.
+- **Besluit C-12:** het beveiligingsprofiel hieronder is een tweede beschrijving van de installatie en zet geheimen
+  (wachtwoord-hashes, `credentialSecret`) in het Custom App-formulier, tegen contract §3.1 ("Nooit geheimen in het
+  Custom App-formulier"). De manifeststandaard (`appstore-en-fork`) krijgt een voorziening voor een beheerder en een
+  dienstaccount zonder geheim in het formulier (ontwerp in stap S-P2-510, bouw na fase P2); het profiel vervalt
+  daarna of wordt daaraan gelijkgetrokken. Tot dan wordt het profiel niet gewijzigd of uitgebreid, en het is geen
+  installatiestap. Wat hieronder over het profiel staat, beschrijft de bestaande code.
+- Image `docker.io/nodered/node-red`, tag `5.0.9`, vastgezet op de digest van de multi-arch-index
+  (`catalog.NODE_RED_DIGEST`); dezelfde digest als in het manifest van `jelly-leon-platform` (daar tag `5.0.9-24`).
+- Het profiel zet de instellingen als **argumenten** (`--define=<sleutel>=<waarde>`, één per regel, zonder shell).
+  Gemeten: de omgevingsvariabele `NODE_RED_CREDENTIAL_SECRET` wordt door de image **niet** gebruikt; alleen
+  `--define=credentialSecret=…` werkt. Gevolg: met het profiel staan de `credentialSecret` en de bcrypt-hashes in de
+  formulierwaarden van TrueNAS. Dit is gemeld als contractpunt (zie onderaan) en is de aanleiding van besluit C-12.
+- `POST /integrations/v1/automation/hardening-profile` (alleen beheerder) maakt die argumenten: `adminAuth` met twee
+  accounts (`hub-dienst` met alleen `flows.read`, `flows.write`, `nodes.read`, `settings.read`, `diagnostics.read`;
+  `beheerder` voor de editor), `nodesExcludes` (`90-exec.js`), geen externe modules, geen palette-installatie, een
+  eigen `credentialSecret`. Het beheerwachtwoord en de argumenten worden één keer getoond; bewaard blijft alleen wat
+  de dienst zelf nodig heeft, versleuteld in de vault. Een herhaald verzoek met dezelfde `Idempotency-Key` krijgt het
+  gemaskeerde antwoord.
+- De dienst **weigert een onbeveiligde Node-RED** (`niet_beveiligd`): zonder aanmelding wordt er niets gelezen en
+  niets geschreven.
+
+### 2. Isolatie wordt gemeten, niet aangenomen (B11-001)
+
+- `POST …/automation/isolation/check` meet wat via de admin-API meetbaar is: aanmelding verplicht, anoniem 401,
+  exec-node niet geladen, alleen modules van de allowlist (`HCH_NODE_RED_ALLOWED_MODULES`, standaard alleen de kern
+  `node-red`), geen externe modules in function-nodes, credentials met een eigen sleutel, rechten van het
+  dienstaccount.
+- Wat alleen op de NAS zelf te zien is (`niet_root`, `geen_docker_socket`, `prive_netwerk`) krijgt de stand
+  `niet_meetbaar` en staat als controlelijst in `deploy/truenas/NODE_RED_CUSTOM_APP.md`. Het wordt nooit als
+  "in orde" gemeld.
+- Een meting ouder dan 15 minuten telt niet meer: de stand is dan `onbekend`.
+- **De editor:** `GET …/automation/editor` geeft het adres alleen aan een beheerder (viewer en operator: 403). Node-RED
+  zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
+- **Exec-node:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt (de node draait niet,
+  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Een flow met
+  een verboden node, een onbekend type of een module buiten de allowlist wordt **geblokkeerd**: geen events, geen
+  nieuwe tokens, elk verzoek met een bestaand token wordt geweigerd, en een event `flow.policy.blocked` gaat naar de
+  Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een beheerder of operator hem bewust hervat.
+
+### 3. Eventtypencatalogus en afleveren (B11-002)
+
+- De catalogus volgt §7: domeinen per eigenaar, de gedeelde domeinen `app` en `service` alleen met de vaste typen en
+  alleen over de eigen app, en per type een schema per versie.
+- Elk aangeboden event wordt bewaard met een catalogusstatus. Een **onbekende schema-versie** wordt bewaard, is
+  zichtbaar in `GET …/automation/events`, wordt niet afgeleverd en geeft een event `automation.event.rejected` (één
+  keer per uur per soort). Het antwoord is dan `202` met `catalog_status`, niet `201`.
+- Een **kapotte envelope** (onbekend veld, verkeerd type) is `422` en wordt niet bewaard: daar is niets betrouwbaars
+  aan om te tonen.
+- Afleveren gaat per flow en **per bron in volgorde**: een mislukte aflevering houdt latere events van dezelfde bron
+  tegen. Herhalen met oplopende wachttijd, na 10 pogingen `dead_letter` (zichtbaar, opnieuw aan te bieden door een
+  operator). Dubbele events worden één keer afgeleverd.
+- **Lussen:** elk actieverzoek draagt de keten van flows mee. Een event dat door een eigen actie van de flow is
+  veroorzaakt, gaat niet naar die flow terug; een keten langer dan 8 wordt geweigerd.
+- Events met classificatie `sensitive` of hoger gaan nooit naar een flow.
+- **Bron van de events:** `POST …/automation/events` neemt alleen een dienst-JWT van de Hub aan. De eigen events van
+  deze dienst (outbox) biedt de worker zelf aan de flows aan.
+
+### 4. Flows vragen aan, de Hub beslist (B11-003)
+
+- Een flow praat met een eigen **flow-API** (`/integrations/v1/automation/flow-api/*`) en een **flow-token** (`flw_…`,
+  één keer getoond, alleen de hash bewaard, per flow, met een lijst toegestane acties). Een flow krijgt pas een token
+  als hij een eigenaar heeft.
+- De flow-API opent niets anders: met een flow-token is elke andere route `401`, en een Hub-JWT (ook van een
+  beheerder) is op de flow-API `401 flow_token_ongeldig`.
+- `POST …/flow-api/actions` voert **nooit** iets uit. Een toegestaan verzoek wordt een event `flow.action.requested`
+  voor de Hub; de Hub maakt er een ActionProposal van en beslist met zijn eigen policy. Een `risk_claim` van de flow
+  wordt bewaard als informatie en verder genegeerd.
+- **Altijd geweigerd**, ook als een beheerder het token ruim heeft gemaakt (`403` met `details.reason`, plus een
+  event `flow.action.rejected`):
+  - `boiler_nooit` — actie-ID en doel worden altijd doorzocht; ook parameters, behalve bij acties die alleen tekst
+    afleveren (`notification.send`), zodat een melding óver de boiler wel kan;
+  - `destructief_verboden` — verwijderen of wissen, bijvoorbeeld `zfs.dataset.delete`;
+  - `shell_verboden`, `beleid_verboden`, `betaald_verboden`, `geheim_in_parameters`.
+- **"Zonder admin" is streng gelezen:** een destructieve actie kan nooit via een flow, ook niet met goedkeuring. Wie
+  een dataset wil verwijderen, doet dat zelf in de Hub.
+- Een tokenscope met een verboden actie wordt al bij het uitgeven geweigerd (`422`).
+- **Ontdubbeling:** hetzelfde event dat vijf keer binnenkomt geeft één aflevering en één actieverzoek (sleutel over
+  flow, event, actie en exacte parameters). Elke mutatie vraagt een `Idempotency-Key`.
+- **Grenzen:** standaard 30 verzoeken per uur per flow en actie; een beheerder kan dat alleen strenger zetten.
+- Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
+  ongezien alsnog uitgevoerd zou worden.
+- De Hub meldt de uitkomst terug met `POST …/action-requests/{id}/result` (alleen dienst-JWT). Een eindstand
+  (`uitgevoerd`, `geweigerd`, `mislukt`) verandert daarna niet meer.
+
+### 5. Proefrun (B11-004)
+
+- Een proefrun levert **vaste voorbeeld-events** af (alleen-lezen, met checksum, gemarkeerd als voorbeeld). Een
+  gewijzigde voorbeeldset is een fout, geen stil succes.
+- Tijdens een proefrun krijgt elk actieverzoek het antwoord `gesimuleerd`: er gaat niets naar de Hub, de
+  verzoeklimiet wordt niet aangesproken en er wordt niets op Node-RED geschreven.
+- **Grens van de afscherming (eerlijk gemeld):** de dienst kan alleen het pad via de flow-API afschermen. Een flow
+  met nodes die zelf naar buiten gaan (HTTP, MQTT, TCP, …) kan de dienst niet tegenhouden. Zo'n proefrun start
+  alleen na een uitdrukkelijke bevestiging (`bevestig_niet_afgeschermd`), en de run zegt dat erbij.
+- Eén proefrun tegelijk per flow; een verlaten proefrun verloopt na 15 minuten, daarna stromen echte events weer.
+
+### 6. Versies en herstel (B11-005)
+
+- **Momentopnamen:** de worker leest Node-RED elke `HCH_NODE_RED_SYNC_INTERVAL_S` seconden (standaard 60; `0` = uit)
+  en legt bij een wijziging een momentopname vast, versleuteld in de eigen vault (AES-GCM, gebonden aan de
+  momentopname). Een beheerder kan er ook zelf één maken.
+- **Credentials:** `GET /flows` geeft nooit credentials terug (gemeten). Ze komen alleen mee als de datamap van
+  Node-RED **alleen-lezen** aan deze app is gekoppeld (`HCH_NODE_RED_DATA_DIR`), en dan alleen als het door Node-RED
+  zelf versleutelde blok uit `flows_cred.json`. Een onversleuteld bestand wordt nooit meegenomen. Zonder die
+  koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. Deze dienst kan de credentials zelf niet lezen.
+- **Diff:** alleen nodes en veldnamen, nooit waarden.
+- **Herstellen is een voorstel plus een ondertekende opdracht:**
+  1. `POST /connector/v1/propose` met `automation.flows.restore` maakt een voorstel (R2) met diff, `preview_hash` en
+     `resource_etag`. Er verandert niets.
+  2. `POST /connector/v1/apply` voert alleen uit met een door de Hub **ondertekend ExecutionRequest**. De dienst
+     controleert zelf opnieuw: handtekening (Ed25519 over canonieke JSON, tegen de gepinde Hub-sleutels),
+     geldigheid (hooguit 15 minuten), nonce, actie op de allowlist, parameterschema, risicoklasse (eigen berekening
+     is de ondergrens), goedkeuring door een mens gebonden aan precies deze diff, en de precondities (Node-RED
+     ongewijzigd sinds het voorstel).
+  3. Vóór het schrijven wordt de huidige stand als momentopname vastgelegd; na het schrijven leest de dienst terug
+     en vergelijkt de checksum.
+- **Wie mag `apply` aanroepen:** een beheerder of de Hub-dienst. De bescherming zit in de ondertekende opdracht, niet
+  in wie hem aflevert.
+- **Geen spoor bij onzin:** een verzoek zonder geldige vorm, handtekening of geldigheid wordt geweigerd en nergens
+  vastgelegd. Een geldig ondertekend verzoek dat om een andere reden wordt geweigerd, wordt wél vastgelegd; de nonce
+  is dan verbruikt.
+- **Herhalen:** dezelfde `Idempotency-Key` geeft hetzelfde antwoord; hetzelfde verzoek met een nieuwe sleutel is
+  `409 nonce_al_gebruikt`. Een onderbroken herstel wordt nooit blind herhaald: eerst teruglezen.
+- **Terugdraaien:** `POST /connector/v1/rollback` blijft `501`. Een herstel draai je terug met een nieuw voorstel
+  naar de momentopname van vóór het herstel.
+- **Andere `credentialSecret`:** Node-RED weigert het blok dan zelf (gemeten: `400`); er verandert niets en de dienst
+  meldt `credentials_niet_te_ontsleutelen`.
+- Een momentopname met een flow die inmiddels verboden is, kan niet worden teruggezet.
+- De acties `sso.*` blijven op `apply` `501 capability_unavailable` (reden `nog_niet_toepasbaar`), zonder een nonce
+  te verbruiken. `discover` noemt `apply` alleen voor `automation.flows.restore`.
+
+### 7. Foutcodes
+
+| Situatie | Antwoord |
+|---|---|
+| Node-RED niet ingesteld of onbeveiligd | `409 node_red_niet_ingesteld` |
+| Node-RED onbereikbaar | `503 node_red_unavailable` met `Retry-After: 30` |
+| Node-RED antwoordt met een fout | `502 node_red_fout` |
+| Weigering door beleid | `403 forbidden` met `details.reason` |
+| Te veel verzoeken van een flow | `429 rate_limited` |
+| Hub niet gekoppeld bij een actieverzoek | `503 hub_unavailable` |
+
+Een storing van Node-RED is nooit een succes: er is geen gesimuleerd resultaat.
+
+### 8. Health
+
+De connector-health krijgt een eigen check `automatisering`, alleen als Node-RED is ingesteld ("niet ingesteld" is
+geen meting). `degraded` bij een gemeten afwijking in de isolatie, een mislukte synchronisatie
+(`synchronisatie_mislukt`), een geblokkeerde flow of een `dead_letter`; `unknown` als de isolatie niet vers is
+gemeten.
+
+## Gevolgen
+
+- Migratie `0005` (momentopnamen, flow-tokens, events, afleveringen, herstel). Terug naar een oudere image kan alleen
+  met de back-up of de dataset-snapshot van vóór de update.
+- Nieuwe afhankelijkheid `bcrypt` (voor de `adminAuth`-hash zoals Node-RED hem verwacht).
+- Nieuwe optionele instellingen: `HCH_NODE_RED_SYNC_INTERVAL_S`, `HCH_NODE_RED_DATA_DIR`,
+  `HCH_NODE_RED_ALLOWED_MODULES`.
+- De schermen (flowoverzicht, triggers, proefrun, versies) horen in de Hub-UI en zijn hier niet gebouwd; deze dienst
+  levert de API.
+
+## Meldingen bij het contract
+
+Waar het contract niets zegt of zichzelf tegenspreekt, is de veiligste lezing gekozen:
+
+1. **§4 kent alleen Hub-JWT's.** Een flow in Node-RED kan geen Hub-JWT krijgen. Gekozen: eigen flow-tokens die
+   alleen de flow-API openen.
+2. **§7 kent geen pad waarlangs de Hub events van andere apps doorstuurt** naar deze dienst, en geen regel dat de
+   Hub `correlation_id` of de keten van flows doorgeeft. Gebouwd is de ontvangende kant; zonder Hub-zijde komen er
+   alleen eigen events bij flows.
+3. **De payload van `flow.action.requested` staat niet in §7** en de Hub heeft er nog geen verwerker voor. Tot dan
+   blijft elk verzoek op `aangevraagd` staan.
+4. **`automation.flows.restore` staat niet in de actietabel van §8.** Een echte Hub kan er nu geen geldig
+   ExecutionRequest voor uitgeven; herstel werkt dus alleen tegen de simulator.
+5. **De `policy_hash`** in een ExecutionRequest kan een eigenaar-connector niet tegen een policybestand controleren;
+   alleen de vorm en de samenhang worden gecontroleerd.
+6. **Het formaat van het ExecutionRequest** staat alleen in `ai-server-manager` (`apps/policy`,
+   `docs/EXECUTION_REQUEST.md`), niet in het contract. De `403`-codes daar wijken af van de foutcatalogus in §5;
+   hier is §5 gevolgd (`403 forbidden` met `details.reason`).
+7. **`preview_hash` en `resource_etag`:** de SSO-voorstellen gebruiken kale hex, het Hub-formaat `sha256:<hex>`.
+   Herstelvoorstellen volgen het Hub-formaat; `expected_version` neemt beide aan.
+8. **Geen eventdomeinen voor MSO en my_house** in §7, terwijl B11-002 ze noemt. Hun events vallen nu buiten de
+   catalogus (bewaard, niet afgeleverd).
+9. **Het entiteitstype van `app.health.changed`** ligt in §7 niet vast; alleen de eigenaar wordt gecontroleerd.
+10. **Instellingen van een derde app via het formulier:** met het profiel van deze dienst kan dat alleen met
+    `--define`-argumenten, waardoor een geheim in de formulierwaarden staat (zie besluit 1). Opgelost door besluit
+    C-12: de installatieweg is het manifest van `jelly-leon-platform` (zonder gebruikers en zonder
+    `credentialSecret`), en de manifeststandaard krijgt een voorziening voor een beheerder en een dienstaccount
+    zonder geheim in het formulier (ontwerp S-P2-510 in `appstore-en-fork`, bouw na P2). Tot die voorziening er is,
+    heeft een volgens het manifest geïnstalleerde Node-RED geen beheerder en geen dienstaccount voor deze dienst.
+11. **B11-003 "zonder admin"** is gelezen als: nooit via een flow.
+12. **B11-004** kan alleen het pad via de flow-API afschermen (zie besluit 5).

@@ -1,5 +1,54 @@
 # Wijzigingen
 
+## 0.1.0 — B11 Node-RED-automatisering (fase P2, ADR-0016, nog niet uitgebracht)
+
+Alles hieronder is met een Node-RED-simulator en een Hub-simulator getest. De aannames over Node-RED zelf zijn
+gemeten tegen de gepinde image in lokale containers, met het eigen profiel van deze app (niet met het manifest van
+`jelly-leon-platform`). **Niet gevalideerd op een echte NAS**, met een echte Hub of met echte apparaten.
+NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
+
+**Nieuw**
+- **Node-RED als bron (B11-001).** Isolatiemeting (wat niet meetbaar is heet *niet meetbaar*, nooit *in orde*; een
+  anonieme lezer moet 401 krijgen, besluit C-11), het editor-adres alleen voor een beheerder. Het
+  beveiligingsprofiel (`POST …/automation/hardening-profile`) is geen installatiestap: besluit C-12 kiest een
+  voorziening zonder geheim in het formulier via de manifeststandaard; het profiel vervalt daarna of wordt
+  daaraan gelijkgetrokken. Flows met een exec-node, een onbekend type of een module buiten de allowlist worden
+  geblokkeerd. Een Node-RED zonder aanmelding wordt geweigerd.
+- **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
+  afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
+- **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst
+  voert nooit iets uit. De boiler schakelen, verwijderen, shell, beleid wijzigen en betaalde acties worden altijd
+  geweigerd, ook met een ruim token. Hetzelfde event vijf keer geeft één verzoek. Limiet per flow en actie.
+- **Proefrun (B11-004).** Vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd. Een flow met nodes die
+  zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging.
+- **Versies en herstel (B11-005).** Versleutelde momentopnamen (credentials alleen als door Node-RED versleuteld
+  blok), een diff zonder waarden, en herstel als voorstel dat alleen met een door de Hub ondertekend ExecutionRequest
+  wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen.
+- Connector-health: check `automatisering` (alleen als Node-RED is ingesteld).
+- `deploy/truenas/NODE_RED_CUSTOM_APP.md`: verwijst naar het manifest van `jelly-leon-platform`
+  (`install/manifests/node-red.manifest.yaml`, 568:568) als installatieweg en beschrijft alleen wat in deze app
+  wordt ingesteld, plus de controlelijst voor wat de app niet kan meten. Meetprogramma `tools/node_red_verify.py`
+  met rapport `docs/b11/node-red-verificatie.json`.
+- Rooktest van de image: de flow-API geeft zonder flow-token `401 flow_token_ontbreekt` en met een onbekend
+  flow-token `401 flow_token_ongeldig`; migratie `0005` is uitgevoerd. Nieuwe test: de manifestvalidator weigert
+  een variant van het manifest met een Docker-socket.
+
+**Gewijzigd**
+- `POST /connector/v1/apply` vraagt nu een `Idempotency-Key` en een ondertekend ExecutionRequest. Alleen
+  `automation.flows.restore` is uitvoerbaar; de SSO-acties blijven `501 capability_unavailable`.
+- Migratie `0005`. Nieuwe optionele instellingen `HCH_NODE_RED_SYNC_INTERVAL_S`, `HCH_NODE_RED_DATA_DIR` en
+  `HCH_NODE_RED_ALLOWED_MODULES`. Nieuwe afhankelijkheid `bcrypt`.
+- Manifest: optionele afhankelijkheid `node-red` (verwijst naar het manifest van `jelly-leon-platform`); de
+  upgradenotitie noemt migratie `0005`.
+
+**Bekende grenzen**
+- De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een
+  verzoek blijft op *aangevraagd* staan en herstel werkt alleen tegen de simulator.
+- De schermen voor flows staan in de Hub en zijn nog niet gebouwd.
+- Het manifest van `jelly-leon-platform` heeft nog "anoniem alleen lezen" (tot stap S-P2-410) en nog geen beheerder
+  of dienstaccount (besluit C-12); tegen zo'n Node-RED geeft `anoniem_geweigerd` een afwijking en heeft deze app er
+  geen dienstaccount om zich mee aan te melden.
+
 ## 0.1.0 — onafhankelijke review contract 1.3 (QA, ADR-0015, nog niet uitgebracht)
 
 **Gerepareerd**
