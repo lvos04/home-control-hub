@@ -129,7 +129,18 @@ def test_revoked_token_stops_working_at_once(linked: Any, auth: Any, flow: Any) 
 
 def test_token_scope_cannot_contain_forbidden_actions(linked: Any, auth: Any, flow: Any) -> None:
     detail, _ = flow
-    for scope in (["*"], ["zfs.dataset.delete"], ["energy.boiler.switch"], ["system.shell.exec"], ["Niet Goed"]):
+    for scope in (
+        ["*"],
+        ["zfs.dataset.delete"],
+        ["energy.boiler.switch"],
+        ["system.shell.exec"],
+        ["Niet Goed"],
+        # fail-closed (R-VEILIG-1): alleen acties van de vaste lijst, of een patroon dat er minstens één dekt
+        ["energy.*"],
+        ["media.*"],
+        ["energy.device.switch"],
+        ["zfs.dataset.rm"],
+    ):
         r = linked.post(
             f"{A}/flows/{detail['id']}/tokens",
             json={"label": "x", "allowed_actions": scope},
@@ -221,6 +232,17 @@ def test_requested_action_reaches_the_hub_inbox(
         ("energy.device.switch", {"type": "device", "id": "stekker-3"}, {"naam": "Warmwater"}, "boiler_nooit"),
         ("system.shell.exec", {"type": "host", "id": "nas"}, {"cmd": "id"}, "shell_verboden"),
         ("app.exec.run", APP, {}, "shell_verboden"),
+        # fail-closed (R-VEILIG-1): onder een andere naam verwijderen, terugdraaien of schakelen kan ook niet
+        ("zfs.dataset.rm", {"type": "dataset", "id": "media/films"}, {}, "onbekende_actie"),
+        ("zfs.dataset.destroyrecursive", {"type": "dataset", "id": "media"}, {}, "onbekende_actie"),
+        ("zfs.snapshot.rollback", {"type": "dataset", "id": "media"}, {}, "onbekende_actie"),
+        ("media.file.trash", {"type": "file", "id": "film-1"}, {}, "onbekende_actie"),
+        ("energy.device.switch", {"type": "device", "id": "shelly-plug-3"}, {"aan": True}, "onbekende_actie"),
+        ("energy.device.switch", {"type": "device", "id": "boi\u200bler"}, {"aan": True}, "ongeldige_tekens"),
+        ("app.restart", APP, {"apparaat": "boi\u200bler"}, "boiler_nooit"),
+        # HARDE EIS (R-HARDE-EIS-3): Emby wordt door het platform nooit gestopt, bijgewerkt of verwijderd
+        ("app.stop", {"type": "app", "id": "emby"}, {}, "emby_nooit_door_platform"),
+        ("app.uninstall", {"type": "app", "id": "embyserver"}, {}, "emby_nooit_door_platform"),
     ],
 )
 def test_forbidden_actions_are_refused_and_recorded(
@@ -262,6 +284,42 @@ def test_dataset_delete_is_refused_even_with_admin_issued_wide_scope(linked: Any
     r = b11.request_action(linked, wide, "zfs.snapshot.create", target={"type": "dataset", "id": "media"})
     assert r.status_code == 202, r.text
     assert r.json()["risk_preview"]["klasse_min"] == "R1"
+
+
+def test_renamed_destructive_actions_never_reach_the_hub_even_with_a_wide_scope(
+    linked: Any, auth: Any, flow: Any
+) -> None:
+    """R-VEILIG-1: met de ruimste scope die uit te geven is, gaat geen actie buiten de vaste lijst naar de Hub."""
+    detail, _ = flow
+    r = linked.post(
+        f"{A}/flows/{detail['id']}/tokens",
+        json={"label": "ruim", "allowed_actions": ["zfs.*", "app.*", "notification.send"]},
+        headers=idem(auth("admin")),
+    )
+    assert r.status_code == 201, r.text
+    wide = r.json()["flow_token"]
+    attempts = {
+        "zfs.dataset.rm": {"type": "dataset", "id": "media"},
+        "zfs.dataset.destroyrecursive": {"type": "dataset", "id": "media"},
+        "zfs.snapshot.rollback": {"type": "dataset", "id": "media"},
+        "app.uninstall_everything": APP,
+        "app.stop": {"type": "app", "id": "emby"},
+    }
+    answers = {a: b11.request_action(linked, wide, a, target=t) for a, t in attempts.items()}
+    assert {a: (r.status_code, r.json()["details"]["reason"]) for a, r in answers.items()} == {
+        "zfs.dataset.rm": (403, "onbekende_actie"),
+        "zfs.dataset.destroyrecursive": (403, "onbekende_actie"),
+        "zfs.snapshot.rollback": (403, "onbekende_actie"),
+        "app.uninstall_everything": (403, "onbekende_actie"),
+        "app.stop": (403, "emby_nooit_door_platform"),
+    }
+    assert b11.outbox(linked, "flow.action.requested") == []
+    assert len(b11.outbox(linked, "flow.action.rejected")) == len(attempts)
+    # wat wél op de lijst staat kan binnen dezelfde scope nog steeds worden aangevraagd (de Hub beslist verder)
+    assert (
+        b11.request_action(linked, wide, "zfs.snapshot.create", target={"type": "dataset", "id": "m"}).status_code
+        == 202
+    )
 
 
 def test_boiler_word_in_a_notification_text_is_allowed(linked: Any, flow: Any) -> None:

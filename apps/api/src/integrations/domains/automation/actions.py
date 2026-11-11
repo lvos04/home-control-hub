@@ -2,10 +2,12 @@
 
 Het pad van een actieverzoek (``POST /integrations/v1/automation/flow-api/actions``, alleen met een flow-token):
 
-1. harde weigerlijst — wordt nooit doorgestuurd: boiler (EX27), shell/sudo/docker/exec, vernietigende acties (een
-   dataset verwijderen kan nooit via een flow: EX45), beleid/rollen/aanmelding, betaalde acties;
-2. de actie moet binnen de scope van het token vallen;
-3. tempolimiet per flow en actie (``429 rate_limited``; wordt niet vastgelegd);
+1. harde weigerlijst — wordt nooit doorgestuurd: tekens die niet in een id horen (niet-ASCII, onzichtbaar), boiler
+   (EX27), Emby als doel (contract §2.3 regel 3), shell/sudo/docker/exec, vernietigende acties (een dataset verwijderen
+   kan nooit via een flow: EX45), beleid/rollen/aanmelding, betaalde acties, en — fail-closed — **elke actie die niet
+   op de vaste lijst van contract §8 staat** (``FLOW_ACTIONS``);
+2. de actie moet binnen de scope van het token vallen (een patroon dekt alleen acties van die vaste lijst);
+3. tempolimiet per flow en actie én per flow over alle acties samen (``429 rate_limited``; wordt niet vastgelegd);
 4. ontdubbeling op het trigger-event: hetzelfde event levert voor dezelfde actie precies één verzoek op (EX46);
 5. keten van herkomst: geen lus, hooguit acht stappen;
 6. een **informatieve** risico-inschatting uit de vaste tabel van contract §8 — de ``risk_claim`` van de flow telt
@@ -19,7 +21,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -49,8 +53,9 @@ MAX_PARAM_BYTES = 8 * 1024
 #: zo lang mag de Hub een verzoek van een flow hooguit in behandeling nemen (ActionProposal.expires_in_seconds)
 PROPOSAL_EXPIRES_S = 900
 
-#: informatief: de vaste tabel van contract §8 (allowlist v1 van de executor). De Hub beslist; dit is alleen een
-#: inschatting voor de eigenaar van de flow.
+#: de vaste tabel van contract §8 (allowlist v1 van de executor, zonder ``app.uninstall_data``, dat nooit wordt
+#: aangeboden). Alleen deze acties mag een flow aanvragen (``FLOW_ACTIONS``); al het andere wordt hier al geweigerd
+#: (``onbekende_actie``). De klasse is informatief: de Hub beslist met zijn eigen beleid.
 RISK_TABLE: dict[str, str] = {
     "notification.send": "R0",
     "app.restart": "R1",
@@ -63,6 +68,7 @@ RISK_TABLE: dict[str, str] = {
     "app.rollback": "R2",
     "app.uninstall": "R2",
 }
+FLOW_ACTIONS = frozenset(RISK_TABLE)
 
 REFUSALS_NL = {
     "boiler_nooit": "De boiler wordt nooit door een automatisering geschakeld.",
@@ -76,25 +82,81 @@ REFUSALS_NL = {
     "flow_geblokkeerd": "Deze flow is geblokkeerd door het flowbeleid.",
     "flow_niet_actief": "Deze flow is niet actief.",
     "geheim_in_parameters": "De parameters lijken een geheim te bevatten; geheimen horen nooit in een actieverzoek.",
+    "onbekende_actie": "Deze actie staat niet op de vaste lijst van acties die een flow mag aanvragen (contract §8).",
+    "ongeldige_tekens": "Het doel of een parameternaam bevat tekens die daar niet horen (alleen gewone ASCII-tekens, "
+    "geen onzichtbare tekens).",
+    "emby_nooit_door_platform": "Het platform stopt, updatet of verwijdert Emby nooit; ook een flow kan dat niet "
+    "aanvragen (contract §2.3 regel 3).",
 }
+#: weigeringen die op een poging tot iets verbodens wijzen: het event flow.action.rejected krijgt ernst "hoog"
+HIGH_SEVERITY = frozenset(
+    {
+        "boiler_nooit",
+        "shell_verboden",
+        "destructief_verboden",
+        "onbekende_actie",
+        "ongeldige_tekens",
+        "emby_nooit_door_platform",
+    }
+)
 #: acties die alleen tekst afleveren en niets schakelen: hun parameters worden niet op "boiler" doorzocht
 TEXT_ONLY_ACTIONS = frozenset({"notification.send"})
-_BOILER = ("boiler", "warmwater", "hot_water", "water_heater")
+#: na :func:`_fold` (zonder spaties, streepjes en liggende streepjes): ook "hot water", "warm-water" en "boi ler"
+_BOILER = ("boiler", "warmwater", "hotwater", "waterheater")
+#: herkenning zoals ``policy/apps.yaml`` van de Hub (``emby``, ``embyserver``, ``emby-server``), hier ruimer: elk doel
+#: met "emby" in een waarde (herkenning maakt alleen strenger, contract §2.3 regel 3)
+_EMBY = "emby"
+#: wat in een id (doel, parameternaam) mag: zichtbare ASCII-tekens en de spatie
+_ID_TEXT_RE = re.compile(r"^[\x20-\x7e]*$")
+_MAX_DEPTH = 12
 _DESTRUCTIVE = frozenset({"delete", "destroy", "remove", "wipe", "purge", "format", "erase", "uninstall_data"})
 _SHELL = frozenset({"shell", "sudo", "docker", "exec", "ssh", "bash", "sh"})
 _POLICY_DOMAINS = frozenset({"policy", "auth", "role", "roles", "rbac", "sso", "user", "users", "permission"})
 _PAID = frozenset({"billing", "payment", "purchase", "overage", "betaling", "betaald"})
 
 
-def local_refusal(action_id: str, target: dict[str, Any], parameters: dict[str, Any]) -> str | None:
-    """De harde weigerlijst. Wat hier geweigerd wordt gaat nooit naar de Hub."""
-    scanned: dict[str, Any] = {"t": target}
+def _strings(value: Any, depth: int = 0, *, keys_only: bool = False) -> Iterator[str]:
+    """Alle sleutels en (zonder ``keys_only``) tekstwaarden, recursief en begrensd."""
+    if depth > _MAX_DEPTH:
+        yield "\x00"  # te diep genest: telt als ongeldig, nooit als "niets gevonden"
+        return
+    if isinstance(value, str):
+        if not keys_only:
+            yield value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            yield str(k)
+            yield from _strings(v, depth + 1, keys_only=keys_only)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            yield from _strings(v, depth + 1, keys_only=keys_only)
+
+
+def _fold(text: str) -> str:
+    """Voor de woordcontrole: NFKC, zonder accenten, onzichtbare tekens en scheidingstekens, in kleine letters."""
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch)[0] not in ("M", "C", "Z"))
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKC", kept).casefold())
+
+
+def _bad_id_text(target: dict[str, Any], parameters: dict[str, Any]) -> bool:
+    """Een id hoort gewone tekst te zijn: elk doel (sleutels en waarden) en elke parameternaam in zichtbare ASCII."""
+    texts = [*_strings(target), *_strings(parameters, keys_only=True)]
+    return any(not _ID_TEXT_RE.fullmatch(t) for t in texts)
+
+
+def _word_refusal(action_id: str, target: dict[str, Any], parameters: dict[str, Any]) -> str | None:
+    """Weigeringen op naam en inhoud (ook bruikbaar voor een scopepatroon)."""
+    if _bad_id_text(target, parameters):
+        return "ongeldige_tekens"
+    scanned: list[str] = [action_id, *_strings(target)]
     if action_id not in TEXT_ONLY_ACTIONS:
         # de tekst van een melding ("de boiler verbruikt veel") schakelt niets; elk ander verzoek wordt volledig bekeken
-        scanned["p"] = parameters
-    haystack = (action_id + " " + policy.canonical(scanned).decode("utf-8")).lower()
-    if any(word in haystack for word in _BOILER):
+        scanned.extend(_strings(parameters))
+    if any(word in _fold(text) for text in scanned for word in _BOILER):
         return "boiler_nooit"
+    if any(_EMBY in _fold(text) for text in _strings(target)):
+        return "emby_nooit_door_platform"
     parts = action_id.lower().split(".")
     segments = set(parts) | {w for part in parts for w in part.split("_")}
     if segments & _SHELL:
@@ -108,17 +170,43 @@ def local_refusal(action_id: str, target: dict[str, Any], parameters: dict[str, 
     return None
 
 
+def local_refusal(action_id: str, target: dict[str, Any], parameters: dict[str, Any]) -> str | None:
+    """De harde weigerlijst. Wat hier geweigerd wordt gaat nooit naar de Hub.
+
+    Fail-closed: na de weigeringen met een eigen reden wordt elke actie die niet op de vaste lijst staat
+    (``FLOW_ACTIONS``, contract §8) geweigerd met ``onbekende_actie`` — ook als ze onder een andere naam iets
+    verwijdert of schakelt."""
+    refusal = _word_refusal(action_id, target, parameters)
+    if refusal is None and action_id not in FLOW_ACTIONS:
+        refusal = "onbekende_actie"
+    return refusal
+
+
+def _pattern_covers(entry: str, action_id: str) -> bool:
+    return entry == action_id or (entry.endswith(".*") and action_id.startswith(entry[:-1]))
+
+
 def scope_problem(action: str) -> str | None:
-    """Mag deze actie (of dit patroon ``<prefix>.*``) in de scope van een token staan?"""
+    """Mag deze actie (of dit patroon ``<prefix>.*``) in de scope van een token staan?
+
+    Een losse actie moet op de vaste lijst staan; een patroon moet minstens één actie van die lijst dekken en dekt
+    ook nooit meer dan die (zie :func:`in_scope`)."""
     if not SCOPE_RE.fullmatch(action) or len(action) > 80:
         return "geen geldige actie of patroon (<domein>.<object>[.<actie>] of <prefix>.*)"
-    probe = action[:-2] + ".x" if action.endswith(".*") else action
-    refusal = local_refusal(probe, {}, {})
-    return REFUSALS_NL[refusal] if refusal else None
+    if not action.endswith(".*"):
+        refusal = local_refusal(action, {}, {})
+        return REFUSALS_NL[refusal] if refusal else None
+    refusal = _word_refusal(action[:-2] + ".x", {}, {})
+    if refusal is not None:
+        return REFUSALS_NL[refusal]
+    if not any(_pattern_covers(action, a) for a in FLOW_ACTIONS):
+        return "Dit patroon dekt geen enkele actie van de vaste lijst die een flow mag aanvragen (contract §8)."
+    return None
 
 
 def in_scope(action_id: str, allowed: list[str]) -> bool:
-    return any(entry == action_id or (entry.endswith(".*") and action_id.startswith(entry[:-1])) for entry in allowed)
+    """Valt de actie binnen de scope? Alleen acties van de vaste lijst: ook een oud of ruim patroon dekt niets anders."""
+    return action_id in FLOW_ACTIONS and any(_pattern_covers(entry, action_id) for entry in allowed)
 
 
 def risk_preview(action_id: str, risk_claim: str | None) -> dict[str, Any]:
@@ -335,7 +423,7 @@ def request_action(
             trace_id=trace_id,
             correlation_id=str(row.id),
             payload={
-                "ernst": "hoog" if refusal in ("boiler_nooit", "shell_verboden", "destructief_verboden") else "middel",
+                "ernst": "hoog" if refusal in HIGH_SEVERITY else "middel",
                 "action_request_id": str(row.id),
                 "action_id": action_id,
                 "reden": refusal,

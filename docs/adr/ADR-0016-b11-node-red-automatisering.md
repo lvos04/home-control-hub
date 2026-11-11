@@ -112,15 +112,33 @@ Deze ronde bouwt de vijf werkpakketten:
 - `POST …/flow-api/actions` voert **nooit** iets uit. Een toegestaan verzoek wordt een event `flow.action.requested`
   voor de Hub; de Hub maakt er een ActionProposal van en beslist met zijn eigen policy. Een `risk_claim` van de flow
   wordt bewaard als informatie en verder genegeerd.
+- **Alleen de vaste lijst (fail-closed).** Een flow mag alleen de acties van de executor-allowlist v1 uit contract §8
+  aanvragen, zonder `app.uninstall_data` (die wordt nooit aangeboden): `notification.send`, `app.restart`,
+  `app.stop`, `app.start`, `app.install`, `app.update`, `app.rollback`, `app.uninstall`, `zfs.snapshot.create` en
+  `zfs.snapshot.clone_to_sandbox` (`actions.FLOW_ACTIONS`). Elke andere actie wordt hier al geweigerd met
+  `onbekende_actie`, ook als ze onder een andere naam iets verwijdert, terugdraait of schakelt (bijvoorbeeld
+  `zfs.dataset.rm`, `zfs.snapshot.rollback` of `energy.device.switch`). Opdrachten voor apparaten in huis lopen via
+  het beleid van my_house (B11-003), niet via een flow. Een nieuwe actie voor flows vraagt eerst een regel in contract
+  §8 en daarna een bewuste wijziging van de lijst; een test vergelijkt de lijst met de tabel in de contractkopie.
 - **Altijd geweigerd**, ook als een beheerder het token ruim heeft gemaakt (`403` met `details.reason`, plus een
-  event `flow.action.rejected`):
+  event `flow.action.rejected`; ernst `hoog` bij `boiler_nooit`, `shell_verboden`, `destructief_verboden`,
+  `onbekende_actie`, `ongeldige_tekens` en `emby_nooit_door_platform`):
+  - `ongeldige_tekens` — het doel (sleutels en waarden) en de namen van parameters mogen alleen zichtbare
+    ASCII-tekens en de spatie bevatten: geen onzichtbare tekens (zoals een zero-width space), geen letters uit een
+    ander schrift;
   - `boiler_nooit` — actie-ID en doel worden altijd doorzocht; ook parameters, behalve bij acties die alleen tekst
-    afleveren (`notification.send`), zodat een melding óver de boiler wel kan;
+    afleveren (`notification.send`), zodat een melding óver de boiler wel kan. Elke tekst wordt eerst genormaliseerd
+    (NFKC, zonder accenten, onzichtbare tekens en scheidingstekens), zodat ook `boi ler` of `Hot Water` telt;
+  - `emby_nooit_door_platform` — elk verzoek met Emby als doel (contract §2.3 regel 3; dezelfde herkenning als
+    `policy/apps.yaml` van de Hub, hier ruimer: elk doel met "emby" in een waarde);
   - `destructief_verboden` — verwijderen of wissen, bijvoorbeeld `zfs.dataset.delete`;
-  - `shell_verboden`, `beleid_verboden`, `betaald_verboden`, `geheim_in_parameters`.
+  - `shell_verboden`, `beleid_verboden`, `betaald_verboden`, `geheim_in_parameters`, `onbekende_actie`.
 - **"Zonder admin" is streng gelezen:** een destructieve actie kan nooit via een flow, ook niet met goedkeuring. Wie
   een dataset wil verwijderen, doet dat zelf in de Hub.
-- Een tokenscope met een verboden actie wordt al bij het uitgeven geweigerd (`422`).
+- Een tokenscope mag alleen acties van de vaste lijst bevatten, of een patroon `<voorvoegsel>.*` dat minstens één
+  actie van die lijst dekt (`app.*`, `zfs.*`, `zfs.snapshot.*`); anders wordt het token al bij het uitgeven
+  geweigerd (`422`), bijvoorbeeld bij `energy.*` of `media.*`. Een patroon dekt nooit meer dan de acties van de
+  lijst.
 - **Ontdubbeling:** hetzelfde event dat vijf keer binnenkomt geeft één aflevering en één actieverzoek (sleutel over
   flow, event, actie en exacte parameters). Elke mutatie vraagt een `Idempotency-Key`.
 - **Grenzen:** standaard 30 verzoeken per uur per flow en actie; een beheerder kan dat alleen strenger zetten.

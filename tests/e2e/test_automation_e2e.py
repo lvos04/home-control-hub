@@ -2,12 +2,13 @@
 
 De flow is hier een klein Python-programma dat doet wat een Node-RED-flow met een flow-token doet: events ophalen,
 acties **aanvragen** en bevestigen. De rol van de Hub (een aangevraagde actie na zijn eigen beleid uitvoeren) speelt de
-test zelf, tegen een apparatenregister in het testproces. Zo is de hele keten zichtbaar: de enige weg naar een apparaat
-loopt via de Hub, en tijdens een proefrun komt er over die weg niets.
+test zelf, tegen een register van apparaten en apps in het testproces. Zo is de hele keten zichtbaar: de enige weg naar
+een wijziging loopt via de Hub, en tijdens een proefrun komt er over die weg niets.
 
 - B11-001: editor alleen voor de beheerder, Node-RED weigert anoniem, een exec-flow wordt geblokkeerd;
 - B11-002: een event met een onbekende schema-versie verdwijnt niet stil (bewaard, zichtbaar, gemeld aan de Hub);
-- B11-003: een actie gaat als ``flow.action.requested`` naar de Hub; dataset verwijderen en de boiler nooit;
+- B11-003: een actie gaat als ``flow.action.requested`` naar de Hub; dataset verwijderen, de boiler en een actie die
+  niet op de vaste lijst van contract §8 staat (een stekker schakelen) nooit;
 - B11-004: een proefrun wijzigt geen apparaat;
 - B11-005: herstel naar een eerdere momentopname met een door de Hub ondertekend verzoek, zonder geheimen in de logs.
 
@@ -33,19 +34,19 @@ BROKER = "broker0000000001"
 PW1 = "E2E-eerste-broker-wachtwoord-5521"
 PW2 = "E2E-tweede-broker-wachtwoord-8804"
 PLUG = {"type": "device", "id": "stekker-3"}
+APP_DOEL = {"type": "app", "id": "uptime-kuma"}
 STATE: dict[str, Any] = {}
 
 
 class Apparaten:
-    """Apparatenregister in het testproces: alleen de Hub-rol in deze test mag hier schakelen."""
+    """Register van apparaten en apps in het testproces: alleen de Hub-rol in deze test mag hier iets uitvoeren."""
 
     def __init__(self) -> None:
         self.stand: dict[str, bool] = {"stekker-3": False, "boiler": False}
         self.mutaties: list[dict[str, Any]] = []
 
-    def schakel(self, device_id: str, aan: bool, door: str) -> None:
-        self.stand[device_id] = aan
-        self.mutaties.append({"apparaat": device_id, "aan": aan, "door": door})
+    def uitvoeren(self, action_id: str, doel: str, door: str) -> None:
+        self.mutaties.append({"actie": action_id, "doel": doel, "door": door})
 
 
 APPARATEN = Apparaten()
@@ -131,7 +132,7 @@ def _snapshot(stack: Stack) -> dict[str, Any]:
 
 
 def _de_flow_draait(stack: Stack, token: str) -> list[dict[str, Any]]:
-    """Het 'programma' van de flow: bij elk event de stekker aanvragen én twee dingen proberen die nooit mogen."""
+    """Het 'programma' van de flow: bij elk event een app-herstart aanvragen én drie dingen proberen die nooit mogen."""
     antwoorden: list[dict[str, Any]] = []
     for _ in range(20):
         claimed = httpx.post(
@@ -141,9 +142,10 @@ def _de_flow_draait(stack: Stack, token: str) -> list[dict[str, Any]]:
             break
         for item in claimed["items"]:
             for action_id, target, params in (
-                ("energy.device.switch", PLUG, {"aan": True}),
+                ("app.restart", APP_DOEL, {}),
                 ("zfs.dataset.delete", {"type": "dataset", "id": "media"}, {}),
                 ("energy.device.switch", {"type": "device", "id": "boiler"}, {"aan": True}),
+                ("energy.device.switch", PLUG, {"aan": True}),
             ):
                 r = httpx.post(
                     f"{stack.hch}{FLOW_API}/actions",
@@ -164,15 +166,15 @@ def _de_flow_draait(stack: Stack, token: str) -> list[dict[str, Any]]:
 
 
 def _de_hub_voert_uit(stack: Stack) -> int:
-    """De rol van de Hub: elk aangevraagd actieverzoek één keer uitvoeren (hier: de stekker schakelen)."""
+    """De rol van de Hub: elk aangevraagd actieverzoek één keer uitvoeren (hier: een app herstarten)."""
     done = 0
     for event in _hub_inbox(stack, "flow.action.requested"):
         payload = event["payload"]
         if payload["action_request_id"] in VERWERKT:
             continue
         VERWERKT.add(payload["action_request_id"])
-        if payload["action_id"] == "energy.device.switch":
-            APPARATEN.schakel(payload["target"]["id"], bool(payload["parameters"]["aan"]), door="hub")
+        if payload["action_id"] == "app.restart":
+            APPARATEN.uitvoeren(payload["action_id"], payload["target"]["id"], door="hub")
             done += 1
     return done
 
@@ -276,8 +278,8 @@ def test_03_flow_vraagt_aan_en_de_hub_voert_uit(stack: Stack) -> None:
         headers=_idem(admin, **put),
     )
     assert r.status_code == 200, r.text
-    # een token dat de boiler of een dataset mag aanvragen bestaat niet
-    for scope in (["energy.boiler.switch"], ["zfs.dataset.delete"], ["*"]):
+    # een token dat de boiler, een dataset of een actie buiten de vaste lijst mag aanvragen bestaat niet
+    for scope in (["energy.boiler.switch"], ["zfs.dataset.delete"], ["*"], ["energy.device.switch"], ["energy.*"]):
         r = httpx.post(
             f"{stack.hch}{A}/flows/{flow['id']}/tokens",
             json={"label": "te ruim", "allowed_actions": scope},
@@ -286,7 +288,7 @@ def test_03_flow_vraagt_aan_en_de_hub_voert_uit(stack: Stack) -> None:
         assert r.status_code == 422, (scope, r.text)
     r = httpx.post(
         f"{stack.hch}{A}/flows/{flow['id']}/tokens",
-        json={"label": "e2e", "allowed_actions": ["energy.device.switch", "zfs.*"]},
+        json={"label": "e2e", "allowed_actions": ["app.restart", "zfs.*"]},
         headers=_idem(admin),
     )
     assert r.status_code == 201, r.text
@@ -302,21 +304,26 @@ def test_03_flow_vraagt_aan_en_de_hub_voert_uit(stack: Stack) -> None:
     assert all(r.status_code in (200, 201) for r in offered), [r.text for r in offered]
     assert sum(r.json()["afleveringen"] for r in offered if not r.json().get("duplicaat")) == 1, offered[1].text
     answers = _de_flow_draait(stack, token)
-    assert [(a["http"], a.get("status")) for a in answers] == [(202, "aangevraagd"), (403, None), (403, None)], answers
+    assert [(a["http"], a.get("status")) for a in answers] == [
+        (202, "aangevraagd"),
+        (403, None),
+        (403, None),
+        (403, None),
+    ], answers
     assert answers[0]["risk_preview"]["risk_claim_genegeerd"] is True  # EX18
-    assert [a["details"]["reason"] for a in answers[1:]] == ["destructief_verboden", "boiler_nooit"]
+    assert [a["details"]["reason"] for a in answers[1:]] == ["destructief_verboden", "boiler_nooit", "onbekende_actie"]
 
     assert _wait(lambda: len(_hub_inbox(stack, "flow.action.requested")) == 1), "verzoek kwam niet bij de Hub aan"
-    assert _wait(lambda: len(_hub_inbox(stack, "flow.action.rejected")) == 2), "weigeringen niet bij de Hub gemeld"
+    assert _wait(lambda: len(_hub_inbox(stack, "flow.action.rejected")) == 3), "weigeringen niet bij de Hub gemeld"
     requested = _hub_inbox(stack, "flow.action.requested")[0]
     assert requested["actor"] == {"type": "flow", "id": f"flow:{flow['id']}"}
-    assert requested["payload"]["action_id"] == "energy.device.switch" and requested["payload"]["target"] == PLUG
+    assert requested["payload"]["action_id"] == "app.restart" and requested["payload"]["target"] == APP_DOEL
     assert "risk_claim" not in requested["payload"]
-    # tot de Hub iets doet is er geen apparaat gewijzigd: deze dienst voert zelf niets uit
+    # tot de Hub iets doet is er niets gewijzigd: deze dienst voert zelf niets uit
     assert APPARATEN.mutaties == []
     assert _de_hub_voert_uit(stack) == 1
-    assert APPARATEN.mutaties == [{"apparaat": "stekker-3", "aan": True, "door": "hub"}]
-    assert APPARATEN.stand["boiler"] is False
+    assert APPARATEN.mutaties == [{"actie": "app.restart", "doel": "uptime-kuma", "door": "hub"}]
+    assert APPARATEN.stand == {"stekker-3": False, "boiler": False}
     # de Hub meldt de uitkomst terug; de flow kan die lezen
     r = httpx.post(
         f"{stack.hch}{A}/action-requests/{answers[0]['id']}/result",
@@ -327,7 +334,7 @@ def test_03_flow_vraagt_aan_en_de_hub_voert_uit(stack: Stack) -> None:
     got = httpx.get(f"{stack.hch}{FLOW_API}/actions/{answers[0]['id']}", headers=_bearer(token)).json()
     assert got["status"] == "uitgevoerd" and got["hub_risk_class"] == "R1"
     listed = httpx.get(f"{stack.hch}{A}/action-requests", headers=stack.token("viewer")).json()["items"]
-    assert sorted(i["status"] for i in listed) == ["geweigerd", "geweigerd", "uitgevoerd"]
+    assert sorted(i["status"] for i in listed) == ["geweigerd", "geweigerd", "geweigerd", "uitgevoerd"]
     assert httpx.get(f"{stack.hub}/sim/rejected").json() == []
 
 
@@ -359,8 +366,12 @@ def test_04_proefrun_wijzigt_geen_apparaat(stack: Stack) -> None:
         answers += _de_flow_draait(stack, token)
     assert answers and {a["http"] for a in answers} == {200}
     assert {a["status"] for a in answers} == {"gesimuleerd"} and all("id" not in a for a in answers)
-    assert {a["uitkomst"] for a in answers if a["target"] == PLUG} == {"zou_worden_aangevraagd"}
-    assert {a["reden"] for a in answers if a["target"] != PLUG} == {"destructief_verboden", "boiler_nooit"}
+    assert {a["uitkomst"] for a in answers if a["target"] == APP_DOEL} == {"zou_worden_aangevraagd"}
+    assert {a["reden"] for a in answers if a["target"] != APP_DOEL} == {
+        "destructief_verboden",
+        "boiler_nooit",
+        "onbekende_actie",
+    }
     done = httpx.get(f"{stack.hch}{A}/runs/{run['id']}", headers=stack.token("viewer")).json()
     assert done["status"] == "klaar", done
     assert done["result"]["aangevraagd_bij_de_hub"] == 0 and done["result"]["echte_wijzigingen_via_deze_dienst"] == 0
@@ -373,7 +384,7 @@ def test_04_proefrun_wijzigt_geen_apparaat(stack: Stack) -> None:
     assert APPARATEN.mutaties == before["mutaties"] and APPARATEN.stand == before["stand"]
     assert _nr_state(stack)["writes"] == before["writes"] == []
     listed = httpx.get(f"{stack.hch}{A}/action-requests", headers=stack.token("viewer")).json()["items"]
-    assert len(listed) == 3, "de proefrun heeft geen actieverzoek aangemaakt"
+    assert len(listed) == 4, "de proefrun heeft geen actieverzoek aangemaakt"
 
 
 def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
@@ -447,7 +458,7 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     assert len(_nr_state(stack)["writes"]) == 1
     assert _wait(lambda: len(_hub_inbox(stack, "automation.restore.applied")) == 1), "herstel niet bij de Hub gemeld"
     assert httpx.post(f"{stack.hch}/connector/v1/rollback", json={}, headers=_idem(stack.service())).status_code == 501
-    assert APPARATEN.mutaties == [{"apparaat": "stekker-3", "aan": True, "door": "hub"}]
+    assert APPARATEN.mutaties == [{"actie": "app.restart", "doel": "uptime-kuma", "door": "hub"}]
     STATE["signature"] = signed["signature"]
 
 

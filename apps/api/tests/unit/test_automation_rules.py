@@ -237,13 +237,107 @@ def test_hard_refusals(action_id: str, target: dict[str, Any], parameters: dict[
         ("app.restart", {"type": "app", "id": "jellyfin"}, {}),
         ("zfs.snapshot.create", {"type": "dataset", "id": "x"}, {"naam": "voor-update"}),
         ("app.update", {"type": "app", "id": "shelly-dashboard"}, {}),  # 'sh' alleen als los segment verboden
-        ("device.switch.set", {"type": "device", "id": "lamp-1"}, {"aan": True}),
+        ("notification.send", {"type": "user", "id": "user-1"}, {"tekst": "Storing \u2014 zie de Hub \u00e9n de app"}),
     ],
 )
 def test_ordinary_actions_are_not_refused_locally(
     action_id: str, target: dict[str, Any], parameters: dict[str, Any]
 ) -> None:
     assert actions.local_refusal(action_id, target, parameters) is None
+
+
+@pytest.mark.parametrize(
+    "action_id",
+    [
+        # onder een andere naam iets verwijderen, terugdraaien of schakelen: niet op de vaste lijst, dus nooit
+        "zfs.dataset.rm",
+        "zfs.dataset.destroyrecursive",
+        "zfs.snapshot.rollback",
+        "media.file.trash",
+        "energy.device.switch",
+        "device.switch.set",
+        "app.uninstall_everything",
+    ],
+)
+def test_actions_outside_the_fixed_list_are_refused(action_id: str) -> None:
+    """Fail-closed (R-VEILIG-1): wat niet op de vaste lijst van contract §8 staat, gaat nooit naar de Hub."""
+    assert actions.local_refusal(action_id, {"type": "device", "id": "shelly-plug-3"}, {"aan": True}) == (
+        "onbekende_actie"
+    )
+    assert actions.REFUSALS_NL["onbekende_actie"]
+    assert "onbekende_actie" in actions.HIGH_SEVERITY
+
+
+def test_fixed_list_is_the_executor_allowlist_of_the_contract() -> None:
+    """De vaste lijst is precies de executor-allowlist v1 uit contract §8, zonder app.uninstall_data (nooit
+    aangeboden). Wijzigt het contract, dan wordt deze test rood en moet de lijst bewust worden bijgewerkt."""
+    from pathlib import Path
+
+    contract = Path(__file__).resolve().parents[4] / "docs" / "platform-v2" / "PLATFORM_CONTRACTEN.md"
+    text = contract.read_text(encoding="utf-8")
+    table = text.split("Executor-allowlist v1:", 1)[1].split("**Acties via de eigenaar-connector**", 1)[0]
+    listed: set[str] = set()
+    for line in table.splitlines():
+        if line.startswith("| `"):
+            first = line.split("|")[1]
+            listed |= {part.strip().strip("`") for part in first.split("/")}
+    assert len(listed) == 11, listed
+    assert listed - {"app.uninstall_data"} == actions.FLOW_ACTIONS
+    assert set(actions.RISK_TABLE) == actions.FLOW_ACTIONS
+
+
+@pytest.mark.parametrize(
+    ("action_id", "target", "parameters", "reden"),
+    [
+        # onzichtbare en niet-ASCII-tekens in een id (doel of parameternaam): geweigerd
+        ("app.restart", {"type": "app", "id": "boi\u200bler"}, {}, "ongeldige_tekens"),
+        ("app.restart", {"type": "app", "id": "b\u043eiler"}, {}, "ongeldige_tekens"),  # Cyrillische o
+        ("app.restart", {"type": "app", "id": "jellyfin\u2060"}, {}, "ongeldige_tekens"),
+        ("app.restart", {"type": "app", "id": "jellyfin\n"}, {}, "ongeldige_tekens"),
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {"na\u200bam": 1}, "ongeldige_tekens"),
+        ("notification.send", {"type": "u\u0441er", "id": "user-1"}, {"tekst": "x"}, "ongeldige_tekens"),
+        # in parameterwaarden wordt eerst genormaliseerd (NFKC, zonder onzichtbare tekens en scheidingstekens)
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {"apparaat": "boi\u200bler"}, "boiler_nooit"),
+        (
+            "app.restart",
+            {"type": "app", "id": "jellyfin"},
+            {"apparaat": "\uff42\uff4f\uff49\uff4c\uff45\uff52"},
+            "boiler_nooit",
+        ),
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {"apparaat": "Hot Water"}, "boiler_nooit"),
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {"apparaat": "warm-water"}, "boiler_nooit"),
+        ("app.restart", {"type": "app", "id": "jellyfin"}, {"apparaat": "bo\u00efler"}, "boiler_nooit"),
+        ("app.restart", {"type": "app", "id": "boi ler"}, {}, "boiler_nooit"),
+    ],
+)
+def test_ids_are_plain_text_and_content_is_normalized_before_the_scan(
+    action_id: str, target: dict[str, Any], parameters: dict[str, Any], reden: str
+) -> None:
+    assert actions.local_refusal(action_id, target, parameters) == reden
+
+
+def test_too_deeply_nested_parameters_are_refused() -> None:
+    deep: Any = "x"
+    for _ in range(20):
+        deep = {"n": deep}
+    assert actions.local_refusal("app.restart", {"type": "app", "id": "jellyfin"}, {"p": deep}) == "ongeldige_tekens"
+
+
+@pytest.mark.parametrize(
+    ("action_id", "target"),
+    [
+        ("app.stop", {"type": "app", "id": "emby"}),
+        ("app.restart", {"type": "app", "id": "Emby"}),
+        ("app.update", {"host_id": "nas-primary", "app_id": "embyserver"}),
+        ("app.uninstall", {"type": "app", "id": "emby-server"}),
+        ("app.rollback", {"type": "app", "id": "emby_2"}),
+    ],
+)
+def test_emby_is_never_a_target_of_a_flow(action_id: str, target: dict[str, Any]) -> None:
+    """HARDE EIS (R-HARDE-EIS-3): het platform stopt, updatet of verwijdert Emby nooit (contract §2.3 regel 3)."""
+    assert actions.local_refusal(action_id, target, {}) == "emby_nooit_door_platform"
+    assert "emby_nooit_door_platform" in actions.HIGH_SEVERITY
+    assert actions.local_refusal(action_id, {"type": "app", "id": "jellyfin"}, {}) is None
 
 
 def test_boiler_in_a_notification_target_is_still_refused() -> None:
@@ -255,9 +349,17 @@ def test_token_scope_rules() -> None:
     assert actions.scope_problem("notification.send") is None
     assert actions.scope_problem("app.*") is None
     assert actions.scope_problem("zfs.snapshot.create") is None
+    assert actions.scope_problem("zfs.*") is None, "dekt zfs.snapshot.* van de vaste lijst"
+    assert actions.scope_problem("zfs.snapshot.*") is None
     for bad in ("*", "App.Restart", "app..x", "app.*.x", "a" * 90, "zfs.dataset.delete", "energy.boiler.*", "shell.*"):
         assert actions.scope_problem(bad) is not None, bad
+    # fail-closed: een actie of patroon buiten de vaste lijst hoort niet in een scope (R-VEILIG-1)
+    for bad in ("energy.*", "media.*", "device.*", "energy.device.switch", "zfs.dataset.rm", "zfs.dataset.*"):
+        assert actions.scope_problem(bad) is not None, bad
     assert actions.in_scope("app.restart", ["app.*"])
+    assert actions.in_scope("zfs.snapshot.create", ["zfs.*"])
+    assert not actions.in_scope("zfs.dataset.rm", ["zfs.*"]), "een patroon dekt alleen acties van de vaste lijst"
+    assert not actions.in_scope("energy.device.switch", ["energy.*", "energy.device.switch"])
     assert actions.in_scope("notification.send", ["notification.send"])
     assert not actions.in_scope("application.restart", ["app.*"]), "een patroon geldt per segment, niet per voorvoegsel"
     assert not actions.in_scope("app.restart", ["notification.send"])
