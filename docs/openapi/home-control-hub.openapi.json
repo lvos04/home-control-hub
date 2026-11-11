@@ -132,6 +132,137 @@
         "title": "AccountUpdate",
         "type": "object"
       },
+      "ActionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+){1,3}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "risk_claim": {
+            "anyOf": [
+              {
+                "enum": [
+                  "R0",
+                  "R1",
+                  "R2",
+                  "R3"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Claim"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          },
+          "trigger_delivery_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Delivery Id"
+          }
+        },
+        "required": [
+          "action_id",
+          "reason"
+        ],
+        "title": "ActionIn",
+        "type": "object"
+      },
+      "ActionResultIn": {
+        "additionalProperties": false,
+        "properties": {
+          "hub_proposal_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hub Proposal Id"
+          },
+          "hub_risk_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "R0",
+                  "R1",
+                  "R2",
+                  "R3"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hub Risk Class"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "pattern": "^[a-z0-9_.-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "wacht_op_goedkeuring",
+              "uitgevoerd",
+              "geweigerd",
+              "mislukt"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ActionResultIn",
+        "type": "object"
+      },
       "ActivationIn": {
         "additionalProperties": false,
         "properties": {
@@ -212,6 +343,20 @@
           "id"
         ],
         "title": "BackupCheckpoint",
+        "type": "object"
+      },
+      "ClaimIn": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 10,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ClaimIn",
         "type": "object"
       },
       "DrillIn": {
@@ -438,6 +583,54 @@
         "title": "KitVerifyIn",
         "type": "object"
       },
+      "LimitEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "cooldown_s": {
+            "default": 0,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Cooldown S",
+            "type": "integer"
+          },
+          "max_per_hour": {
+            "maximum": 30.0,
+            "minimum": 0.0,
+            "title": "Max Per Hour",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "max_per_hour"
+        ],
+        "title": "LimitEntry",
+        "type": "object"
+      },
+      "LimitsIn": {
+        "additionalProperties": false,
+        "properties": {
+          "rate_limits": {
+            "items": {
+              "$ref": "#/components/schemas/LimitEntry"
+            },
+            "maxItems": 50,
+            "title": "Rate Limits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rate_limits"
+        ],
+        "title": "LimitsIn",
+        "type": "object"
+      },
       "MappingIn": {
         "additionalProperties": false,
         "properties": {
@@ -536,6 +729,95 @@
         "title": "MfaAttestation",
         "type": "object"
       },
+      "NackIn": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[a-z0-9_.-]+$",
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "NackIn",
+        "type": "object"
+      },
+      "OwnerEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "principal": {
+            "pattern": "^[A-Za-z0-9._@:+-]{1,200}$",
+            "title": "Principal",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "eigenaar",
+              "bewerker",
+              "lezer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "role"
+        ],
+        "title": "OwnerEntry",
+        "type": "object"
+      },
+      "OwnerIn": {
+        "additionalProperties": false,
+        "properties": {
+          "eigenaren": {
+            "items": {
+              "$ref": "#/components/schemas/OwnerEntry"
+            },
+            "maxItems": 20,
+            "title": "Eigenaren",
+            "type": "array"
+          },
+          "owner": {
+            "maxLength": 200,
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner"
+        ],
+        "title": "OwnerIn",
+        "type": "object"
+      },
+      "ProfileIn": {
+        "additionalProperties": false,
+        "properties": {
+          "nieuw_beheerwachtwoord": {
+            "default": false,
+            "title": "Nieuw Beheerwachtwoord",
+            "type": "boolean"
+          }
+        },
+        "title": "ProfileIn",
+        "type": "object"
+      },
       "ProposeIn": {
         "additionalProperties": false,
         "description": "ActionProposal (contract §8). ``risk_claim`` is informatief en wordt **genegeerd** voor de beslissing (EX18).",
@@ -569,7 +851,7 @@
           "expected_version": {
             "anyOf": [
               {
-                "maxLength": 64,
+                "maxLength": 80,
                 "type": "string"
               },
               {
@@ -665,6 +947,38 @@
         "title": "RestoreCheckIn",
         "type": "object"
       },
+      "RunIn": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Run Id"
+          },
+          "bevestig_niet_afgeschermd": {
+            "default": false,
+            "title": "Bevestig Niet Afgeschermd",
+            "type": "boolean"
+          },
+          "sample_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Sample Ids",
+            "type": "array"
+          }
+        },
+        "title": "RunIn",
+        "type": "object"
+      },
       "Scope": {
         "additionalProperties": false,
         "properties": {
@@ -731,6 +1045,136 @@
           }
         },
         "title": "SourceConfig",
+        "type": "object"
+      },
+      "StateIn": {
+        "additionalProperties": false,
+        "properties": {
+          "reden": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reden"
+          },
+          "status": {
+            "enum": [
+              "actief",
+              "gepauzeerd"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "StateIn",
+        "type": "object"
+      },
+      "TokenIn": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 80,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allowed_actions"
+        ],
+        "title": "TokenIn",
+        "type": "object"
+      },
+      "TriggerEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "maxLength": 128,
+            "minLength": 5,
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/TriggerFilter"
+          },
+          "schema_version": {
+            "default": "1.0",
+            "maxLength": 10,
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_type"
+        ],
+        "title": "TriggerEntry",
+        "type": "object"
+      },
+      "TriggerFilter": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_type": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_.-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "source_app": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[a-z]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source App"
+          }
+        },
+        "title": "TriggerFilter",
+        "type": "object"
+      },
+      "TriggersIn": {
+        "additionalProperties": false,
+        "properties": {
+          "triggers": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerEntry"
+            },
+            "maxItems": 50,
+            "title": "Triggers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "triggers"
+        ],
+        "title": "TriggersIn",
         "type": "object"
       },
       "UpgradeGateIn": {
@@ -811,20 +1255,67 @@
     "/connector/v1/apply": {
       "post": {
         "operationId": "apply_connector_v1_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "title": "Response Apply Connector V1 Apply Post"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Uitgevoerd en met readback bevestigd"
+          },
+          "403": {
+            "description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"
+          },
+          "409": {
+            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd of voorstel_verlopen"
+          },
+          "422": {
+            "description": "ongeldig_verzoek of parameters_ongeldig"
           },
           "501": {
-            "description": "capability_unavailable"
+            "description": "capability_unavailable — deze actie is (nog) niet toepasbaar"
+          },
+          "502": {
+            "description": "node_red_fout — Node-RED weigerde of het resultaat is niet bevestigd"
+          },
+          "503": {
+            "description": "node_red_unavailable — er is niets gewijzigd"
           }
         },
-        "summary": "Uitvoeren (niet beschikbaar in deze versie: vereist ondertekend ExecutionRequest, P2)",
+        "summary": "Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); nu alleen flows terugzetten",
         "tags": [
           "connector"
         ]
@@ -1193,19 +1684,19 @@
             "description": "Successful Response"
           },
           "409": {
-            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd of resource_gewijzigd"
+            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
           },
           "422": {
-            "description": "onbekende_actie, validation_error of voorstel_geblokkeerd (met blokkades)"
+            "description": "onbekende_actie, validation_error, voorstel_geblokkeerd, parameters_ongeldig of momentopname_niet_toegestaan"
           },
           "502": {
-            "description": "Authentik weigerde het token, mist rechten of gaf een ongeldig antwoord"
+            "description": "De bron weigerde de aanmelding, mist rechten of gaf een ongeldig antwoord"
           },
           "503": {
-            "description": "Authentik onbereikbaar"
+            "description": "De bron (Authentik of Node-RED) is onbereikbaar"
           }
         },
-        "summary": "Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in Authentik)",
+        "summary": "Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in de bron)",
         "tags": [
           "connector"
         ]
@@ -1227,7 +1718,7 @@
             "description": "capability_unavailable"
           }
         },
-        "summary": "Terugdraaien (niet beschikbaar in deze versie)",
+        "summary": "Terugdraaien (niet beschikbaar: een herstel draai je terug met een nieuw voorstel)",
         "tags": [
           "connector"
         ]
@@ -1256,6 +1747,216 @@
         ]
       }
     },
+    "/integrations/v1/automation/action-requests": {
+      "get": {
+        "operationId": "list_action_requests_integrations_v1_automation_action_requests_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "flow_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Action Requests Integrations V1 Automation Action Requests Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Actieverzoeken van flows (aangevraagd bij de Hub; hier nooit uitgevoerd)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/action-requests/{request_id}": {
+      "get": {
+        "operationId": "get_action_request_integrations_v1_automation_action_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Action Request Integrations V1 Automation Action Requests  Request Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén actieverzoek met wat de Hub terugmeldde",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/action-requests/{request_id}/result": {
+      "post": {
+        "operationId": "post_action_result_integrations_v1_automation_action_requests__request_id__result_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionResultIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Action Result Integrations V1 Automation Action Requests  Request Id  Result Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "De Hub meldt het besluit of de uitvoering van een actieverzoek (alleen de Hub)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
     "/integrations/v1/automation/capabilities": {
       "get": {
         "operationId": "capabilities_integrations_v1_automation_capabilities_get",
@@ -1279,53 +1980,1583 @@
         ]
       }
     },
-    "/integrations/v1/automation/event-types": {
+    "/integrations/v1/automation/deliveries": {
       "get": {
-        "operationId": "endpoint_integrations_v1_automation_event_types_get",
+        "operationId": "list_deliveries_integrations_v1_automation_deliveries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "flow_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Automation Event Types Get",
+                  "title": "Response List Deliveries Integrations V1 Automation Deliveries Get",
                   "type": "object"
                 }
               }
             },
             "description": "Successful Response"
           },
-          "501": {
-            "description": "capability_unavailable"
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "automation.event_types.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Afleveringen aan flows (wachtrij per bron, herhalingen, dead-letter)",
         "tags": [
           "automation"
         ]
       }
     },
-    "/integrations/v1/automation/flows": {
+    "/integrations/v1/automation/deliveries/{delivery_id}/requeue": {
+      "post": {
+        "operationId": "requeue_delivery_integrations_v1_automation_deliveries__delivery_id__requeue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Requeue Delivery Integrations V1 Automation Deliveries  Delivery Id  Requeue Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Vastgelopen aflevering (dead-letter) opnieuw aanbieden",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/editor": {
       "get": {
-        "operationId": "endpoint_integrations_v1_automation_flows_get",
+        "operationId": "get_editor_integrations_v1_automation_editor_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Automation Flows Get",
+                  "title": "Response Get Editor Integrations V1 Automation Editor Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Adres van de Node-RED-editor (alleen beheerder)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/event-types": {
+      "get": {
+        "operationId": "get_event_types_integrations_v1_automation_event_types_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Event Types Integrations V1 Automation Event Types Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Eventtypen-catalogus met schema-versies (contract §7)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/events": {
+      "get": {
+        "operationId": "list_events_integrations_v1_automation_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Events Integrations V1 Automation Events Get",
                   "type": "object"
                 }
               }
             },
             "description": "Successful Response"
           },
-          "501": {
-            "description": "capability_unavailable"
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "automation.flows.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Ontvangen events met hun catalogusstatus (ook wat niet is afgeleverd)",
+        "tags": [
+          "automation"
+        ]
+      },
+      "post": {
+        "operationId": "post_event_integrations_v1_automation_events_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Envelope",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Event Integrations V1 Automation Events Post"
+                }
+              }
+            },
+            "description": "Al eerder ontvangen (zelfde event of zelfde bron-event); niets opnieuw afgeleverd"
+          },
+          "201": {
+            "description": "Bewaard en aangeboden aan de flows met een passende trigger"
+          },
+          "202": {
+            "description": "Bewaard maar niet afgeleverd (bv. onbekende schema-versie); zichtbaar en gemeld"
+          },
+          "422": {
+            "description": "event_ongeldig — de envelope zelf is niet te bewaren"
+          }
+        },
+        "summary": "Event aanbieden voor de triggers van flows (alleen de Hub)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/actions": {
+      "post": {
+        "operationId": "request_action_integrations_v1_automation_flow_api_actions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Request Action Integrations V1 Automation Flow Api Actions Post"
+                }
+              }
+            },
+            "description": "Al eerder aangevraagd voor hetzelfde event (ontdubbeld), of proefrun (gesimuleerd)"
+          },
+          "202": {
+            "description": "Aangevraagd bij de Hub (event flow.action.requested)"
+          },
+          "403": {
+            "description": "forbidden — geweigerd en vastgelegd (details.reason)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "rate_limited — te veel verzoeken van deze flow voor deze actie"
+          },
+          "503": {
+            "description": "hub_unavailable — deze dienst is niet met de Hub gekoppeld"
+          }
+        },
+        "summary": "Actie aanvragen bij de Hub (nooit uitvoeren)",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/actions/{request_id}": {
+      "get": {
+        "operationId": "get_action_integrations_v1_automation_flow_api_actions__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Action Integrations V1 Automation Flow Api Actions  Request Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stand van een eigen actieverzoek (zoals de Hub die terugmeldde)",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/deliveries/claim": {
+      "post": {
+        "operationId": "claim_integrations_v1_automation_flow_api_deliveries_claim_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Claim Integrations V1 Automation Flow Api Deliveries Claim Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Events ophalen: per bron hooguit het oudste openstaande event",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/deliveries/{delivery_id}/ack": {
+      "post": {
+        "operationId": "ack_integrations_v1_automation_flow_api_deliveries__delivery_id__ack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Ack Integrations V1 Automation Flow Api Deliveries  Delivery Id  Ack Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Aflevering verwerkt",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/deliveries/{delivery_id}/nack": {
+      "post": {
+        "operationId": "nack_integrations_v1_automation_flow_api_deliveries__delivery_id__nack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NackIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Nack Integrations V1 Automation Flow Api Deliveries  Delivery Id  Nack Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Aflevering mislukt (wordt met oplopende wachttijd herhaald)",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flow-api/me": {
+      "get": {
+        "operationId": "me_integrations_v1_automation_flow_api_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Me Integrations V1 Automation Flow Api Me Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Wie ben ik: de flow van dit token, zijn triggers, scope en grenzen",
+        "tags": [
+          "automation-flow-api"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows": {
+      "get": {
+        "operationId": "list_flows_integrations_v1_automation_flows_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Flows Integrations V1 Automation Flows Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flows (tabbladen van Node-RED) met eigenaar, status en versie",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}": {
+      "get": {
+        "operationId": "get_flow_integrations_v1_automation_flows__flow_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Flow Integrations V1 Automation Flows  Flow Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén flow met beleid, triggers, grenzen en huidige versie",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/owner": {
+      "put": {
+        "operationId": "put_flow_owner_integrations_v1_automation_flows__flow_id__owner_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Flow Owner Integrations V1 Automation Flows  Flow Id  Owner Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eigenaar en betrokkenen van een flow vastleggen",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/rate-limits": {
+      "put": {
+        "operationId": "put_flow_rate_limits_integrations_v1_automation_flows__flow_id__rate_limits_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LimitsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Flow Rate Limits Integrations V1 Automation Flows  Flow Id  Rate Limits Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Strengere grenzen per flow en actie (nooit ruimer dan standaard)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/runs": {
+      "post": {
+        "operationId": "post_run_integrations_v1_automation_flows__flow_id__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Run Integrations V1 Automation Flows  Flow Id  Runs Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proefrun starten: voorbeeld-events afleveren; acties worden alleen gelogd, nooit aangevraagd",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/state": {
+      "put": {
+        "operationId": "put_flow_state_integrations_v1_automation_flows__flow_id__state_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Flow State Integrations V1 Automation Flows  Flow Id  State Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flow pauzeren of hervatten (afleveren van events en actieverzoeken)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/tokens": {
+      "get": {
+        "operationId": "list_flow_tokens_integrations_v1_automation_flows__flow_id__tokens_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Flow Tokens Integrations V1 Automation Flows  Flow Id  Tokens Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flow-tokens van een flow (alleen kenmerken, nooit het token)",
+        "tags": [
+          "automation"
+        ]
+      },
+      "post": {
+        "operationId": "post_flow_token_integrations_v1_automation_flows__flow_id__tokens_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Flow Token Integrations V1 Automation Flows  Flow Id  Tokens Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flow-token uitgeven (één keer getoond; alleen de hash wordt bewaard)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/tokens/{token_id}/revoke": {
+      "post": {
+        "operationId": "revoke_flow_token_integrations_v1_automation_flows__flow_id__tokens__token_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Token Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Revoke Flow Token Integrations V1 Automation Flows  Flow Id  Tokens  Token Id  Revoke Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flow-token intrekken (direct ongeldig)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/triggers": {
+      "put": {
+        "operationId": "put_flow_triggers_integrations_v1_automation_flows__flow_id__triggers_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggersIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Flow Triggers Integrations V1 Automation Flows  Flow Id  Triggers Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Op welke eventtypen (met schema-versie) een flow reageert",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/flows/{flow_id}/versions": {
+      "get": {
+        "operationId": "list_flow_versions_integrations_v1_automation_flows__flow_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Flow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Flow Versions Integrations V1 Automation Flows  Flow Id  Versions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Versies van een flow (nieuwste eerst)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/hardening-profile": {
+      "post": {
+        "operationId": "post_hardening_profile_integrations_v1_automation_hardening_profile_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Hardening Profile Integrations V1 Automation Hardening Profile Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Beveiligingsprofiel voor de Custom App van Node-RED (formuliervelden en argumenten)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/isolation": {
+      "get": {
+        "operationId": "get_isolation_integrations_v1_automation_isolation_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Isolation Integrations V1 Automation Isolation Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Laatst gemeten isolatie van Node-RED en de stand van de synchronisatie",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/isolation/check": {
+      "post": {
+        "operationId": "post_isolation_check_integrations_v1_automation_isolation_check_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Isolation Check Integrations V1 Automation Isolation Check Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Isolatie van Node-RED nu meten (alleen lezen)",
         "tags": [
           "automation"
         ]
@@ -1354,27 +3585,490 @@
         ]
       }
     },
-    "/integrations/v1/automation/runs": {
+    "/integrations/v1/automation/restores": {
       "get": {
-        "operationId": "endpoint_integrations_v1_automation_runs_get",
+        "operationId": "list_restores_integrations_v1_automation_restores_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Automation Runs Get",
+                  "title": "Response List Restores Integrations V1 Automation Restores Get",
                   "type": "object"
                 }
               }
             },
             "description": "Successful Response"
           },
-          "501": {
-            "description": "capability_unavailable"
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "automation.runs.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Herstelvoorstellen en uitgevoerde herstelacties (nieuwste eerst)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/restores/{restore_id}": {
+      "get": {
+        "operationId": "get_restore_integrations_v1_automation_restores__restore_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restore_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restore Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Restore Integrations V1 Automation Restores  Restore Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén herstelvoorstel met diff, hash en uitkomst",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/runs": {
+      "get": {
+        "operationId": "list_runs_integrations_v1_automation_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "flow_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Runs Integrations V1 Automation Runs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proefruns (nieuwste eerst)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run_integrations_v1_automation_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Run Integrations V1 Automation Runs  Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén proefrun met logboek en vergelijking",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/samples": {
+      "get": {
+        "operationId": "get_samples_integrations_v1_automation_samples_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Samples Integrations V1 Automation Samples Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Vaste voorbeeld-events voor een proefrun (alleen-lezen, met checksum)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/snapshots": {
+      "get": {
+        "operationId": "list_snapshots_integrations_v1_automation_snapshots_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Snapshots Integrations V1 Automation Snapshots Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Momentopnamen van Node-RED (nieuwste eerst; versleuteld bewaard)",
+        "tags": [
+          "automation"
+        ]
+      },
+      "post": {
+        "operationId": "post_snapshot_integrations_v1_automation_snapshots_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Post Snapshot Integrations V1 Automation Snapshots Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Node-RED nu uitlezen en een momentopname vastleggen (alleen lezen)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/snapshots/{snapshot_id}": {
+      "get": {
+        "operationId": "get_snapshot_integrations_v1_automation_snapshots__snapshot_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Snapshot Integrations V1 Automation Snapshots  Snapshot Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Eén momentopname (kenmerken; nooit de inhoud of credentials)",
+        "tags": [
+          "automation"
+        ]
+      }
+    },
+    "/integrations/v1/automation/snapshots/{snapshot_id}/diff": {
+      "get": {
+        "operationId": "get_snapshot_diff_integrations_v1_automation_snapshots__snapshot_id__diff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ten_opzichte_van",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ten Opzichte Van"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Snapshot Diff Integrations V1 Automation Snapshots  Snapshot Id  Diff Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verschil met een andere momentopname (alleen nodes en veldnamen; nooit waarden)",
         "tags": [
           "automation"
         ]
