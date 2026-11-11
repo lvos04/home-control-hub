@@ -15,7 +15,7 @@ import pytest
 from tests import b11
 from tests.b11 import A
 from tests.conftest import NODE_RED_URL, idem, setup_node_red
-from tests.fakes.node_red_fake import exec_flow, simple_flow
+from tests.fakes.node_red_fake import exec_flow, node, simple_flow
 
 
 # ------------------------------------------------------------------------------------------------ toegang tot de editor
@@ -179,6 +179,37 @@ def test_exec_node_is_blocked_and_the_flow_can_do_nothing(
     r = b11.put_flow(linked, auth, flow["id"], "state", {"status": "actief", "reden": "toch"}, role="admin")
     assert r.status_code == 409
     assert r.json()["code"] == "flow_status_conflict"
+
+
+def test_clean_tab_linked_to_an_exec_tab_is_blocked_too(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """R-VEILIG-3: een tabblad zonder verboden node dat via een link-node berichten naar een tabblad met een
+    exec-node stuurt, krijgt de bevinding ook: anders zou het token van het schone tabblad de exec-node bereiken."""
+    clean = "tabschoon0000001"
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow(tab_id=clean, label="Schoon"))
+    b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, clean, "notification.send")
+    assert flow["status"] == "actief"
+
+    link_out = node("tabschoolink0001", "link out", clean, links=["tabexec0linkin01"])
+    link_in = node("tabexec0linkin01", "link in", "tabexec000000001", [["tabexec0exec0001"]], links=[link_out["id"]])
+    node_red_fake.deploy([*simple_flow(tab_id=clean, label="Schoon"), link_out, *exec_flow(), link_in])
+    result = b11.snapshot(linked, auth)
+    assert sorted(result["geblokkeerd"]) == ["tabexec000000001", clean]
+
+    flow = b11.flow_detail(linked, auth, flow["id"])
+    assert flow["status"] == "geblokkeerd" and flow["blocked_reason"] == "verboden_node"
+    assert flow["current_version"]["policy_status"] == "geblokkeerd"
+    assert any(f.get("via_link") == "tabexec000000001" for f in flow["current_version"]["findings"]), flow
+    r = b11.request_action(linked, token, "notification.send", target={"type": "user", "id": "user-1"})
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd"
+    r = linked.post(
+        f"{A}/flows/{flow['id']}/tokens",
+        json={"label": "nog een", "allowed_actions": ["notification.send"]},
+        headers=idem(auth("admin")),
+    )
+    assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict"
 
 
 def test_blocked_flow_stays_paused_after_the_node_is_removed(

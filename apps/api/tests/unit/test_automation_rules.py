@@ -449,6 +449,86 @@ def test_scan_follows_subflows_and_config_nodes() -> None:
     assert [f["node_id"] for f in result.global_findings] == ["cfg0000000000002"]
 
 
+LINK_MODULES = {**MODULES, "link in": "node-red", "link out": "node-red", "link call": "node-red"}
+
+
+def _linked_to_exec(link_type: str = "link out", **extra: Any) -> list[dict[str, Any]]:
+    """Tabblad "Schoon" stuurt via een link-node berichten naar een tabblad met een exec-node (R-VEILIG-3)."""
+    return [
+        tab("tabschoon0000001", "Schoon"),
+        node("schoon00inject01", "inject", "tabschoon0000001", [["schoon00link0001"]]),
+        node("schoon00link0001", link_type, "tabschoon0000001", links=["exec0000linkin01"], **extra),
+        *exec_flow(),
+        node("exec0000linkin01", "link in", "tabexec000000001", [["tabexec0exec0001"]], links=["schoon00link0001"]),
+    ]
+
+
+@pytest.mark.parametrize("link_type", ["link out", "link call"])
+def test_scan_follows_link_nodes_to_other_tabs(link_type: str) -> None:
+    result = policy.scan(_linked_to_exec(link_type), LINK_MODULES, ALLOWED)
+    by_tab = {t.tab_id: t for t in result.tabs}
+    clean = by_tab["tabschoon0000001"]
+    assert clean.blocked and clean.blocked_reason == "verboden_node"
+    assert [(f["code"], f["node_type"], f.get("via_link")) for f in clean.findings] == [
+        ("verboden_node", "exec", "tabexec000000001")
+    ]
+    assert by_tab["tabexec000000001"].blocked
+
+
+def test_scan_follows_link_nodes_in_both_directions_through_subflows_and_dynamic_calls() -> None:
+    # het exec-tabblad stuurt berichten naar een schoon tabblad: ook dan delen ze hun bevindingen
+    back = [
+        tab("tabschoon0000001", "Schoon"),
+        node("schoon00linkin01", "link in", "tabschoon0000001", [["schoon00debug001"]], links=["exec0000link0001"]),
+        node("schoon00debug001", "debug", "tabschoon0000001"),
+        *exec_flow(),
+        node("exec0000link0001", "link out", "tabexec000000001", links=["schoon00linkin01"]),
+    ]
+    assert {t.tab_id: t.blocked for t in policy.scan(back, LINK_MODULES, ALLOWED).tabs} == {
+        "tabschoon0000001": True,
+        "tabexec000000001": True,
+    }
+    # een link in een subflow geldt voor elk tabblad dat de subflow gebruikt; en transitief (A → B → exec)
+    via_sub = [
+        tab("tabsub0000000001", "Met subflow"),
+        node("tabsub00subflow1", "subflow:sub0000000000001", "tabsub0000000001"),
+        {"id": "sub0000000000001", "type": "subflow", "name": "Doorgeefluik"},
+        node("sub00000link0001", "link out", "sub0000000000001", links=["midden00linkin01"]),
+        tab("tabmidden000001", "Midden"),
+        node("midden00linkin01", "link in", "tabmidden000001", [["midden00link0001"]]),
+        node("midden00link0001", "link out", "tabmidden000001", links=["exec0000linkin01"]),
+        *exec_flow(),
+        node("exec0000linkin01", "link in", "tabexec000000001", [["tabexec0exec0001"]]),
+        tab("tabvrij000000001", "Niet verbonden"),
+        node("vrij0000debug001", "debug", "tabvrij000000001"),
+    ]
+    by_tab = {t.tab_id: t for t in policy.scan(via_sub, LINK_MODULES, ALLOWED).tabs}
+    assert by_tab["tabsub0000000001"].blocked and by_tab["tabmidden000001"].blocked
+    assert not by_tab["tabvrij000000001"].blocked
+    # een dynamische link call kiest pas tijdens het draaien: verbonden met elk tabblad met een link in
+    dynamic = [
+        tab("tabdyn0000000001", "Dynamisch"),
+        node("dyn00000call0001", "link call", "tabdyn0000000001", links=[], linkType="dynamic"),
+        *exec_flow(),
+        node("exec0000linkin01", "link in", "tabexec000000001", [["tabexec0exec0001"]], name="ergens"),
+    ]
+    assert {t.tab_id: t.blocked for t in policy.scan(dynamic, LINK_MODULES, ALLOWED).tabs}["tabdyn0000000001"]
+
+
+def test_scan_checksum_of_a_linked_tab_follows_the_tabs_it_is_linked_to() -> None:
+    flows = _linked_to_exec()
+    for n in flows:
+        if n["type"] == "exec":
+            n["type"] = "debug"  # eerst onschuldig verbonden
+    before = {t.tab_id: t for t in policy.scan(flows, LINK_MODULES, ALLOWED).tabs}
+    assert not before["tabschoon0000001"].blocked
+    after = {t.tab_id: t for t in policy.scan(_linked_to_exec(), LINK_MODULES, ALLOWED).tabs}
+    assert after["tabschoon0000001"].checksum != before["tabschoon0000001"].checksum, "nieuwe versie met de bevinding"
+    # een tabblad zonder link-nodes houdt precies de checksum van vóór deze regel
+    alone = policy.scan(simple_flow(), LINK_MODULES, ALLOWED).tabs[0].checksum
+    assert alone == policy.scan(simple_flow(), MODULES, ALLOWED).tabs[0].checksum
+
+
 def test_scan_checksum_changes_only_with_the_flow_itself() -> None:
     base = policy.scan(simple_flow(), MODULES, ALLOWED).tabs[0].checksum
     other_tab = [

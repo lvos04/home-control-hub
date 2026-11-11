@@ -79,8 +79,11 @@ Deze ronde bouwt de vijf werkpakketten:
 - **De editor:** `GET …/automation/editor` geeft het adres alleen aan een beheerder (viewer en operator: 403). Node-RED
   zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
 - **Exec-node:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt (de node draait niet,
-  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Een flow met
-  een verboden node, een onbekend type of een module buiten de allowlist wordt **geblokkeerd**: geen events, geen
+  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Tabbladen die
+  via link-nodes (`link out`, `link in`, `link call`) met elkaar verbonden zijn, ook via een subflow of via een
+  ander tabblad, delen hun bevindingen; een `link call` met `linkType: dynamic` telt als verbonden met elk tabblad
+  met een `link in`. Een flow met een verboden node, een onbekend type of een module buiten de allowlist (in het
+  eigen tabblad of in een verbonden tabblad) wordt **geblokkeerd**: geen events, geen
   nieuwe tokens, elk verzoek met een bestaand token wordt geweigerd, en een event `flow.policy.blocked` gaat naar de
   Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een beheerder of operator hem bewust hervat.
 

@@ -5,8 +5,10 @@ Drie onderdelen, alle drie fail-closed:
 1. **Flowscan** (:func:`scan`): elke node in de configuratie van Node-RED wordt gecontroleerd tegen de verboden typen
    (``exec``: shell-uitvoering), de toegestane modules (standaard alleen de kern ``node-red``) en de geïnstalleerde
    typen. Een bevinding blokkeert de flow (tabblad): geen afleveringen, geen actieverzoeken, geen token. Bevindingen in
-   een subflow of een configuratienode gelden voor elke flow die hem gebruikt. Let op: Node-RED 5 **accepteert** een
-   flow met een uitgesloten ``exec``-node gewoon (de node draait dan niet); daarom is deze eigen scan nodig.
+   een subflow of een configuratienode gelden voor elke flow die hem gebruikt. Tabbladen die via link-nodes (``link
+   out``, ``link in``, ``link call``) met elkaar verbonden zijn, delen hun bevindingen: berichten lopen dan van het
+   ene tabblad naar het andere. Let op: Node-RED 5 **accepteert** een flow met een uitgesloten ``exec``-node gewoon (de
+   node draait dan niet); daarom is deze eigen scan nodig.
 2. **Isolatiecontrole** (:func:`check_isolation`): meet via de admin-API of de editor een aanmelding vraagt, of een
    anonieme lezer 401 krijgt, of de ``exec``-node ontbreekt, of het installeren van modules uit staat, of credentials
    met een eigen ``credentialSecret`` versleuteld zijn en of het dienstaccount alleen zijn minimale rechten heeft.
@@ -23,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -65,6 +68,8 @@ RISKY_TYPES = frozenset(
 OUTBOUND_TYPES = frozenset(
     {"http request", "tcp out", "tcp request", "udp out", "mqtt out", "websocket out", "file", "function"}
 )
+#: kernnodes die berichten naar een ander tabblad sturen (veld ``links``: de id's van de link-nodes aan de andere kant)
+LINK_TYPES = frozenset({"link out", "link in", "link call"})
 SERVICE_USER = "hub-dienst"
 ADMIN_USER = "beheerder"
 #: precies wat deze dienst nodig heeft: flows lezen en (alleen bij herstel) zetten, nodes/instellingen/diagnose lezen
@@ -200,6 +205,7 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
             todo.extend(uses_subflow.get(current, ()))
         return seen
 
+    linked = _linked_tabs(tabs, members, closure)
     used_config: set[str] = set()
     result: list[TabScan] = []
     for tab in sorted(tabs, key=lambda t: str(t["id"])):
@@ -249,8 +255,65 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
                 warnings=warnings[:MAX_FINDINGS],
             )
         )
+    _share_linked_findings(result, linked)
     unused = [f for cid, fs in sorted(config_findings.items()) if cid not in used_config for f in fs]
     return ScanResult(tabs=result, global_findings=unused, node_count=len(flows))
+
+
+def _linked_tabs(
+    tabs: list[dict[str, Any]], members: dict[str, list[dict[str, Any]]], closure: Callable[[str], set[str]]
+) -> dict[str, set[str]]:
+    """Per tabblad de andere tabbladen waarmee het via link-nodes verbonden is (ook via een subflow, en transitief).
+
+    Een ``link call`` met ``linkType: dynamic`` kiest pas tijdens het draaien welk ``link in`` hij aanroept: die telt
+    daarom als verbonden met elk tabblad (of elke subflow) met een ``link in`` (fail-closed)."""
+    container_of = {str(node.get("id")): c for c, nodes in members.items() for node in nodes}
+    link_in = {c for c, nodes in members.items() if any(n.get("type") == "link in" for n in nodes)}
+    edges: dict[str, set[str]] = {c: set() for c in members}
+    for c, nodes in members.items():
+        for node in nodes:
+            if node.get("type") not in LINK_TYPES:
+                continue
+            refs = node.get("links")
+            others = {container_of.get(str(r)) for r in (refs if isinstance(refs, list) else [])}
+            if node.get("type") == "link call" and node.get("linkType") == "dynamic":
+                others |= link_in
+            for other in others:
+                if other is not None and other != c:
+                    edges[c].add(other)
+                    edges[other].add(c)
+    tab_ids = sorted(str(t["id"]) for t in tabs)
+    reach = {t: closure(t) for t in tab_ids}
+    tabs_with: dict[str, set[str]] = {}
+    for t, containers in reach.items():
+        for c in containers:
+            tabs_with.setdefault(c, set()).add(t)
+    neighbours = {
+        t: {u for c in reach[t] for other in edges.get(c, ()) for u in tabs_with.get(other, ())} - {t} for t in tab_ids
+    }
+    out: dict[str, set[str]] = {}
+    for t in tab_ids:
+        seen, todo = {t}, [t]
+        while todo:
+            for u in neighbours[todo.pop()]:
+                if u not in seen:
+                    seen.add(u)
+                    todo.append(u)
+        out[t] = seen - {t}
+    return out
+
+
+def _share_linked_findings(result: list[TabScan], linked: dict[str, set[str]]) -> None:
+    """Verbonden tabbladen delen hun eigen bevindingen (met ``via_link``). De checksum van een verbonden tabblad hangt
+    dan ook af van de tabbladen waarmee het verbonden is, zodat een nieuwe bevinding daar een nieuwe versie geeft."""
+    own = {t.tab_id: (list(t.findings), t.checksum) for t in result}
+    for t in result:
+        others = sorted(linked.get(t.tab_id, ()))
+        if not others:
+            continue
+        shared = [{**f, "via_link": o} for o in others for f in own[o][0]]
+        t.findings = [*own[t.tab_id][0], *shared][:MAX_FINDINGS]
+        t.checksum = sha256_hex(canonical({"tabblad": own[t.tab_id][1], "verbonden": [[o, own[o][1]] for o in others]}))
 
 
 # ---------------------------------------------------------------------------------------------------- isolatiecontrole
