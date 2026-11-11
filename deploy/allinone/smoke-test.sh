@@ -47,6 +47,12 @@ http_has() { curl -fsS "http://127.0.0.1:$PORT$1" -o "$WORK/http.txt" && grep -q
 http_has_401_reason() {
   curl -s "http://127.0.0.1:$PORT/connector/v1/discover" -o "$WORK/http.txt" && grep -q '"reason":"not_linked"' "$WORK/http.txt"
 }
+# B11: de flow-API neemt alleen flow-tokens aan; zonder of met een onbekend token is het antwoord 401 met de reden
+flow_api_401() { # extra curl-argumenten..., laatste = verwachte reden
+  local reason="${*: -1}"
+  [ "$(curl -s -o "$WORK/flow.txt" -w '%{http_code}' "${@:1:$#-1}" \
+    "http://127.0.0.1:$PORT/integrations/v1/automation/flow-api/me")" = 401 ] && grep -q "\"reason\":\"$reason\"" "$WORK/flow.txt"
+}
 log_has() { docker logs "$1" > "$WORK/log.txt" 2>&1; grep -q -- "$2" "$WORK/log.txt"; }
 
 run() { # naam, datamap, extra args — bewust geen --security-opt en geen --cap-drop (zoals het formulier)
@@ -147,6 +153,9 @@ check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingera
 check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"
 check "API zonder token geeft 401 unauthorized (not_linked)" \
   "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"
+check "flow-API (B11) zonder flow-token geeft 401 flow_token_ontbreekt" "flow_api_401 flow_token_ontbreekt"
+check "flow-API (B11) met een onbekend flow-token geeft 401 flow_token_ongeldig" \
+  "flow_api_401 -H 'Authorization: Bearer flw_onbekend' flow_token_ongeldig"
 check "elk proces: Uid 568, CapEff/CapPrm/CapAmb 0, CapBnd 0, NoNewPrivs 1 (ook PID 1)" "procs_ok $NAME 1"
 check "PID 1 is de bewaker en draait als 568" "pid1_is_supervisor_568 $NAME"
 check "verweesde zombies worden door PID 1 opgeruimd" "zombies_reaped $NAME"
@@ -169,6 +178,8 @@ check "geen setuid/setgid-bestanden in de image" \
 check "te groot verzoek zonder login geeft 413" too_large
 check "te groot chunked verzoek geeft 413 vóór auth" too_large_chunked
 check "markeerrij in de database geschreven" marker_write
+check "migratie 0005 (B11) is uitgevoerd: tabel automation_flow_token bestaat" \
+  "[ \"\$(sql $NAME \"select to_regclass('public.automation_flow_token') is not null\")\" = t ]"
 check "pg_dump werkt in de image (back-up vóór migratie)" pg_dump_works
 SUM1="$(in_work 'sha256sum /w/root/secrets/vault.key' | cut -d' ' -f1)"
 check "vault.key leesbaar voor de controle" "[ -n '$SUM1' ]"

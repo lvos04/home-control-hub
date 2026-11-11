@@ -8,7 +8,9 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -109,6 +111,45 @@ def test_manifest_is_valid_for_the_1_3_validator_in_strict_mode() -> None:
     )
     assert out.returncode == 0, out.stdout + out.stderr
     assert "GELDIG — 0 fout(en)" in out.stdout
+
+
+def _socket_via_storage(m: dict[str, Any]) -> str:
+    # bewust zonder declaratie in storage[]: een onvolledige declaratie stopt de validator al bij het schema
+    m["custom_app"]["storage"].append({"name": "docker", "type": "host_path", "host_path": "/var/run/docker.sock"})
+    return "custom_app.storage[1].host_path"
+
+
+def _socket_via_env(m: dict[str, Any]) -> str:
+    m["custom_app"]["env"].append({"name": "DOCKER_HOST", "value": "unix:///var/run/docker.sock"})
+    return "custom_app.env[0]"
+
+
+@pytest.mark.skipif(
+    not VALIDATOR_VERPLICHT and not APPSTORE_CLI.is_file(),
+    reason="geen manifestvalidator (HCH_JL_MANIFEST of een lokale appstore-en-fork met venv)",
+)
+@pytest.mark.parametrize("variant", [_socket_via_storage, _socket_via_env], ids=["opslag", "omgeving"])
+def test_validator_rejects_a_manifest_variant_with_a_docker_socket(
+    tmp_path: Path, variant: Callable[[dict[str, Any]], str]
+) -> None:
+    """S-P2-290 (negatief): een variant van het eigen manifest met een Docker-socket wordt door dezelfde validator
+    geweigerd (``docker_socket_forbidden``), zodat 'geen Docker-socket' niet alleen een belofte in de docs is."""
+    assert APPSTORE_CLI.is_file(), f"manifestvalidator verplicht maar niet gevonden: {APPSTORE_CLI}"
+    m = yaml.safe_load((DEPLOY / "manifest/home-control-hub.manifest.yaml").read_text(encoding="utf-8"))
+    pad = variant(m)
+    bestand = tmp_path / "variant.manifest.yaml"
+    bestand.write_text(yaml.safe_dump(m, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    out = subprocess.run(  # noqa: S603 - vaste opdracht, geen shell
+        [str(APPSTORE_CLI), "validate", "--strict", str(bestand)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        check=False,
+    )
+    assert out.returncode != 0, out.stdout + out.stderr
+    regels = [r for r in out.stdout.splitlines() if "docker_socket_forbidden" in r]
+    assert regels and all(r.split()[0] == "FOUT" for r in regels), out.stdout
+    assert any(pad in r for r in regels), out.stdout
 
 
 def test_dockerfile_pins_base_images_by_digest_and_no_latest() -> None:
