@@ -5,10 +5,14 @@ Drie onderdelen, alle drie fail-closed:
 1. **Flowscan** (:func:`scan`): elke node in de configuratie van Node-RED wordt gecontroleerd tegen de verboden typen
    (``exec``: shell-uitvoering), de toegestane modules (standaard alleen de kern ``node-red``) en de geïnstalleerde
    typen. Een bevinding blokkeert de flow (tabblad): geen afleveringen, geen actieverzoeken, geen token. Bevindingen in
-   een subflow of een configuratienode gelden voor elke flow die hem gebruikt. Tabbladen die via link-nodes (``link
-   out``, ``link in``, ``link call``) met elkaar verbonden zijn, delen hun bevindingen: berichten lopen dan van het
-   ene tabblad naar het andere. Let op: Node-RED 5 **accepteert** een flow met een uitgesloten ``exec``-node gewoon (de
-   node draait dan niet); daarom is deze eigen scan nodig.
+   een subflow of een configuratienode gelden voor elke flow die hem gebruikt. Tabbladen die met elkaar verbonden
+   zijn (een gewone draad, een link-node of een eigenschap die naar een node in het andere tabblad wijst) delen hun
+   bevindingen: berichten lopen dan van het ene tabblad naar het andere. Een node met een ``z`` die geen tabblad is
+   draait in een tabblad dat Node-RED zelf aanmaakt en wordt zo gescand; een draad of link naar een id die nergens
+   staat is zelf een bevinding (``verwijzing_onbekend``). Let op: Node-RED 5 **accepteert** een flow met een
+   uitgesloten ``exec``-node gewoon (de node draait dan niet); daarom is deze eigen scan nodig. Wat tabbladen tijdens
+   het draaien delen zonder dat het in de configuratie staat (global context, een ``http in`` die ``http request``
+   naar Node-RED zelf doet, mqtt via een broker) kan geen scan zien; dat is de grens van de blokkade per tabblad.
 2. **Isolatiecontrole** (:func:`check_isolation`): meet via de admin-API of de editor een aanmelding vraagt, of een
    anonieme lezer 401 krijgt, of de ``exec``-node ontbreekt, of het installeren van modules uit staat, of credentials
    met een eigen ``credentialSecret`` versleuteld zijn en of het dienstaccount alleen zijn minimale rechten heeft.
@@ -163,25 +167,70 @@ def _references(node: dict[str, Any]) -> set[str]:
     return {v for k, v in node.items() if isinstance(v, str) and k not in ("id", "type", "z", "name", "info")}
 
 
+def _targets(node: dict[str, Any]) -> set[str]:
+    """Elke id waar een node een bericht naartoe stuurt: ``wires`` (alle uitgangen, ook van een junction) en bij een
+    link-node ``links``. Node-RED zoekt zo'n id over **alle** flows heen (``Flow.getNode`` vraagt een onbekende id aan
+    de bovenliggende flow); een draad is dus net zo goed een verbinding tussen tabbladen als een link-node."""
+    out: set[str] = set()
+    wires = node.get("wires")
+    for port in wires if isinstance(wires, list) else []:
+        out |= {str(t) for t in (port if isinstance(port, list) else [port])}
+    links = node.get("links")
+    if node.get("type") in LINK_TYPES and isinstance(links, list):
+        out |= {str(t) for t in links}
+    return out
+
+
 def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: tuple[str, ...]) -> ScanResult:
-    """Controleert de volledige configuratie; geeft per tabblad bevindingen (blokkerend) en waarschuwingen."""
-    tabs = [n for n in flows if n.get("type") == "tab"]
+    """Controleert de volledige configuratie; geeft per tabblad bevindingen (blokkerend) en waarschuwingen.
+
+    Fail-closed, zoals Node-RED de configuratie zelf leest (``@node-red/runtime`` ``flows/util.js`` ``parseConfig``):
+
+    - een node met een ``z`` die geen tabblad of subflow is, draait in een tabblad dat Node-RED zelf aanmaakt
+      (``addedTabs``): hier is dat een eigen tabblad met de ``z`` als naam, met eigen bevindingen;
+    - een draad (``wires``), een link (``links``) of een eigenschap die naar een node in een ander tabblad, een
+      subflow of zo'n eigen tabblad wijst, verbindt de twee: verbonden tabbladen delen hun bevindingen (``via_link``);
+    - een draad of link naar een id die nergens in de configuratie staat (bijvoorbeeld de id die Node-RED een node in
+      een subflow-instantie pas tijdens het draaien geeft) is een eigen bevinding ``verwijzing_onbekend``.
+    """
+    real_tabs = [n for n in flows if n.get("type") == "tab"]
     subflows = {str(n["id"]) for n in flows if n.get("type") == "subflow"}
-    containers = {str(t["id"]) for t in tabs} | subflows
-    members: dict[str, list[dict[str, Any]]] = {c: [] for c in containers}
+    members: dict[str, list[dict[str, Any]]] = {c: [] for c in {str(t["id"]) for t in real_tabs} | subflows}
     config_nodes: dict[str, dict[str, Any]] = {}
+    ghost_tabs: dict[str, dict[str, Any]] = {}
     for node in flows:
         if node.get("type") in ("tab", "subflow"):
             continue
-        z = node.get("z")
-        if isinstance(z, str) and z in members:
-            members[z].append(node)
-        else:
-            config_nodes[str(node["id"])] = node  # configuratienode (geen of onbekende z): geldt voor wie hem gebruikt
+        z = str(node.get("z") or "")
+        if not z:
+            config_nodes[str(node["id"])] = node  # configuratienode zonder z: geldt voor wie hem gebruikt
+            continue
+        if z not in members:  # spooktabblad: Node-RED maakt het zelf aan en laat de node draaien
+            members[z] = []
+            ghost_tabs[z] = {"id": z, "type": "tab", "label": z, "disabled": False}
+        members[z].append(node)
+    tabs = [*real_tabs, *ghost_tabs.values()]
     own: dict[str, list[dict[str, Any]]] = {
         c: [f for node in nodes for f in _node_findings(node, modules, allowed_modules)] for c, nodes in members.items()
     }
     config_findings = {cid: _node_findings(node, modules, allowed_modules) for cid, node in config_nodes.items()}
+    container_of = {str(node.get("id")): c for c, nodes in members.items() for node in nodes}
+    edges: dict[str, set[str]] = {c: set() for c in members}
+    link_in = {c for c, nodes in members.items() if any(n.get("type") == "link in" for n in nodes)}
+    for c, c_nodes in members.items():
+        for node in c_nodes:
+            others: set[str] = set()
+            for ref in sorted(_targets(node)):
+                if ref in container_of:
+                    others.add(container_of[ref])
+                elif ref not in config_nodes:
+                    own[c].append(_finding("verwijzing_onbekend", node, ref=ref[:64]))
+            others |= {container_of[ref] for ref in _references(node) if ref in container_of}
+            if node.get("type") == "link call" and node.get("linkType") == "dynamic":
+                others |= link_in  # kiest pas tijdens het draaien welk ``link in`` hij aanroept: elk telt
+            for other in others - {c}:
+                edges[c].add(other)
+                edges[other].add(c)
     uses_subflow: dict[str, set[str]] = {
         c: {
             str(node["type"]).split(":", 1)[1]
@@ -191,7 +240,8 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
         for c, nodes in members.items()
     }
     uses_config: dict[str, set[str]] = {
-        c: {ref for node in nodes for ref in _references(node) if ref in config_nodes} for c, nodes in members.items()
+        c: {ref for node in nodes for ref in _references(node) | _targets(node) if ref in config_nodes}
+        for c, nodes in members.items()
     }
 
     def closure(container: str) -> set[str]:
@@ -205,7 +255,7 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
             todo.extend(uses_subflow.get(current, ()))
         return seen
 
-    linked = _linked_tabs(tabs, members, closure)
+    linked = _linked_tabs(sorted(str(t["id"]) for t in tabs), closure, edges)
     used_config: set[str] = set()
     result: list[TabScan] = []
     for tab in sorted(tabs, key=lambda t: str(t["id"])):
@@ -261,28 +311,11 @@ def scan(flows: list[dict[str, Any]], modules: dict[str, str], allowed_modules: 
 
 
 def _linked_tabs(
-    tabs: list[dict[str, Any]], members: dict[str, list[dict[str, Any]]], closure: Callable[[str], set[str]]
+    tab_ids: list[str], closure: Callable[[str], set[str]], edges: dict[str, set[str]]
 ) -> dict[str, set[str]]:
-    """Per tabblad de andere tabbladen waarmee het via link-nodes verbonden is (ook via een subflow, en transitief).
-
-    Een ``link call`` met ``linkType: dynamic`` kiest pas tijdens het draaien welk ``link in`` hij aanroept: die telt
-    daarom als verbonden met elk tabblad (of elke subflow) met een ``link in`` (fail-closed)."""
-    container_of = {str(node.get("id")): c for c, nodes in members.items() for node in nodes}
-    link_in = {c for c, nodes in members.items() if any(n.get("type") == "link in" for n in nodes)}
-    edges: dict[str, set[str]] = {c: set() for c in members}
-    for c, nodes in members.items():
-        for node in nodes:
-            if node.get("type") not in LINK_TYPES:
-                continue
-            refs = node.get("links")
-            others = {container_of.get(str(r)) for r in (refs if isinstance(refs, list) else [])}
-            if node.get("type") == "link call" and node.get("linkType") == "dynamic":
-                others |= link_in
-            for other in others:
-                if other is not None and other != c:
-                    edges[c].add(other)
-                    edges[other].add(c)
-    tab_ids = sorted(str(t["id"]) for t in tabs)
+    """Per tabblad de andere tabbladen waarmee het verbonden is: via een draad, een link-node of een eigenschap naar
+    een node in een ander tabblad (``edges``, per container in beide richtingen), ook via een subflow, en transitief.
+    Een verbinding van of naar een subflow geldt voor elk tabblad dat die subflow gebruikt."""
     reach = {t: closure(t) for t in tab_ids}
     tabs_with: dict[str, set[str]] = {}
     for t, containers in reach.items():

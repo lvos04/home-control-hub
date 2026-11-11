@@ -116,5 +116,5 @@ Loop ze na de installatie en na elke wijziging van het formulier van Node-RED na
 | Hub: `niet_beveiligd` | Node-RED vraagt geen aanmelding. Controleer of de app volgens het manifest is geïnstalleerd; stop Node-RED tot dat zo is. |
 | Hub: *Node-RED is niet bereikbaar* (`node_red_unavailable`) | App gestopt, verkeerde poort of verkeerd adres. De Hub probeert het zelf opnieuw. |
 | Isolatie: afwijking bij `anoniem_geweigerd` | Alleen te zien zodra er een dienstaccount is. Verwacht tot het manifest besluit C-11 volgt (na S-P2-410); zie "Anonieme toegang". |
-| Flow staat op *geblokkeerd* | De flow bevat een verboden node, een onbekend type of een module die niet is toegestaan. Haal die weg; hervat de flow daarna zelf. |
+| Flow staat op *geblokkeerd* | De flow bevat een verboden node, een onbekend type, een module die niet is toegestaan of een draad of link naar een node die niet bestaat; of hij is (met een draad, een link-node of een eigenschap) verbonden met zo'n tabblad. Haal dat weg; hervat de flow daarna zelf. |
 | Herstel: `credentials_niet_te_ontsleutelen` | De sleutel waarmee Node-RED de credentials versleutelt is een andere dan toen de momentopname werd gemaakt. Er is niets gewijzigd. |

@@ -79,18 +79,36 @@ Deze ronde bouwt de vijf werkpakketten:
 - **De editor:** `GET …/automation/editor` geeft het adres alleen aan een beheerder (viewer en operator: 403). Node-RED
   zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
 - **Exec-node:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt (de node draait niet,
-  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Tabbladen die
-  via link-nodes (`link out`, `link in`, `link call`) met elkaar verbonden zijn, ook via een subflow of via een
-  ander tabblad, delen hun bevindingen; een `link call` met `linkType: dynamic` telt als verbonden met elk tabblad
-  met een `link in`. Een flow met een verboden node, een onbekend type of een module buiten de allowlist (in het
-  eigen tabblad of in een verbonden tabblad) wordt **geblokkeerd**, en een event `flow.policy.blocked` gaat naar de
-  Hub. Een geblokkeerde flow krijgt geen events (ook afleveringen die al wachtten, blijven staan), geen nieuwe tokens
-  en mag niets aanvragen: elk actieverzoek is `403 flow_geblokkeerd` en wordt vastgelegd. Een bestaand token blijft
+  maar de flow staat er). Daarom scant de dienst elke gelezen flow zelf (ook subflows en config-nodes). Tabbladen
+  die met elkaar **verbonden** zijn delen hun bevindingen. Verbonden is (ook via een subflow of via een ander
+  tabblad, transitief): een gewone draad (`wires`) naar een node in een ander tabblad (gemeten op de gepinde image:
+  Node-RED levert zo'n bericht gewoon af, `Flow.getNode` vraagt een onbekende id aan de bovenliggende flow), een
+  link-node (`link out`, `link in`, `link call`; een `link call` met `linkType: dynamic` telt als verbonden met elk
+  tabblad met een `link in`) of een eigenschap die naar een node in een ander tabblad wijst (zoals een
+  configuratienode die daar staat). Een node met een `z` die geen tabblad of subflow is, draait in Node-RED in een
+  tabblad dat het zelf aanmaakt (`parseConfig`, `addedTabs`); de scan behandelt zo'n `z` als een eigen tabblad met
+  eigen bevindingen. Een draad of link naar een id die nergens in de configuratie staat (bijvoorbeeld de id
+  `<instantie>-<node>` die Node-RED een node in een subflow-instantie pas tijdens het draaien geeft) is zelf een
+  bevinding `verwijzing_onbekend` (fail-closed). Een flow met een verboden node, een onbekend type, een module
+  buiten de allowlist of zo'n onbekende verwijzing (in het eigen tabblad of in een verbonden tabblad) wordt
+  **geblokkeerd**, en een event `flow.policy.blocked` gaat naar de Hub. Een geblokkeerde flow krijgt geen events (ook
+  afleveringen die al wachtten, blijven staan), geen nieuwe tokens en mag niets aanvragen: elk actieverzoek is
+  `403 flow_geblokkeerd` en wordt vastgelegd. Een bestaand token blijft
   bestaan, maar opent alleen nog: de eigen stand lezen (`GET …/flow-api/me` toont de status en de reden, en
   `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het bevestigen (`ack`/`nack`) van een aflevering die al
   vóór de blokkade was opgehaald; die wordt niet opnieuw afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets
   naar de flow en niets van de flow naar de Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een
   beheerder of operator hem bewust hervat.
+- **Grens van de blokkade per tabblad:** de scan ziet alleen wat in de configuratie staat. Wat tabbladen tijdens het
+  draaien delen zonder dat het daar staat, kan hij niet zien: de global context, een `http in` in het ene tabblad
+  die een `http request` uit het andere naar Node-RED zelf ontvangt, mqtt of websocket via een broker, tcp/udp en
+  bestanden. Een geblokkeerd tabblad blijft in Node-RED zelf draaien en kan zo een niet-geblokkeerd tabblad voeden;
+  deze dienst houdt dat niet tegen. De harde grens ligt daarom bij Node-RED zelf: met het manifest van
+  jelly-leon-platform (`install/manifests/node-red.manifest.yaml`) laadt Node-RED alleen de kernnodes uit
+  `nodesIncludes` (geen exec, function, file, mqtt, `http in`, websocket, tcp of udp; wel `http request`), staat
+  installeren via het palet uit en kunnen function-nodes geen externe modules laden. Van de kanalen hierboven blijft
+  dan vooral de global context over (bereikbaar met de change-node). De scan is daarbovenop de vangst voor wat
+  Node-RED toch aanneemt. Die kanalen zijn niet getest, alleen vastgesteld uit de werking van Node-RED.
 
 ### 3. Eventtypencatalogus en afleveren (B11-002)
 

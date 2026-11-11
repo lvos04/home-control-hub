@@ -54,7 +54,7 @@ CRED_FILE = "flows_cred.json"
 MAX_CRED_BYTES = 4 * 1024 * 1024
 MAX_DIFF_ROWS = 200
 ISOLATION_MAX_AGE = timedelta(minutes=15)
-POLICY_REASONS = ("verboden_node", "module_niet_toegestaan", "onbekend_type")
+POLICY_REASONS = ("verboden_node", "module_niet_toegestaan", "onbekend_type", "verwijzing_onbekend")
 SYSTEM_ACTOR = "home-control-hub"
 
 

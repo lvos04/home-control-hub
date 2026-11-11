@@ -212,6 +212,59 @@ def test_clean_tab_linked_to_an_exec_tab_is_blocked_too(
     assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict"
 
 
+def test_clean_tab_wired_to_an_exec_tab_is_blocked_too(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """R-VEILIG-3 (herreview): ook zonder link-node levert Node-RED af via een gewone draad naar een node in een
+    ander tabblad (gemeten op de gepinde image). Het schone tabblad deelt dan de bevinding van het exec-tabblad."""
+    clean = "tabschoon0000001"
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow(tab_id=clean, label="Schoon"))
+    b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, clean, "notification.send")
+    assert flow["status"] == "actief"
+
+    wired = [
+        *simple_flow(tab_id=clean, label="Schoon"),
+        node("tabschooinject02", "inject", clean, [["tabexec0exec0001"]]),  # draad naar de exec-node, ander tabblad
+        *exec_flow(),
+    ]
+    wired[-1]["wires"] = [["tabschoodebug001"], [], []]  # en terug: de uitvoer van exec naar het schone tabblad
+    node_red_fake.deploy(wired)
+    result = b11.snapshot(linked, auth)
+    assert sorted(result["geblokkeerd"]) == ["tabexec000000001", clean]
+
+    flow = b11.flow_detail(linked, auth, flow["id"])
+    assert flow["status"] == "geblokkeerd" and flow["blocked_reason"] == "verboden_node"
+    assert any(f.get("via_link") == "tabexec000000001" for f in flow["current_version"]["findings"]), flow
+    r = b11.request_action(linked, token, "notification.send", target={"type": "user", "id": "user-1"})
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd"
+    r = linked.post(
+        f"{A}/flows/{flow['id']}/tokens",
+        json={"label": "nog een", "allowed_actions": ["notification.send"]},
+        headers=idem(auth("admin")),
+    )
+    assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict"
+
+
+def test_wire_to_a_node_that_does_not_exist_blocks_until_it_is_gone(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """Fail-closed: een draad naar een id die niet in de configuratie staat (bv. een node in een subflow-instantie,
+    die Node-RED pas tijdens het draaien een id geeft) blokkeert; weg draad = gepauzeerd, zoals bij elke bevinding."""
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow())
+    b11.snapshot(linked, auth)
+    flow = b11.flow_by_tab(linked, auth, "tab0000000000001")
+    dangling = [*simple_flow(), node("tab00000inject02", "inject", "tab0000000000001", [["bestaatniet00001"]])]
+    node_red_fake.deploy(dangling)
+    assert b11.snapshot(linked, auth)["geblokkeerd"] == ["tab0000000000001"]
+    flow = b11.flow_detail(linked, auth, flow["id"])
+    assert flow["status"] == "geblokkeerd" and flow["blocked_reason"] == "verwijzing_onbekend"
+    assert flow["current_version"]["findings"][0]["ref"] == "bestaatniet00001"
+    node_red_fake.deploy(simple_flow())
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, flow["id"])["status"] == "gepauzeerd"
+
+
 def test_blocked_flow_stays_paused_after_the_node_is_removed(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
 ) -> None:

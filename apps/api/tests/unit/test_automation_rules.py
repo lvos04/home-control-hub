@@ -529,6 +529,131 @@ def test_scan_checksum_of_a_linked_tab_follows_the_tabs_it_is_linked_to() -> Non
     assert alone == policy.scan(simple_flow(), MODULES, ALLOWED).tabs[0].checksum
 
 
+WIRE_MODULES = {**LINK_MODULES, "http request": "node-red"}
+CLEAN, BAD, GHOST = "tabschoon0000001", "tabexec000000001", "spook00000000001"
+
+
+def _wire_to_exec() -> list[dict[str, Any]]:
+    """Gewone draad (``wires``) van een inject in "Schoon" naar de exec-node in een ander tabblad, zonder link-node."""
+    return [
+        tab(CLEAN, "Schoon"),
+        node("schoon00inject01", "inject", CLEAN, [["tabexec0exec0001"]]),
+        *exec_flow(tab_id=BAD),
+    ]
+
+
+def _wire_from_contrib() -> list[dict[str, Any]]:
+    """Gewone draad van een node uit een niet-toegestane module (ander tabblad) naar een node in "Schoon"."""
+    return [
+        tab(CLEAN, "Schoon"),
+        node("schoon00http0001", "http request", CLEAN),
+        tab("tabcontrib000001", "Contrib"),
+        node("contrib0node0001", "x", "tabcontrib000001", [["schoon00http0001"]]),
+    ]
+
+
+def _ghost_tab_links_in() -> list[dict[str, Any]]:
+    """Een node met een ``z`` die geen tabblad of subflow is: Node-RED maakt daar zelf een tabblad van (parseConfig,
+    ``addedTabs``) en laat hem draaien. Van daaruit gaat een link out naar een link in in "Schoon"."""
+    return [
+        tab(CLEAN, "Schoon"),
+        node("schoon00http0001", "http request", CLEAN),
+        node("schoon00linkin01", "link in", CLEAN, [["schoon00http0001"]]),
+        node("spook000contrib1", "x", GHOST, [["spook000linkout1"]], x=10, y=10),
+        node("spook000linkout1", "link out", GHOST, links=["schoon00linkin01"], mode="link", x=20, y=10),
+    ]
+
+
+def _config_in_other_tab() -> list[dict[str, Any]]:
+    """Een node in "Schoon" verwijst (eigenschap) naar een configuratienode die in een ander tabblad staat en uit een
+    niet-toegestane module komt; Node-RED zoekt zo'n node over alle flows heen (``RED.nodes.getNode``)."""
+    return [
+        tab(CLEAN, "Schoon"),
+        node("schoon00inject01", "inject", CLEAN, broker="ander000broker01"),
+        tab("tabander00000001", "Ander"),
+        node("ander000broker01", "x", "tabander00000001"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flows", "code", "other"),
+    [
+        pytest.param(_wire_to_exec(), "verboden_node", BAD, id="draad naar"),
+        pytest.param(_wire_from_contrib(), "module_niet_toegestaan", "tabcontrib000001", id="draad van"),
+        pytest.param(_ghost_tab_links_in(), "module_niet_toegestaan", GHOST, id="spook-z"),
+        pytest.param(_config_in_other_tab(), "module_niet_toegestaan", "tabander00000001", id="configuratie elders"),
+    ],
+)
+def test_scan_follows_every_reference_to_another_tab(flows: list[dict[str, Any]], code: str, other: str) -> None:
+    """R-VEILIG-3 (herreview): Node-RED levert ook af via een gewone draad naar een node in een ander tabblad
+    (Flow.getNode vraagt een onbekende id aan de bovenliggende flow) en vanuit een node met een onbekende ``z``."""
+    by_tab = {t.tab_id: t for t in policy.scan(flows, WIRE_MODULES, ALLOWED).tabs}
+    clean = by_tab[CLEAN]
+    assert clean.blocked and clean.blocked_reason == code, clean.findings
+    assert [(f["code"], f.get("via_link")) for f in clean.findings] == [(code, other)]
+    assert by_tab[other].blocked and by_tab[other].blocked_reason == code
+
+
+def test_scan_treats_a_node_with_an_unknown_tab_as_its_own_tab() -> None:
+    result = policy.scan(_ghost_tab_links_in(), WIRE_MODULES, ALLOWED)
+    by_tab = {t.tab_id: t for t in result.tabs}
+    ghost = by_tab[GHOST]
+    assert ghost.label == GHOST and ghost.node_count == 2 and ghost.node_types == ["link out", "x"]
+    assert [f["node_id"] for f in ghost.findings] == ["spook000contrib1"]
+    assert result.global_findings == [], "de bevinding staat op het spooktabblad zelf, niet in de ongebruikte lijst"
+    assert result.summary()["geblokkeerd"] == 2
+    # een losse node zonder tabblad en zonder draad raakt het schone tabblad niet, maar is zelf wel geblokkeerd
+    alone = [*simple_flow(), node("spook000contrib1", "x", GHOST, x=10, y=10)]
+    by_tab = {t.tab_id: t for t in policy.scan(alone, WIRE_MODULES, ALLOWED).tabs}
+    assert not by_tab["tab0000000000001"].blocked and by_tab[GHOST].blocked
+
+
+@pytest.mark.parametrize(
+    "flows",
+    [
+        pytest.param(
+            [*simple_flow(), node("los00000inject01", "inject", "tab0000000000001", [["bestaatniet00001"]])],
+            id="draad naar niets",
+        ),
+        pytest.param(
+            [*simple_flow(), node("los00000linkout1", "link out", "tab0000000000001", links=["bestaatniet00001"])],
+            id="link naar niets",
+        ),
+        pytest.param(
+            [
+                tab("tabsub0000000001", "Met subflow"),
+                node("tabsub00subflow1", "subflow:sub0000000000001", "tabsub0000000001"),
+                {"id": "sub0000000000001", "type": "subflow", "name": "Doorgeefluik"},
+                node("sub00000debug001", "debug", "sub0000000000001"),
+                *simple_flow(),
+                # een draad naar de id die Node-RED een node in een subflow-instantie geeft (``<instantie>-<node>``)
+                node("los00000inject01", "inject", "tab0000000000001", [["tabsub00subflow1-sub00000debug001"]]),
+            ],
+            id="draad naar een node in een subflow-instantie",
+        ),
+    ],
+)
+def test_scan_blocks_a_wire_or_link_to_a_node_that_is_not_in_the_configuration(flows: list[dict[str, Any]]) -> None:
+    """Fail-closed: een draad of link naar een id die nergens te plaatsen is, is een bevinding voor het eigen tabblad."""
+    by_tab = {t.tab_id: t for t in policy.scan(flows, WIRE_MODULES, ALLOWED).tabs}
+    own = by_tab["tab0000000000001"]
+    assert own.blocked and own.blocked_reason == "verwijzing_onbekend", own.findings
+    assert own.findings[0]["node_id"] == "los00000inject01" or own.findings[0]["node_id"] == "los00000linkout1"
+    assert own.findings[0]["ref"] == "bestaatniet00001" or own.findings[0]["ref"].startswith("tabsub00subflow1-")
+    assert "verwijzing_onbekend" in snapshots.POLICY_REASONS, "anders wordt zo'n flow nooit meer hervat"
+
+
+def test_scan_checksum_of_a_wired_tab_follows_the_tab_it_is_wired_to() -> None:
+    flows = _wire_to_exec()
+    for n in flows:
+        if n["type"] == "exec":
+            n["type"] = "debug"
+    before = {t.tab_id: t for t in policy.scan(flows, WIRE_MODULES, ALLOWED).tabs}
+    assert not before[CLEAN].blocked
+    after = {t.tab_id: t for t in policy.scan(_wire_to_exec(), WIRE_MODULES, ALLOWED).tabs}
+    assert after[CLEAN].checksum != before[CLEAN].checksum, "nieuwe versie met de bevinding"
+
+
 def test_scan_checksum_changes_only_with_the_flow_itself() -> None:
     base = policy.scan(simple_flow(), MODULES, ALLOWED).tabs[0].checksum
     other_tab = [

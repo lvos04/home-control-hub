@@ -13,7 +13,11 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   beveiligingsprofiel (`POST …/automation/hardening-profile`) is geen installatiestap: besluit C-12 kiest een
   voorziening zonder geheim in het formulier via de manifeststandaard; het profiel vervalt daarna of wordt
   daaraan gelijkgetrokken. Flows met een exec-node, een onbekend type of een module buiten de allowlist worden
-  geblokkeerd. Een Node-RED zonder aanmelding wordt geweigerd.
+  geblokkeerd, en ook elk tabblad dat daarmee verbonden is (een gewone draad, een link-node of een eigenschap naar
+  een node in dat tabblad, ook via een subflow). Een node buiten elk bekend tabblad telt als eigen tabblad; een draad
+  of link naar een id die nergens staat blokkeert (`verwijzing_onbekend`). Wat tabbladen tijdens het draaien delen
+  (global context, http naar Node-RED zelf, mqtt) ziet de scan niet; zie ADR-0016 kop 2. Een Node-RED zonder
+  aanmelding wordt geweigerd.
 - **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
   afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
 - **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst
