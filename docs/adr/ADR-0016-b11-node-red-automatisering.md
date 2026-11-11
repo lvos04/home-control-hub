@@ -171,8 +171,10 @@ Deze ronde bouwt de vijf werkpakketten:
   momentopname). Een beheerder kan er ook zelf één maken.
 - **Credentials:** `GET /flows` geeft nooit credentials terug (gemeten). Ze komen alleen mee als de datamap van
   Node-RED **alleen-lezen** aan deze app is gekoppeld (`HCH_NODE_RED_DATA_DIR`), en dan alleen als het door Node-RED
-  zelf versleutelde blok uit `flows_cred.json`. Een onversleuteld bestand wordt nooit meegenomen. Zonder die
-  koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. De code leest alleen dat bestand en
+  zelf versleutelde blok uit `flows_cred.json`. Een onversleuteld bestand wordt nooit meegenomen. Node-RED schrijft
+  zelf in die map: het bestand wordt daarom nooit via een symbolische koppeling gelezen, moet een gewoon bestand
+  zijn (geen FIFO, map of apparaat) en wordt begrensd gelezen (hooguit 4 MiB); anders is de stand `onleesbaar`.
+  Zonder die koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. De code leest alleen dat bestand en
   ontsleutelt het niet. Dat is geen afscherming: bij een Node-RED volgens het manifest van `jelly-leon-platform`
   (geen eigen `credentialSecret`) staat de sleutel in dezelfde dataset (`.config.runtime.json`), en een koppeling
   van die dataset geeft deze dienst (ook 568) leestoegang tot de sleutel. De installatiedocumenten raden die

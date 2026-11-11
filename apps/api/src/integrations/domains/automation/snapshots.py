@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -93,18 +95,41 @@ def read_credentials(data_dir: Path | None) -> CredentialsBlob:
     """Leest het door Node-RED versleutelde ``flows_cred.json`` uit de alleen-lezen gekoppelde datamap.
 
     Alleen de versleutelde vorm ``{"$": "<iv><base64>"}`` wordt aangenomen; een onversleuteld bestand (Node-RED zonder
-    ``credentialSecret``) wordt bewust niet meegenomen: dat is een afwijking van het beveiligingsprofiel."""
+    ``credentialSecret``) wordt bewust niet meegenomen: dat is een afwijking van het beveiligingsprofiel.
+
+    Node-RED schrijft zelf in die datamap; daarom wordt het bestand nooit via een symbolische koppeling gevolgd
+    (``O_NOFOLLOW`` ten opzichte van de geopende map), moet het een gewoon bestand zijn (``fstat``; een FIFO blokkeert
+    door ``O_NONBLOCK`` niet) en wordt er hooguit ``MAX_CRED_BYTES`` + 1 byte gelezen. Anders: ``onleesbaar``."""
     if data_dir is None:
         return CredentialsBlob("niet_gekoppeld")
-    path = data_dir / CRED_FILE
+    dir_fd: int | None = None
+    fd: int | None = None
     try:
-        if not path.is_file():
+        try:
+            dir_fd = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            fd = os.open(CRED_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+        except FileNotFoundError:
             return CredentialsBlob("afwezig")
-        if path.stat().st_size > MAX_CRED_BYTES:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CRED_BYTES:
             return CredentialsBlob("onleesbaar")
-        data = json.loads(path.read_text(encoding="utf-8"))
+        chunks: list[bytes] = []
+        size = 0
+        while size <= MAX_CRED_BYTES:
+            chunk = os.read(fd, min(65536, MAX_CRED_BYTES + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        if size > MAX_CRED_BYTES:
+            return CredentialsBlob("onleesbaar")
+        data = json.loads(b"".join(chunks).decode("utf-8"))
     except (OSError, ValueError):
-        return CredentialsBlob("onleesbaar")
+        return CredentialsBlob("onleesbaar")  # o.a. een symbolische koppeling (ELOOP) of een onleesbare map
+    finally:
+        for open_fd in (fd, dir_fd):
+            if open_fd is not None:
+                os.close(open_fd)
     if not (isinstance(data, dict) and set(data) == {"$"} and isinstance(data["$"], str) and data["$"]):
         return CredentialsBlob("onleesbaar")
     return CredentialsBlob("meegenomen", {"$": data["$"]})

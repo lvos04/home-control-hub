@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from integrations.domains.automation import actions, eventcatalog, inbox, policy, samples
+from integrations.domains.automation import actions, eventcatalog, inbox, policy, samples, snapshots
 from tests.fakes.node_red_fake import exec_flow, node, simple_flow, tab
 
 
@@ -546,3 +546,81 @@ def test_scan_checksum_changes_only_with_the_flow_itself() -> None:
     shuffled = [dict(reversed(list(n.items()))) for n in simple_flow()]
     assert policy.flows_checksum(simple_flow()) == policy.flows_checksum(shuffled)
     assert policy.flows_checksum(simple_flow()) != policy.flows_checksum(changed)
+
+
+# ------------------------------------------------------------------------------ credentials-bestand (B11-005, R-VEILIG-4)
+BLOB = {"$": "0123456789abcdef0123456789abcdefZ2VoZWlt"}
+
+
+def test_credentials_file_is_read_when_it_is_a_plain_file(tmp_path: Any) -> None:
+    import json
+
+    assert snapshots.read_credentials(None).status == "niet_gekoppeld"
+    assert snapshots.read_credentials(tmp_path).status == "afwezig"
+    assert snapshots.read_credentials(tmp_path / "bestaat-niet").status == "afwezig"
+    (tmp_path / snapshots.CRED_FILE).write_text(json.dumps(BLOB), encoding="utf-8")
+    got = snapshots.read_credentials(tmp_path)
+    assert got.status == "meegenomen" and got.blob == BLOB
+
+
+def test_credentials_file_never_follows_a_symlink(tmp_path: Any) -> None:
+    """Node-RED schrijft zelf in de datamap: een koppeling naar een bestand erbuiten wordt nooit gelezen."""
+    import json
+    import os
+
+    outside = tmp_path / "buiten"
+    outside.mkdir()
+    (outside / "geheim.json").write_text(json.dumps({"$": "inhoud-van-buiten-de-datamap"}), encoding="utf-8")
+    data_dir = tmp_path / "node-red"
+    data_dir.mkdir()
+    target = data_dir / snapshots.CRED_FILE
+    for points_to in (outside / "geheim.json", "/proc/self/environ", "/proc/self/pagemap", "bestaat-niet"):
+        if target.is_symlink():
+            target.unlink()
+        os.symlink(points_to, target)
+        got = snapshots.read_credentials(data_dir)
+        assert (got.status, got.blob) == ("onleesbaar", None), points_to
+
+
+def test_credentials_file_that_is_no_plain_file_is_unreadable_and_never_blocks(tmp_path: Any) -> None:
+    import os
+    import threading
+
+    os.mkfifo(tmp_path / snapshots.CRED_FILE)  # zonder O_NONBLOCK zou open() hier blijven wachten
+    out: list[Any] = []
+    worker = threading.Thread(target=lambda: out.append(snapshots.read_credentials(tmp_path)), daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "het lezen van een FIFO bleef hangen"
+    assert out[0].status == "onleesbaar"
+    os.unlink(tmp_path / snapshots.CRED_FILE)
+    (tmp_path / snapshots.CRED_FILE).mkdir()
+    assert snapshots.read_credentials(tmp_path).status == "onleesbaar"
+
+
+def test_credentials_file_is_read_with_a_hard_limit(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import os
+
+    path = tmp_path / snapshots.CRED_FILE
+    path.write_text(json.dumps({"$": "x" * 100}), encoding="utf-8")
+    monkeypatch.setattr(snapshots, "MAX_CRED_BYTES", 50)
+    assert snapshots.read_credentials(tmp_path).status == "onleesbaar"
+    # ook als de grootte niet klopt (zoals bij /proc, dat st_size 0 meldt): hooguit MAX_CRED_BYTES + 1 byte lezen
+    real_fstat = os.fstat
+
+    def zero_size(fd: int) -> Any:
+        st = real_fstat(fd)
+        return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, 0, 0, 0, 0))
+
+    reads: list[int] = []
+    real_read = os.read
+
+    def counted(fd: int, n: int) -> bytes:
+        reads.append(n)
+        return real_read(fd, n)
+
+    monkeypatch.setattr(snapshots.os, "fstat", zero_size)
+    monkeypatch.setattr(snapshots.os, "read", counted)
+    assert snapshots.read_credentials(tmp_path).status == "onleesbaar"
+    assert sum(reads) <= 51
