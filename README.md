@@ -22,8 +22,8 @@ flows, veilige acties (een flow vraagt aan, de Hub beslist; boiler, verwijderen 
 proefrun met vaste voorbeeld-events, en versies met herstel via een door de Hub ondertekend ExecutionRequest. De
 aannames over Node-RED zijn nagemeten tegen de gepinde image in lokale containers
 (`docs/b11/node-red-verificatie.json`, gemeten met het eigen profiel van deze app, niet met het manifest van
-`jelly-leon-platform`). De schermen staan in de Hub en zijn hier niet gebouwd. NIET GEVALIDEERD (echte NAS): niet
-als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
+`jelly-leon-platform`). De schermen staan in de Hub en zijn hier niet gebouwd.
+NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
 
 B10/B14 hebben alleen datamodel en inventaris; hun data-endpoints geven eerlijk `501 capability_unavailable`.
 **Niets is op een echte NAS, met een echte Authentik of met een Node-RED op de NAS gevalideerd** (zie

@@ -208,7 +208,10 @@ def test_no_session_links_in_docs() -> None:
         for p in (REPO_ROOT / "docs").rglob("*.md")
         if "platform-v2" not in p.parts or p.name in ("README.md", "DELTA_MATRIX.md")
     ]
-    own += [REPO_ROOT / "README.md", REPO_ROOT / "CHANGELOG.md", REPO_ROOT / "deploy" / "truenas" / "CUSTOM_APP.md"]
+    own += [REPO_ROOT / "README.md", REPO_ROOT / "CHANGELOG.md"]
+    # alle installatiedocumenten, ook NODE_RED_CUSTOM_APP.md (R-TECH-3, S-P2-290)
+    own += sorted((REPO_ROOT / "deploy" / "truenas").glob("*.md"))
+    assert REPO_ROOT / "deploy" / "truenas" / "NODE_RED_CUSTOM_APP.md" in own
     for p in own:
         text = p.read_text(encoding="utf-8")
         assert "Claude-Session" not in text and "claude.ai/code/session" not in text, p

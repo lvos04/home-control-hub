@@ -43,5 +43,5 @@ containers (`docs/b11/node-red-verificatie.json`, 39 controles). Niet gevalideer
 die actieverzoeken en herstel beoordeelt, en echte apparaten. De installatiestappen I10-10-01…06 staan in de
 Excel-lijst van `jelly-leon-platform`; de installatieweg van Node-RED is het manifest daar
 (`install/manifests/node-red.manifest.yaml`). Dit repo levert de bewaking en `deploy/truenas/NODE_RED_CUSTOM_APP.md`,
-dat naar dat manifest verwijst en alleen beschrijft wat hier wordt ingesteld (besluiten C-11 en C-12). NIET
-GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
+dat naar dat manifest verwijst en alleen beschrijft wat hier wordt ingesteld (besluiten C-11 en C-12).
+NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.

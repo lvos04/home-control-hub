@@ -116,6 +116,11 @@ dat zelf via **Edit**. Een ingetrokken dienst weigert alle Hub-aanroepen tot hij
 
 ## Optioneel (omgevingsvariabelen)
 
+De `HCH_*`-variabelen hieronder staan **niet in het manifest** (`deploy/manifest/home-control-hub.manifest.yaml`,
+`custom_app.env` is leeg): bij een installatie via de Hub worden ze niet gezet en gelden de standaardwaarden. Je zet
+ze alleen met de hand via **Edit**. Of een update via de Hub zulke met de hand gezette waarden laat staan, is nog niet
+vastgesteld (NIET GEVALIDEERD).
+
 | Variabele | Wanneer |
 |---|---|
 | `HUB_URL` | Hub-adres bij koppelen met een token (normaal zet het platform dit) |
@@ -124,7 +129,7 @@ dat zelf via **Edit**. Een ingetrokken dienst weigert alle Hub-aanroepen tot hij
 | `HCH_PUBLIC_URL` | adres waarop de Hub deze app bereikt, alleen ter informatie bij het koppelen |
 | `HCH_AUTHENTIK_SYNC_INTERVAL_S` | hoe vaak (seconden) logins en rechten uit Authentik gelezen worden; standaard `300`, `0` = uit |
 | `HCH_NODE_RED_SYNC_INTERVAL_S` | hoe vaak (seconden) de flows uit Node-RED gelezen en gecontroleerd worden; standaard `60`, `0` = uit |
-| `HCH_NODE_RED_DATA_DIR` | pad in de container waar de datamap van Node-RED **alleen-lezen** is gekoppeld (bv. `/node-red-data`); leeg = versies van flows zonder credentials |
+| `HCH_NODE_RED_DATA_DIR` | pad in de container waar de datamap van Node-RED **alleen-lezen** is gekoppeld; leeg = versies van flows zonder credentials. **Laat leeg** bij een Node-RED volgens het manifest van `jelly-leon-platform` (zie "Node-RED koppelen") |
 | `HCH_NODE_RED_ALLOWED_MODULES` | extra toegestane Node-RED-modules, gescheiden door komma's; leeg = alleen de kern `node-red` |
 
 De oude naam `ENROLLMENT_TOKEN` wordt in deze release nog gelezen (met een waarschuwing in de app-log) en vervalt
@@ -150,21 +155,27 @@ Node-RED is een **eigen standaard Custom App**. De installatieweg is het manifes
 voor Node-RED. Wat je hier instelt staat in `deploy/truenas/NODE_RED_CUSTOM_APP.md`. In het kort:
 
 1. Installeer Node-RED volgens dat manifest. Er is geen anonieme toegang tot de editor (besluit C-11); het manifest
-   volgt dat pas na stap S-P2-410, tot dan geeft de controle `anoniem_geweigerd` een afwijking.
+   volgt dat pas na stap S-P2-410. Zodra er een dienstaccount is en het manifest nog "anoniem alleen lezen" heeft,
+   geeft de controle `anoniem_geweigerd` een afwijking.
 2. Een beheerder en het dienstaccount voor deze app komen er via een voorziening zonder geheim in het formulier
    (besluit C-12; ontwerp in `appstore-en-fork`, bouw na fase P2). Het beveiligingsprofiel van deze app is **geen**
    installatiestap: zet geen argumenten, wachtwoord-hashes of sleutels in het formulier van Node-RED.
-3. Vul in de Hub bij de bron *Node-RED* het LAN-adres in en zet de bron aan. Een wachtwoord vul je niet in.
-4. Laat de isolatie meten. Wat de app niet kan meten (niet als root, geen Docker-socket, alleen LAN) loop je zelf na
-   met de controlelijst in dat document.
+3. **Nog niet beschikbaar:** het LAN-adres van Node-RED invullen bij de bron *Node-RED* en de isolatie laten meten.
+   Het scherm *Automatisering* in de Hub is nog niet gebouwd en er is nog geen dienstaccount (besluit C-12). Een
+   wachtwoord of sleutel zet je nooit in een formulier.
+4. Zonder dienstaccount meet de app niets: de isolatie heet `onbekend` met de fout `geen_aanmelding` (ook
+   `anoniem_geweigerd` wordt dan niet gemeten). Dat is verwacht tot de voorziening van besluit C-12 er is; maak dan
+   **niet** het beveiligingsprofiel. Wat de app niet kan meten (niet als root, geen Docker-socket, alleen LAN) loop je
+   zelf na met de controlelijst in dat document.
 
 Flows voeren zelf niets uit: een flow vraagt een actie aan, de Hub beslist. De boiler schakelen, iets verwijderen en
 opdrachten op het systeem worden altijd geweigerd. Een flow met een verboden node wordt geblokkeerd.
 
-**Optionele tweede opslagregel** (alleen als een herstel ook credentials moet terugzetten): *Storage Configuration* →
-*Add* → Host Path = de dataset van Node-RED, Mount Path `/node-red-data`, **Read Only aan**, en zet
-`HCH_NODE_RED_DATA_DIR` op `/node-red-data`. De app leest daar alleen het door Node-RED versleutelde
-`flows_cred.json`.
+**Geen tweede opslagregel voor de dataset van Node-RED.** Bij een Node-RED volgens het manifest staat in die dataset
+naast het versleutelde `flows_cred.json` ook de sleutel ervan (`.config.runtime.json`). Een koppeling, ook alleen-lezen,
+geeft deze app (ook gebruiker 568) dus de sleutel en het versleutelde bestand samen. Koppel die dataset daarom niet en
+laat `HCH_NODE_RED_DATA_DIR` leeg; versies van flows worden dan zonder credentials bewaard (`niet_gekoppeld`). Een
+koppeling zonder de sleutel volgt pas na een besluit (voorziening van besluit C-12, ontwerp S-P2-510).
 
 Status: met een Node-RED-simulator getest; de aannames over Node-RED gemeten tegen de gepinde image in lokale
 containers (met het eigen profiel van deze app, niet met het manifest). **NIET GEVALIDEERD (echte NAS): niet als

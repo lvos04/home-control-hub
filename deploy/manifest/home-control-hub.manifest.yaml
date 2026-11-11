@@ -30,6 +30,9 @@ custom_app:
       type: host_path
       host_path: {param: appdata_path}
   env: []  # geen verplichte variabelen; HUB_* zet de Hub zelf bij app.install/app.update (zie boven)
+  # De optionele HCH_*-instellingen (o.a. HCH_NODE_RED_*) staan bewust NIET in dit manifest: bij installatie via de
+  # Hub gelden de standaardwaarden van de image; met de hand zetten via Edit (deploy/truenas/CUSTOM_APP.md, kop
+  # "Optioneel (omgevingsvariabelen)"). Er is geen tweede opslagregel: de dataset van Node-RED wordt niet gekoppeld.
   resources:
     cpus: 1
     memory_mib: 512

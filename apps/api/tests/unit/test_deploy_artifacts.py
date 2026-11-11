@@ -205,6 +205,90 @@ def test_no_yaml_or_compose_install_instructions() -> None:
     assert "GEEN installatiemethode" in compose
 
 
+#: alle installatiedocumenten onder deploy/truenas (V-096): ook NODE_RED_CUSTOM_APP.md (S-P2-290)
+INSTALL_DOCS = sorted((DEPLOY / "truenas").glob("*.md"))
+NEGATIEF = re.compile(r"\b(geen|nooit|niet)\b")
+
+
+def test_install_docs_give_no_yaml_compose_or_terminal_route() -> None:
+    """V-096 / contract kop 1: geen installatieweg via YAML, compose of een terminal in welk installatiedocument dan
+    ook; *Install via YAML* alleen genoemd als wat je niet doet."""
+    namen = [p.name for p in INSTALL_DOCS]
+    assert "CUSTOM_APP.md" in namen and "NODE_RED_CUSTOM_APP.md" in namen, namen
+    for p in INSTALL_DOCS:
+        lowered = p.read_text(encoding="utf-8").lower()
+        for verboden in ("custom_compose_config", "docker compose up", "docker-compose up", "docker exec"):
+            assert verboden not in lowered, f"{p.name}: {verboden}"
+        for regel in lowered.splitlines():
+            if "install via yaml" in regel:
+                assert NEGATIEF.search(regel), f"{p.name}: 'Install via YAML' niet als verbod genoemd: {regel}"
+
+
+def test_node_red_doc_refers_to_the_manifest_without_own_form_fields() -> None:
+    """S-P2-290 bouwpunt 3: NODE_RED_CUSTOM_APP.md verwijst naar het manifest van jelly-leon-platform (568:568) en
+    beschrijft geen eigen formuliervelden (geen 1000:1000, geen argumenten van het profiel)."""
+    text = (DEPLOY / "truenas/NODE_RED_CUSTOM_APP.md").read_text(encoding="utf-8")
+    assert "install/manifests/node-red.manifest.yaml" in text and "568:568" in text
+    assert "1000:1000" not in text and "--define" not in text and "credentialSecret=" not in text
+
+
+def test_node_red_docs_describe_what_the_code_does_without_a_service_account() -> None:
+    """R-TECH-1 / R-MANIFEST-2 (S-P2-290): met een Node-RED volgens het manifest is er tot besluit C-12 geen
+    dienstaccount; de code geeft dan `onbekend` met `geen_aanmelding` (snapshots.run_isolation_check,
+    nodered.client_from_source). Beide documenten noemen dat, en de Hub-handelingen heten nog niet beschikbaar."""
+    for naam in ("NODE_RED_CUSTOM_APP.md", "CUSTOM_APP.md"):
+        text = (DEPLOY / "truenas" / naam).read_text(encoding="utf-8")
+        assert "`geen_aanmelding`" in text, naam
+        assert "nog niet beschikbaar" in text, naam
+    text = (DEPLOY / "truenas/NODE_RED_CUSTOM_APP.md").read_text(encoding="utf-8")
+    probleemrijen = [r for r in text.splitlines() if r.startswith("|") and "`geen_aanmelding`" in r]
+    assert probleemrijen, "de tabel Problemen mist geen_aanmelding"
+    assert "*Isolatie meten*" not in text  # geen knop in de Hub die nog niet bestaat
+
+
+def test_node_red_docs_do_not_promise_that_the_key_is_out_of_reach() -> None:
+    """R-TECH-2 / R-MANIFEST-1 (S-P2-290): de dataset van een Node-RED volgens het manifest bevat ook de sleutel van de
+    credentials (.config.runtime.json). Geen belofte "kan niet ontsleutelen" en geen koppel-instructie voor die
+    dataset; het risico staat er met naam."""
+    for naam in ("NODE_RED_CUSTOM_APP.md", "CUSTOM_APP.md"):
+        text = (DEPLOY / "truenas" / naam).read_text(encoding="utf-8")
+        assert "niet ontsleutelen" not in text, naam
+        assert ".config.runtime.json" in text, naam
+        assert "Mount Path = `/node-red-data`" not in text and "Mount Path `/node-red-data`" not in text, naam
+
+
+def test_install_docs_name_settings_that_the_manifest_does_not_set() -> None:
+    """R-MANIFEST-3 (P-INSTALLATIE punt 9): een HCH_*-variabele uit een installatiedocument die het manifest niet
+    zet, staat er met de uitdrukkelijke melding dat ze niet in het manifest staat."""
+    m = yaml.safe_load((DEPLOY / "manifest/home-control-hub.manifest.yaml").read_text(encoding="utf-8"))
+    in_manifest = {e["name"] for e in m["custom_app"]["env"]}
+    for p in INSTALL_DOCS:
+        text = p.read_text(encoding="utf-8")
+        extra = set(re.findall(r"\bHCH_[A-Z0-9_]+\b", text)) - in_manifest
+        if extra:
+            assert "niet in het manifest" in text, f"{p.name}: {sorted(extra)} zonder melding"
+
+
+#: de vaste zin uit S-P2-290 (kop "Bewijs"), op één regel zodat een letterlijke controle hem vindt (R-TECH-4)
+VASTE_ZIN = "NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md."
+
+
+@pytest.mark.parametrize(
+    "pad",
+    [
+        "README.md",
+        "CHANGELOG.md",
+        "deploy/truenas/CUSTOM_APP.md",
+        "deploy/truenas/NODE_RED_CUSTOM_APP.md",
+        "docs/adr/ADR-0016-b11-node-red-automatisering.md",
+        "docs/platform-v2/DELTA_MATRIX.md",
+    ],
+)
+def test_fixed_not_validated_sentence_is_on_one_line(pad: str) -> None:
+    text = (REPO_ROOT / pad).read_text(encoding="utf-8")
+    assert any(VASTE_ZIN in regel for regel in text.splitlines()), pad
+
+
 def test_workflows_pin_actions_by_sha() -> None:
     for wf in (REPO_ROOT / ".github/workflows").glob("*.yml"):
         for line in wf.read_text(encoding="utf-8").splitlines():

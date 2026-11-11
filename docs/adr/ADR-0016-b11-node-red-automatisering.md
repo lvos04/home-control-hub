@@ -40,8 +40,11 @@ Deze ronde bouwt de vijf werkpakketten:
   daarnaar en beschrijft alleen wat in deze dienst wordt ingesteld; het bevat geen eigen formuliervelden.
 - **Besluit C-11:** geen anonieme toegang tot de editor; alleen bruikbaar via een beheerder. De controle
   `anoniem_geweigerd` (401) blijft zoals hij is. Het manifest van `jelly-leon-platform` volgt dit pas na stap
-  S-P2-410 (tot dan "anoniem alleen lezen"); tot die tijd geeft de controle tegen een volgens dat manifest
-  geïnstalleerde Node-RED een afwijking.
+  S-P2-410 (tot dan "anoniem alleen lezen"). De controle draait alleen als deze dienst zich kan aanmelden: zodra er
+  een dienstaccount is (besluit C-12) en het manifest nog "anoniem alleen lezen" heeft, geeft ze een afwijking.
+  Zonder dienstaccount (zo staat het bij een Node-RED volgens het manifest tot de voorziening van C-12) meet de
+  dienst niets: `snapshots.run_isolation_check` geeft `onbekend` met de fout `geen_aanmelding` en een lege lijst
+  controles (`nodered.client_from_source`), en de andere routes geven `409 node_red_niet_ingesteld`.
 - **Besluit C-12:** het beveiligingsprofiel hieronder is een tweede beschrijving van de installatie en zet geheimen
   (wachtwoord-hashes, `credentialSecret`) in het Custom App-formulier, tegen contract §3.1 ("Nooit geheimen in het
   Custom App-formulier"). De manifeststandaard (`appstore-en-fork`) krijgt een voorziening voor een beheerder en een
@@ -145,7 +148,12 @@ Deze ronde bouwt de vijf werkpakketten:
 - **Credentials:** `GET /flows` geeft nooit credentials terug (gemeten). Ze komen alleen mee als de datamap van
   Node-RED **alleen-lezen** aan deze app is gekoppeld (`HCH_NODE_RED_DATA_DIR`), en dan alleen als het door Node-RED
   zelf versleutelde blok uit `flows_cred.json`. Een onversleuteld bestand wordt nooit meegenomen. Zonder die
-  koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. Deze dienst kan de credentials zelf niet lezen.
+  koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. De code leest alleen dat bestand en
+  ontsleutelt het niet. Dat is geen afscherming: bij een Node-RED volgens het manifest van `jelly-leon-platform`
+  (geen eigen `credentialSecret`) staat de sleutel in dezelfde dataset (`.config.runtime.json`), en een koppeling
+  van die dataset geeft deze dienst (ook 568) leestoegang tot de sleutel. De installatiedocumenten raden die
+  koppeling daarom af; een koppeling zonder de sleutel volgt pas na een besluit (voorziening C-12, S-P2-510). De
+  meting in `docs/b11/node-red-verificatie.json` is gedaan met het eigen profiel, waar de sleutel een argument was.
 - **Diff:** alleen nodes en veldnamen, nooit waarden.
 - **Herstellen is een voorstel plus een ondertekende opdracht:**
   1. `POST /connector/v1/propose` met `automation.flows.restore` maakt een voorstel (R2) met diff, `preview_hash` en

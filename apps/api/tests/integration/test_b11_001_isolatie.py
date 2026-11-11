@@ -112,6 +112,34 @@ def test_isolation_is_unknown_when_not_measured_or_unreachable(
     assert report["status"] != "gemeten_in_orde"
 
 
+def test_isolation_without_a_service_account_is_unknown_not_measured(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """Zo staat het bij een Node-RED volgens het manifest van jelly-leon-platform tot de voorziening van besluit C-12
+    er is: alleen het adres, geen dienstaccount (deploy/truenas/NODE_RED_CUSTOM_APP.md, kop "Wat je in Home Control
+    Hub instelt"). Dan wordt er niets gemeten, ook `anoniem_geweigerd` niet: de stand is `onbekend` met de fout
+    `geen_aanmelding`, en andere routes geven `409 node_red_niet_ingesteld`."""
+    r = linked.put(
+        "/integrations/v1/sources/node_red",
+        json={"base_url": NODE_RED_URL, "enabled": True},
+        headers=idem(auth("admin"), **{"If-Match": "*"}),
+    )
+    assert r.status_code == 201, r.text  # nieuwe bron, zonder profiel en zonder credential
+    assert r.json()["runtime"]["credential_present"] is False
+    r = linked.post(f"{A}/isolation/check", headers=idem(auth("admin")))
+    assert r.status_code == 200, r.text
+    report = r.json()
+    assert report["status"] == "onbekend", report
+    assert report["fout"]["reason"] == "geen_aanmelding", report
+    assert report["checks"] == [] and report["afwijkingen"] == []
+    assert not any(c.get("id") == "anoniem_geweigerd" for c in report["checks"])
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "node_red_niet_ingesteld"
+    assert r.json()["details"]["reason"] == "geen_aanmelding"
+    assert node_red_fake.writes == []
+
+
 def test_viewer_cannot_measure_isolation_or_get_a_profile(linked: Any, auth: Any) -> None:
     assert linked.post(f"{A}/isolation/check", headers=idem(auth("viewer"))).status_code == 403
     assert linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("operator"))).status_code == 403

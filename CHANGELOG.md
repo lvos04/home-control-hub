@@ -46,8 +46,12 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   verzoek blijft op *aangevraagd* staan en herstel werkt alleen tegen de simulator.
 - De schermen voor flows staan in de Hub en zijn nog niet gebouwd.
 - Het manifest van `jelly-leon-platform` heeft nog "anoniem alleen lezen" (tot stap S-P2-410) en nog geen beheerder
-  of dienstaccount (besluit C-12); tegen zo'n Node-RED geeft `anoniem_geweigerd` een afwijking en heeft deze app er
-  geen dienstaccount om zich mee aan te melden.
+  of dienstaccount (besluit C-12). Tegen zo'n Node-RED kan deze app zich niet aanmelden: de isolatie heet `onbekend`
+  met de fout `geen_aanmelding` en wordt niet gemeten. Zodra er een dienstaccount is en het manifest nog "anoniem
+  alleen lezen" heeft, geeft `anoniem_geweigerd` een afwijking.
+- Koppel de dataset van een Node-RED volgens het manifest niet aan deze app: daar staat ook de sleutel van de
+  credentials (`.config.runtime.json`). Versies van flows worden dan zonder credentials bewaard.
+- Het koppelen van Node-RED in de Hub (adres, isolatie meten, versies, terugzetten) is nog niet beschikbaar.
 
 ## 0.1.0 — onafhankelijke review contract 1.3 (QA, ADR-0015, nog niet uitgebracht)
 

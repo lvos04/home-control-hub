@@ -25,9 +25,11 @@ Control Hub controleert dat met `anoniem_geweigerd`: een lezer zonder aanmelding
 `/nodes` en `/settings`.
 
 Het manifest van `jelly-leon-platform` doet dat pas na stap S-P2-410. Tot die commit staat er in het manifest nog
-"anoniem alleen lezen" (aanmelden verplicht om te schrijven, lezen open op het vertrouwde netwerk). Tegen een
-Node-RED die volgens dat manifest is geïnstalleerd geeft `anoniem_geweigerd` tot dan dus een **afwijking**. Dat is
-bekend en wordt niet weggewerkt door de controle af te zwakken.
+"anoniem alleen lezen" (aanmelden verplicht om te schrijven, lezen open op het vertrouwde netwerk). Home Control Hub
+meet `anoniem_geweigerd` alleen als het zich bij Node-RED kan aanmelden, dus pas **zodra er een dienstaccount is**
+(besluit C-12, hieronder). Is er dan nog "anoniem alleen lezen", dan geeft `anoniem_geweigerd` een **afwijking**. Dat
+is bekend en wordt niet weggewerkt door de controle af te zwakken. Tot er een dienstaccount is, wordt
+`anoniem_geweigerd` niet gemeten: de isolatie is dan `onbekend` (zie "Gevolg tot dan").
 
 ## Beheerder- en dienstaccount (besluit C-12)
 
@@ -42,32 +44,44 @@ Home Control Hub heeft een eigen beveiligingsprofiel (`POST /integrations/v1/aut
 Node-RED. Het profiel vervalt of wordt gelijkgetrokken met de voorziening zodra die er is.
 
 Gevolg tot dan: Home Control Hub werkt alleen met een Node-RED die een aanmelding vraagt en een dienstaccount voor
-Home Control Hub heeft: Home Control Hub meldt zich aan met dat account. Wat de isolatiemeting precies toont tegen
-een Node-RED die volgens het manifest is geïnstalleerd, is nog niet gemeten.
+Home Control Hub heeft; het meldt zich aan met dat account. Een Node-RED volgens het manifest heeft nog geen
+dienstaccount. Home Control Hub meet dan **niets**: de isolatie heet `onbekend` met de fout `geen_aanmelding`, de
+lijst met controles is leeg (ook `anoniem_geweigerd` wordt niet gemeten), en het uitlezen van flows en het maken van
+een momentopname geven `node_red_niet_ingesteld` met de reden `geen_aanmelding`. Dat is verwacht tot de voorziening
+van besluit C-12 er is. De melding bij `geen_aanmelding` zegt "maak eerst het beveiligingsprofiel": doe dat **niet**
+(het profiel is geen installatiestap, zie hierboven).
 
 ## Wat je in Home Control Hub instelt
 
-**Bron.** Vul in de Hub bij de bron **Node-RED** (`node_red`) het LAN-adres van Node-RED in
-(`http://<NAS-adres>:<host-poort>`, de poort uit het manifest) en zet de bron aan. Een wachtwoord of token vul je
-nergens in. Laat daarna de isolatie meten (*Isolatie meten*; API:
-`POST /integrations/v1/automation/isolation/check`).
+**Bron (nog niet beschikbaar).** Het koppelen van Node-RED is voor jou nog niet uit te voeren: het scherm
+*Automatisering* in de Hub, waar je het adres van Node-RED invult en de isolatie laat meten, is nog niet gebouwd, en
+er is nog geen dienstaccount (besluit C-12). Zodra beide er zijn, vul je daar bij de bron **Node-RED** (`node_red`)
+het LAN-adres in (`http://<NAS-adres>:<host-poort>`, de poort uit het manifest) en zet je de bron aan. Een wachtwoord
+of sleutel zet je nooit in een formulier. Zonder dienstaccount geeft de meting `onbekend` met `geen_aanmelding` (zie
+"Gevolg tot dan").
 
 **Instellingen** (optioneel; omgevingsvariabelen in het formulier van de app **home-control-hub**, zie ook
-`deploy/truenas/CUSTOM_APP.md` en `.env.example`):
+`deploy/truenas/CUSTOM_APP.md` en `.env.example`). Deze variabelen staan **niet in het manifest** van
+home-control-hub (`custom_app.env` is leeg): bij een installatie via de Hub worden ze niet gezet en gelden de
+standaardwaarden hieronder. Je zet ze alleen met de hand (**Edit** van de app). Of een update via de Hub zulke met de
+hand gezette waarden laat staan, is nog niet vastgesteld (NIET GEVALIDEERD).
 
 | Variabele | Wat | Standaard |
 |---|---|---|
 | `HCH_NODE_RED_SYNC_INTERVAL_S` | hoe vaak (seconden) de flows uit Node-RED gelezen en gecontroleerd worden; `0` = uit | `60` |
-| `HCH_NODE_RED_DATA_DIR` | pad in de container van home-control-hub waar de datamap van Node-RED **alleen-lezen** is gekoppeld; leeg = versies van flows zonder credentials | leeg |
+| `HCH_NODE_RED_DATA_DIR` | pad in de container van home-control-hub waar de datamap van Node-RED **alleen-lezen** is gekoppeld; leeg = versies van flows zonder credentials. **Laat leeg** bij een Node-RED volgens het manifest (zie hieronder) | leeg |
 | `HCH_NODE_RED_ALLOWED_MODULES` | extra toegestane Node-RED-modules, gescheiden door komma's; een flow met een node uit een andere module wordt geblokkeerd | leeg (alleen de kern `node-red`) |
 
-**Optioneel: credentials meenemen in versies.** Zonder deze koppeling bewaart Home Control Hub versies van je flows
-**zonder** credentials (de momentopname zegt dat eerlijk: `niet_gekoppeld`). Wil je dat een herstel ook de
-credentials terugzet: open de app **home-control-hub** → **Edit** → *Storage Configuration* → **Add**: Type *Host
-Path*, Host Path = de dataset van Node-RED (uit het manifest), Mount Path = `/node-red-data`, **Read Only aan**; en
-zet `HCH_NODE_RED_DATA_DIR` op `/node-red-data`. Home Control Hub leest daar alleen `flows_cred.json`, en alleen als
-Node-RED dat bestand zelf heeft versleuteld. Een onversleuteld bestand wordt nooit meegenomen. De app kan de
-credentials niet ontsleutelen of tonen.
+**Credentials in versies (nog niet beschikbaar met het manifest).** Zonder koppeling van de datamap bewaart Home
+Control Hub versies van je flows **zonder** credentials (de momentopname zegt dat eerlijk: `niet_gekoppeld`). De
+code kan het door Node-RED versleutelde `flows_cred.json` meenemen als de datamap van Node-RED alleen-lezen is
+gekoppeld (`HCH_NODE_RED_DATA_DIR`). Bij een Node-RED volgens het manifest staat in **dezelfde dataset** ook de
+sleutel van die credentials (`.config.runtime.json`; het manifest zet geen eigen `credentialSecret`). Een koppeling
+van die dataset geeft home-control-hub (ook gebruiker 568) dus leestoegang tot de sleutel én tot het versleutelde
+bestand; met beide zijn de credentials te ontsleutelen. Dat de code alleen `flows_cred.json` leest, is geen
+afscherming. Daarom: **koppel de dataset van Node-RED niet** aan home-control-hub en laat `HCH_NODE_RED_DATA_DIR`
+leeg. Een koppeling zonder de sleutel kan de manifeststandaard nu niet beschrijven; die volgt pas na een besluit
+(voorziening van besluit C-12, ontwerp S-P2-510).
 
 Flows voeren zelf niets uit: een flow vraagt een actie aan, de Hub beslist. De boiler schakelen, iets verwijderen en
 opdrachten op het systeem worden altijd geweigerd. Een flow met een verboden node wordt geblokkeerd.
@@ -86,9 +100,10 @@ Loop ze na de installatie en na elke wijziging van het formulier van Node-RED na
 ## Updaten en terugdraaien
 
 - **Node-RED updaten:** alleen naar de versie en digest die het manifest noemt; volg de upgradenotitie in het
-  manifest. Maak eerst een momentopname in de Hub.
-- **Terugdraaien van flows:** via de Hub (*Versies* → *Terugzetten*). Dat is een voorstel dat je goedkeurt; de
-  huidige stand wordt eerst zelf als momentopname bewaard.
+  manifest. Een momentopname in de Hub vooraf is **nog niet beschikbaar** (het scherm ontbreekt en er is nog geen
+  dienstaccount); maak een snapshot van de dataset zoals het manifest beschrijft.
+- **Terugdraaien van flows:** **nog niet beschikbaar.** Het komt in de Hub (*Versies* → *Terugzetten*), als voorstel
+  dat je goedkeurt; dat scherm is nog niet gebouwd en de Hub kent de actie nog niet.
 - **Terugdraaien van de app Node-RED:** zoals het manifest beschrijft (vorige Tag samen met de snapshot van de
   dataset van vóór de update).
 
@@ -96,9 +111,10 @@ Loop ze na de installatie en na elke wijziging van het formulier van Node-RED na
 
 | Melding | Oplossing |
 |---|---|
-| Hub: *Node-RED is nog niet als bron ingesteld* (`node_red_niet_ingesteld`) | Vul het adres in bij de bron en zet hem aan. |
+| Hub: *Node-RED is nog niet als bron ingesteld* (`node_red_niet_ingesteld`) | Kijk naar de reden. Ontbreekt het adres of staat de bron uit: vul het adres in en zet de bron aan (zodra het scherm er is). Reden `geen_aanmelding`: zie de volgende rij. |
+| Isolatie `onbekend` met `geen_aanmelding` (*Er zijn geen aanmeldgegevens voor Node-RED opgeslagen*) | Verwacht bij een Node-RED volgens het manifest, tot de voorziening van besluit C-12 er is (er is nog geen dienstaccount). Maak **niet** het beveiligingsprofiel en zet geen wachtwoord in een formulier. |
 | Hub: `niet_beveiligd` | Node-RED vraagt geen aanmelding. Controleer of de app volgens het manifest is geïnstalleerd; stop Node-RED tot dat zo is. |
 | Hub: *Node-RED is niet bereikbaar* (`node_red_unavailable`) | App gestopt, verkeerde poort of verkeerd adres. De Hub probeert het zelf opnieuw. |
-| Isolatie: afwijking bij `anoniem_geweigerd` | Verwacht tot het manifest besluit C-11 volgt (na S-P2-410); zie "Anonieme toegang". |
+| Isolatie: afwijking bij `anoniem_geweigerd` | Alleen te zien zodra er een dienstaccount is. Verwacht tot het manifest besluit C-11 volgt (na S-P2-410); zie "Anonieme toegang". |
 | Flow staat op *geblokkeerd* | De flow bevat een verboden node, een onbekend type of een module die niet is toegestaan. Haal die weg; hervat de flow daarna zelf. |
 | Herstel: `credentials_niet_te_ontsleutelen` | De sleutel waarmee Node-RED de credentials versleutelt is een andere dan toen de momentopname werd gemaakt. Er is niets gewijzigd. |
