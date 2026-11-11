@@ -140,7 +140,8 @@ class ProposeIn(BaseModel):
     target: dict[str, Any] | None = None
     reason: str = Field(default="", max_length=300)
     actor: dict[str, Any] | None = None
-    expected_version: str | None = Field(default=None, max_length=64)
+    #: de resource_etag van een eerdere preview (met of zonder voorvoegsel "sha256:")
+    expected_version: str | None = Field(default=None, max_length=80)
     risk_claim: Literal["R0", "R1", "R2", "R3"] | None = None
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     expires_in_seconds: int | None = Field(default=None, ge=1, le=3600)

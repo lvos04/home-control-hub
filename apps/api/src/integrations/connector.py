@@ -2,8 +2,13 @@
 
 - ``read`` en ``stream`` (polling-outbox via ``/events``).
 - ``propose`` (P1, B13): voorstellen voor Authentik met preview/diff/``preview_hash`` (R2). Alleen lezen in Authentik.
-- ``apply``/``rollback`` geven eerlijk ``501 capability_unavailable``: toepassen vereist een door de Hub ondertekend
-  ``ExecutionRequest`` (contract §8) en komt in P2. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
+  P2 (B11-005): ook ``automation.flows.restore`` — flows van Node-RED terugzetten naar een momentopname (R2).
+- ``apply`` (P2, B11-005): alleen ``automation.flows.restore`` en alleen met een door de Hub **ondertekend**
+  ``ExecutionRequest`` (contract §8) met een menselijke goedkeuring; deze dienst controleert alles zelf opnieuw
+  (``domains/automation/restore.py``). Voor de Authentik-acties blijft ``apply`` eerlijk
+  ``501 capability_unavailable``. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
+- ``rollback`` geeft ``501 capability_unavailable``: terugdraaien van een herstel is een nieuw voorstel naar de
+  momentopname ``voor_herstel`` (met een nieuwe goedkeuring), geen aparte route.
 - Nieuw in contract 1.2 (§6, §3.8): ``GET /connector/v1/hub-link`` (koppelstatus: witte lijst van §3.5 + gepinde
   ``kid``'s en ``rotation_sequence``; dienst-JWT of gebruiker ``viewer``+) en ``POST /connector/v1/hub-link/unlink``
   (ontkoppelen door de Hub met een dienst-JWT of door een beheerder; ``Idempotency-Key``).
@@ -20,6 +25,15 @@ from sqlalchemy.orm import Session
 
 from . import APP_ID, CONNECTOR_PREFIX, SCHEMA_VERSION, __version__
 from .deps import get_session, trace_id
+from .domains.automation import actions as automation_actions
+from .domains.automation import restore as automation_restore
+from .domains.automation import snapshots as automation_snapshots
+from .domains.automation.models import (
+    AutomationActionRequest,
+    AutomationFlow,
+    AutomationRestore,
+    AutomationSnapshot,
+)
 from .domains.energy.router import coverage_payload as energy_coverage
 from .domains.sso import proposals as sso_proposals
 from .domains.sso import service as sso_service
@@ -42,6 +56,7 @@ from .idempotency import idempotency_key, run_idempotent
 from .models import AuditEvent, OutboxEvent
 from .pagination import MAX_LIMIT, decode_cursor, encode_cursor
 from .redact import redact
+from .security import hubkeys
 from .security.auth import AuthFirstRoute, Principal, require_admin_or_service, require_connector_reader
 from .sources import ALL_SOURCES, PROBE_MAX_AGE, source_view
 from .timeutil import iso, utcnow
@@ -60,13 +75,24 @@ ITEM_TYPES: dict[str, dict[str, Any]] = {
     },
     "sso.proposal": {"roles": {"admin", "operator", "service"}, "title_nl": "Voorstellen (preview, niet toepasbaar)"},
     "sso.anomaly": {"roles": {"admin", "operator", "service"}, "title_nl": "Afwijkingen uit Authentik"},
+    "automation.flow": {
+        "roles": {"admin", "operator", "viewer", "service"},
+        "title_nl": "Flows van Node-RED (eigenaar, status, versie)",
+    },
+    "automation.action_request": {
+        "roles": {"admin", "operator", "service"},
+        "title_nl": "Actieverzoeken van flows (aangevraagd, nooit hier uitgevoerd)",
+    },
+    "automation.restore": {
+        "roles": {"admin", "operator", "service"},
+        "title_nl": "Herstelvoorstellen voor flows (preview en uitkomst)",
+    },
 }
 #: §6.2: standaard max_age 900 s; de bronmetingen van deze dienst gebruiken dezelfde grens (sources.PROBE_MAX_AGE)
 MAX_AGE_S = int(PROBE_MAX_AGE.total_seconds())
 UNBUILT_ITEM_TYPES = {
     "network.device": "network.devices.read",
     "network.dns_summary": "network.dns.summary.read",
-    "automation.flow": "automation.flows.read",
     "energy.usage": "energy.usage.read",
 }
 
@@ -80,8 +106,9 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
         "app_id": APP_ID,
         "source_version": __version__,
         "schema_version": SCHEMA_VERSION,
-        "capabilities": ["read", "propose", "stream"],
-        "unavailable_capabilities": ["apply", "rollback"],
+        # apply bestaat alleen voor acties met apply_status 'ondertekend_verzoek' (zie actions hieronder)
+        "capabilities": ["read", "propose", "apply", "stream"],
+        "unavailable_capabilities": ["rollback"],
         "stream_mode": "polling via /connector/v1/events en push naar de Hub-inbox",
         "actions": [
             {
@@ -92,8 +119,21 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
                 "apply_status": a.apply_status,
             }
             for a in sso_proposals.ACTIONS.values()
+        ]
+        + [
+            {
+                "action_id": automation_restore.ACTION_ID,
+                "title_nl": automation_restore.TITLE_NL,
+                "task_id": automation_restore.TASK_ID,
+                "risk_class_min": automation_restore.MIN_RISK_CLASS,
+                "apply_status": automation_restore.APPLY_STATUS,
+            }
         ],
         "apply_status_nl": sso_proposals.APPLY_UNAVAILABLE_NL,
+        "apply_status_per_actie_nl": {
+            "nog_niet_toepasbaar": sso_proposals.APPLY_UNAVAILABLE_NL,
+            automation_restore.APPLY_STATUS: automation_restore.APPLY_STATUS_NL,
+        },
         "permissions": [
             "read:sources",
             "read:sso.app_coverage",
@@ -105,6 +145,11 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
             "read:sso.anomaly",
             "propose:sso.oidc.hub.register (admin of Hub)",
             "propose:sso.sessions.revoke (admin of Hub)",
+            "read:automation.flow",
+            "read:automation.action_request",
+            "read:automation.restore",
+            "propose:automation.flows.restore (admin of Hub)",
+            "apply:automation.flows.restore (alleen met ondertekend ExecutionRequest van de Hub)",
             "read:events",
             "read:evidence",
             "read:hub_link",
@@ -186,6 +231,40 @@ def items(
         data = [st]
     elif type == "energy.coverage":
         data = energy_coverage()["items"]
+    elif type == "automation.flow":
+        data = [
+            {
+                "id": str(f.id),
+                "source_flow_id": f.source_flow_id,
+                "label": f.label,
+                "owner": f.owner,
+                "status": f.status,
+                "blocked_reason": f.blocked_reason,
+                "version": f.version,
+                "last_seen_at": iso(f.last_seen_at),
+            }
+            for f in session.scalars(
+                select(AutomationFlow).order_by(AutomationFlow.label, AutomationFlow.id).limit(MAX_LIMIT * 5)
+            )
+        ]
+    elif type == "automation.action_request":
+        data = [
+            automation_actions.request_view(r)
+            for r in session.scalars(
+                select(AutomationActionRequest)
+                .order_by(AutomationActionRequest.created_at.desc(), AutomationActionRequest.id.desc())
+                .limit(MAX_LIMIT * 5)
+            )
+        ]
+    elif type == "automation.restore":
+        data = [
+            automation_restore.restore_view(r)
+            for r in session.scalars(
+                select(AutomationRestore)
+                .order_by(AutomationRestore.created_at.desc(), AutomationRestore.id.desc())
+                .limit(MAX_LIMIT * 5)
+            )
+        ]
     else:  # sso.admin_account
         data = [
             sso_service.account_dict(a)
@@ -198,12 +277,18 @@ def items(
 @router.post(
     "/propose",
     status_code=201,
-    summary="Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in Authentik)",
+    summary="Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in de bron)",
     responses={
-        409: {"description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd of resource_gewijzigd"},
-        422: {"description": "onbekende_actie, validation_error of voorstel_geblokkeerd (met blokkades)"},
-        502: {"description": "Authentik weigerde het token, mist rechten of gaf een ongeldig antwoord"},
-        503: {"description": "Authentik onbereikbaar"},
+        409: {
+            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, "
+            "node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
+        },
+        422: {
+            "description": "onbekende_actie, validation_error, voorstel_geblokkeerd, parameters_ongeldig of "
+            "momentopname_niet_toegestaan"
+        },
+        502: {"description": "De bron weigerde de aanmelding, mist rechten of gaf een ongeldig antwoord"},
+        503: {"description": "De bron (Authentik of Node-RED) is onbereikbaar"},
     },
 )
 def propose(
@@ -214,6 +299,8 @@ def propose(
     key: uuid.UUID = Depends(idempotency_key),
     tid: str = Depends(trace_id),
 ) -> Any:
+    if body.action_id == automation_restore.ACTION_ID:
+        return _propose_restore(body, request, session, principal, key, tid)
     params = validate_parameters(body.action_id, body.parameters)
 
     def action() -> tuple[int, Any, dict[str, str]]:
@@ -230,32 +317,117 @@ def propose(
     return run_idempotent(request, session, principal, key, body.model_dump(mode="json"), action)
 
 
+def _propose_restore(
+    body: ProposeIn, request: Request, session: Session, principal: Principal, key: uuid.UUID, tid: str
+) -> Any:
+    """B11-005: voorstel om de flows van Node-RED terug te zetten. Leest alleen; ``risk_claim`` telt niet (EX18)."""
+    if body.target is not None and body.target != automation_restore.TARGET:
+        raise ApiError(
+            422,
+            "parameters_ongeldig",
+            "Het doel van dit voorstel is altijd de bron 'node_red'.",
+            {"verwacht": {"target": automation_restore.TARGET}},
+        )
+
+    def action() -> tuple[int, Any, dict[str, str]]:
+        state = request.app.state
+        view = automation_restore.propose(
+            session,
+            state.settings,
+            state.vault,
+            state.http_transport,
+            parameters=body.parameters,
+            principal=principal,
+            trace_id=tid,
+            now=utcnow(),
+        )
+        if body.expected_version and body.expected_version != view["resource_etag"]:
+            raise ApiError(
+                409,
+                "resource_gewijzigd",
+                "De flows in Node-RED zijn gewijzigd sinds de vorige preview; bekijk het nieuwe voorstel.",
+                {"expected_version": body.expected_version, "resource_etag": view["resource_etag"]},
+            )
+        return 201, view, {"ETag": f'"{view["preview_hash"]}"'}
+
+    return run_idempotent(request, session, principal, key, body.model_dump(mode="json"), action)
+
+
+def _policy_keys(request: Request) -> list[Any]:
+    """De gepinde policy-sleutels van de Hub; leeg zolang deze dienst niet gekoppeld is (dan wordt niets uitgevoerd)."""
+    link = request.app.state.hublink.state()
+    if not link.linked or link.pins is None:
+        return []
+    keys = []
+    for pin in link.pins.policy:
+        try:
+            keys.append(hubkeys.public_key_from_jwk({"kty": "OKP", "crv": "Ed25519", "x": pin.jwk.x}))
+        except ValueError:
+            continue
+    return keys
+
+
 @router.post(
     "/apply",
-    summary="Uitvoeren (niet beschikbaar in deze versie: vereist ondertekend ExecutionRequest, P2)",
-    responses={501: {"description": "capability_unavailable"}},
+    summary="Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); nu alleen flows terugzetten",
+    responses={
+        200: {"description": "Uitgevoerd en met readback bevestigd"},
+        403: {"description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"},
+        409: {"description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd of voorstel_verlopen"},
+        422: {"description": "ongeldig_verzoek of parameters_ongeldig"},
+        501: {"description": "capability_unavailable — deze actie is (nog) niet toepasbaar"},
+        502: {"description": "node_red_fout — Node-RED weigerde of het resultaat is niet bevestigd"},
+        503: {"description": "node_red_unavailable — er is niets gewijzigd"},
+    },
 )
-def apply(_p: Principal = Depends(require_admin_or_service)) -> None:
-    raise ApiError(
-        501,
-        "capability_unavailable",
-        "Uitvoeren is in deze versie niet beschikbaar; er wordt niets uitgevoerd. "
-        + sso_proposals.APPLY_UNAVAILABLE_NL,
-        {
-            "capability": "apply",
-            "reden": "nog_niet_toepasbaar",
-            "vereist": "door de Hub ondertekend ExecutionRequest (§8)",
-        },
-    )
+def apply(
+    request: Request,
+    body: dict[str, Any] = Body(...),
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_admin_or_service),
+    key: uuid.UUID = Depends(idempotency_key),
+    tid: str = Depends(trace_id),
+) -> Any:
+    proposal = body.get("proposal")
+    action_id = proposal.get("action_id") if isinstance(proposal, dict) else None
+    if isinstance(action_id, str) and action_id in sso_proposals.ACTIONS:
+        # de Authentik-acties hebben nog geen uitvoerpad: eerlijk 501, er wordt geen nonce opgemaakt
+        raise ApiError(
+            501,
+            "capability_unavailable",
+            "Uitvoeren is voor deze actie niet beschikbaar; er wordt niets uitgevoerd. "
+            + sso_proposals.APPLY_UNAVAILABLE_NL,
+            {"capability": "apply", "reden": "nog_niet_toepasbaar", "action_id": action_id},
+        )
+
+    def action() -> tuple[int, Any, dict[str, str]]:
+        state = request.app.state
+        return automation_restore.apply(
+            session,
+            state.settings,
+            state.vault,
+            state.http_transport,
+            request=body,
+            keys=_policy_keys(request),
+            principal=principal,
+            trace_id=tid,
+            now=utcnow(),
+        )
+
+    return run_idempotent(request, session, principal, key, body, action)
 
 
 @router.post(
     "/rollback",
-    summary="Terugdraaien (niet beschikbaar in deze versie)",
+    summary="Terugdraaien (niet beschikbaar: een herstel draai je terug met een nieuw voorstel)",
     responses={501: {"description": "capability_unavailable"}},
 )
 def rollback(_p: Principal = Depends(require_admin_or_service)) -> None:
-    raise capability_unavailable("rollback")
+    raise capability_unavailable(
+        "rollback",
+        "Terugdraaien is geen aparte route. Een herstel van flows draai je terug met een nieuw voorstel naar de "
+        "momentopname 'voor_herstel' (met een nieuwe goedkeuring).",
+    )
 
 
 @router.get("/evidence/{evidence_id}", summary="Geredigeerd bewijs (audit-event of oefening)")
@@ -289,6 +461,28 @@ def evidence(
     snap = session.get(SsoAuthentikSnapshot, eid)
     if snap is not None and snap.kind == "config_export":
         return {"id": evidence_id, "kind": "sso_config_export", "record": export_meta(snap)}
+    restore_row = session.get(AutomationRestore, eid)
+    if restore_row is not None:
+        return {
+            "id": evidence_id,
+            "kind": "automation_restore",
+            "record": automation_restore.restore_view(restore_row),
+        }
+    flow_snapshot = session.get(AutomationSnapshot, eid)
+    if flow_snapshot is not None:
+        # alleen kenmerken (checksum, aantallen, beleid); nooit de inhoud of het credentials-bestand
+        return {
+            "id": evidence_id,
+            "kind": "automation_snapshot",
+            "record": automation_snapshots.snapshot_view(flow_snapshot),
+        }
+    action_request = session.get(AutomationActionRequest, eid)
+    if action_request is not None:
+        return {
+            "id": evidence_id,
+            "kind": "automation_action_request",
+            "record": redact(automation_actions.request_view(action_request)),
+        }
     raise not_found("Bewijs")
 
 
