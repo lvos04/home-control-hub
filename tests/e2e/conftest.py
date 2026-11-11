@@ -1,5 +1,8 @@
 """Dienst-E2E: echte processen (API + worker van home-control-hub) tegen een Hub-simulator in een eigen proces.
 
+Daarnaast draaien een nep-Authentik en een nep-Node-RED als eigen processen; de dienst gebruikt ze pas als een test de
+bron instelt.
+
 Vereist: de Python-omgeving met ``apps/api[dev]`` en een PostgreSQL (standaard de lokale ontwikkel-PostgreSQL;
 database ``hch_test_e2e``). Geen echte NAS, Hub, Authentik of accounts.
 """
@@ -75,6 +78,7 @@ class Stack:
     data: Path | None = None
     env: dict[str, str] = field(default_factory=dict)
     enroll_tokens: list[str] = field(default_factory=list)
+    node_red: str = ""  # nep-Node-RED (B11); pas in gebruik als een test de bron instelt
 
     def mint(self, roles: tuple[str, ...]) -> dict[str, str]:
         r = httpx.post(f"{self.hub}/sim/token", json={"roles": list(roles)}, timeout=5)
@@ -128,7 +132,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
             pytest.fail(f"PostgreSQL niet beschikbaar in CI: {type(exc).__name__} (E2E mag niet stil vervallen)")
         pytest.skip(f"PostgreSQL niet beschikbaar: {type(exc).__name__}")
     db_url = ADMIN_DB_URL.rsplit("/", 1)[0] + "/" + E2E_DB
-    hub_port, hch_port, ak_port = free_port(), free_port(), free_port()
+    hub_port, hch_port, ak_port, nr_port = free_port(), free_port(), free_port(), free_port()
     hub_url, hch_url = f"http://127.0.0.1:{hub_port}", f"http://127.0.0.1:{hch_port}"
     data = tmp_path_factory.mktemp("appdata")
     logs = tmp_path_factory.mktemp("logs")
@@ -174,6 +178,27 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         stderr=subprocess.STDOUT,
     )
     wait_http(f"{ak_url}/-/health/live/")
+    nr_url = f"http://127.0.0.1:{nr_port}"
+    nr_data = tmp_path_factory.mktemp("node-red-data")
+    nr_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "sim_node_red:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(nr_port),
+            "--log-level",
+            "warning",
+        ],
+        env={**base_env, "PYTHONPATH": str(HERE), "SIM_NODE_RED_DATA_DIR": str(nr_data)},
+        cwd=HERE,
+        stdout=open(logs / "node-red.log", "wb"),
+        stderr=subprocess.STDOUT,
+    )
+    wait_http(f"{nr_url}/sim/state")
     env = {
         **base_env,
         "HCH_DATA_DIR": str(data),
@@ -186,6 +211,9 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         "HCH_HUB_HEARTBEAT_S": "1",
         "HCH_HUB_KEY_POLL_S": "1",
         "HCH_AUTHENTIK_SYNC_INTERVAL_S": "2",
+        "HCH_NODE_RED_SYNC_INTERVAL_S": "2",
+        # zoals in het formulier van de Custom App: de datamap van Node-RED alleen-lezen gekoppeld
+        "HCH_NODE_RED_DATA_DIR": str(nr_data),
         # proxy-omgevingsvariabelen worden genegeerd (§3.2/§5): een kapotte proxy mag het koppelen niet raken
         "HTTP_PROXY": "http://127.0.0.1:9",
         "HTTPS_PROXY": "http://127.0.0.1:9",
@@ -208,9 +236,9 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         ),
     ]
     wait_http(f"{hch_url}/healthz")
-    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url, logs, data, env, [grant["secret"]])
+    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url, logs, data, env, [grant["secret"]], nr_url)
     yield st
-    for p in [*st.procs, hub_proc, ak_proc]:
+    for p in [*st.procs, hub_proc, ak_proc, nr_proc]:
         if p.poll() is None:
             p.terminate()
             try:

@@ -19,6 +19,10 @@ Gedrag volgt de Hub (``ai-server-manager`` ``apps/api/src/hub/routers/services.p
 - ``POST /api/v1/events/inbox`` (Bearer service-token) met de envelope-regels van §7 (1.3): ook het eigen domein van
   de bron, de vaste ``service.*``-lijst, ``app`` alleen als ``app.health.changed`` en ``payload.ernst`` (vijf woorden).
 - Gebruikers-JWT's (``token_use: user``) en dienst-JWT's (``token_use: hub_service``) met ``jti``, ``nbf``, ≤ 120 s.
+- ``execution_request(...)``: een ``ExecutionRequest`` zoals de Hub hem ondertekent (§8; het formaat staat in
+  ``ai-server-manager/docs/EXECUTION_REQUEST.md``): Ed25519 met de nieuwste policy-sleutel over de canonieke JSON
+  zonder ``signature``. De canonieke JSON is hier bewust los van de dienst geschreven, zodat een test een verschil
+  tussen ondertekenaar en controleur ziet.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -147,6 +151,19 @@ def envelope_problems(ev: Any) -> list[str]:
     if isinstance(payload, dict) and "ernst" in payload and payload["ernst"] not in ERNST:
         problems.append(f"payload.ernst {payload['ernst']!r}")
     return problems
+
+
+def canonical_json(value: Any) -> bytes:
+    """Canonieke JSON zoals de Hub ondertekent: gesorteerde sleutels, ``,``/``:``, UTF-8 zonder escapes."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def canonical_sha256(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def ts(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass
@@ -291,6 +308,85 @@ class HubSim:
             else:
                 claims[name] = value
         return self._jwt(claims, key)
+
+    # ------------------------------------------------------------------ ExecutionRequest (§8)
+    def sign_request(self, request: dict[str, Any], key: SimKey | None = None) -> dict[str, Any]:
+        """Zet ``signature`` (Ed25519, base64url zonder opvulling) over het verzoek zonder ``signature``."""
+        k = key or self.policy_keys[-1]
+        body = {name: value for name, value in request.items() if name != "signature"}
+        return {**body, "signature": b64url(k.private.sign(canonical_json(body)))}
+
+    def execution_request(
+        self,
+        *,
+        action_id: str,
+        target: dict[str, Any],
+        parameters: dict[str, Any],
+        preview_hash: str,
+        resource_etag: str,
+        risk_class: str = "R2",
+        approved_by: str | None = "beheerder-1",
+        policy_hash: str | None = None,
+        now: datetime | None = None,
+        ttl_s: int = 300,
+        approval_ttl_s: int = 900,
+        key: SimKey | None = None,
+        actor: dict[str, str] | None = None,
+        approval_overrides: dict[str, Any] | None = None,
+        proposal_overrides: dict[str, Any] | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Een geldig, ondertekend ``ExecutionRequest`` zoals de Hub na een goedkeuring uitgeeft.
+
+        ``approved_by=None`` geeft een verzoek zonder goedkeuring (R0/R1). Met de ``*_overrides`` maakt een test
+        gericht één veld anders; de handtekening wordt daarna gezet, dus het verzoek blijft geldig ondertekend.
+        """
+        moment = (now or datetime.now(UTC)).replace(microsecond=0)
+        beleid = policy_hash or "sha256:" + hashlib.sha256(b"sim-hub-policy").hexdigest()
+        proposal: dict[str, Any] = {
+            "idempotency_key": str(uuid.uuid4()),
+            "action_id": action_id,
+            "target": target,
+            "parameters": parameters,
+            "reason": "Herstel aangevraagd in de Hub",
+            "actor": actor or {"type": "user", "id": "beheerder-1"},
+            "expected_version": resource_etag,
+            "risk_claim": "R0",
+            "evidence_ids": [],
+            "expires_in_seconds": 900,
+        }
+        proposal.update(proposal_overrides or {})
+        approval: dict[str, Any] | None = None
+        if approved_by is not None:
+            approval = {
+                "approval_id": str(uuid.uuid4()),
+                "request_id": str(uuid.uuid4()),
+                "preview_hash": preview_hash,
+                "resource_etag": resource_etag,
+                "policy_hash": beleid,
+                "risk_class": risk_class,
+                "approved_by": approved_by,
+                "approved_at": ts(moment),
+                "expires_at": ts(moment + timedelta(seconds=approval_ttl_s)),
+                "one_time_nonce": str(uuid.uuid4()),
+                "backup_checkpoint_id": None,
+                "action_scope": {
+                    "action_id": action_id,
+                    "target": target,
+                    "parameters_sha256": canonical_sha256(parameters),
+                },
+            }
+            approval.update(approval_overrides or {})
+        request: dict[str, Any] = {
+            "proposal": proposal,
+            "approval": approval,
+            "policy_decision": {"risk_class": risk_class, "rule_ids": [f"ACT:{action_id}"], "policy_hash": beleid},
+            "issued_at": ts(moment),
+            "expires_at": ts(moment + timedelta(seconds=ttl_s)),
+            "nonce": str(uuid.uuid4()),
+        }
+        request.update(overrides or {})
+        return self.sign_request(request, key)
 
     def service_id(self, app_id: str = "home-control-hub") -> str | None:
         svc = self.services.get(app_id)
@@ -634,6 +730,20 @@ def _build_app() -> Any:
     @api.post("/sim/service-jwt")
     async def service_token() -> dict[str, str]:
         return {"token": sim.service_jwt()}
+
+    @api.post("/sim/execution-request")
+    async def execution_request(request: Request) -> dict[str, Any]:
+        """Wat de Hub na een menselijke goedkeuring doet: het verzoek voor precies dit voorstel ondertekenen."""
+        body = await request.json()
+        return sim.execution_request(
+            action_id=body["action_id"],
+            target=body["target"],
+            parameters=body["parameters"],
+            preview_hash=body["preview_hash"],
+            resource_etag=body["resource_etag"],
+            risk_class=body.get("risk_class", "R2"),
+            approved_by=body.get("approved_by", "beheerder-1"),
+        )
 
     @api.post("/sim/outage")
     async def outage(request: Request) -> dict[str, bool]:
