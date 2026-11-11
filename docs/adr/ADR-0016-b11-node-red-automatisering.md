@@ -101,10 +101,11 @@ Deze ronde bouwt de vijf werkpakketten:
   gaat een event `flow.policy.blocked` naar de Hub. Een geblokkeerde flow krijgt geen events (ook afleveringen die
   al wachtten, blijven staan) en geen nieuwe tokens; elk actieverzoek wordt geweigerd (403) en vastgelegd, met reden
   `flow_geblokkeerd`, of de eigen reden als het verzoek ook om een andere reden niet mag (bijvoorbeeld
-  `onbekende_actie`); er gaat dan niets naar de Hub. Een bestaand token blijft bestaan, maar opent alleen nog: de eigen stand lezen
+  `onbekende_actie`); er gaat dan geen actieverzoek naar de Hub (wel, zoals bij elke weigering, het event
+  `flow.action.rejected`). Een bestaand token blijft bestaan, maar opent alleen nog: de eigen stand lezen
   (`GET …/flow-api/me` toont de status en de reden, en `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het
   bevestigen (`ack`/`nack`) van een aflevering die al vóór de blokkade was opgehaald; die wordt niet opnieuw
-  afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en niets van de flow naar de
+  afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en geen actieverzoek van de flow naar de
   Hub. Is de oorzaak weg, dan blijft elke flow die geblokkeerd was gepauzeerd tot een beheerder of operator hem
   bewust hervat (ook een flow die alleen `bron_geblokkeerd` was).
 - **Grens van de blokkade:** de blokkade geldt voor wat deze dienst doet (events afleveren, actieverzoeken

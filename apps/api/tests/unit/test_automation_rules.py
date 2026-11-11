@@ -286,6 +286,18 @@ def test_fixed_list_is_the_executor_allowlist_of_the_contract() -> None:
     assert set(actions.RISK_TABLE) == actions.FLOW_ACTIONS
 
 
+def test_adr_0016_says_what_a_refused_request_of_a_blocked_flow_sends_to_the_hub() -> None:
+    """R-VEILIG-7: een geweigerd actieverzoek van een geblokkeerde flow gaat niet als actieverzoek naar de Hub, maar
+    wel als event ``flow.action.rejected``, zoals elke weigering (gemeten in
+    test_blocked_flow_keeps_its_token_but_gets_nothing_and_may_request_nothing). ADR-0016 kop 2 zegt dat zo."""
+    from pathlib import Path
+
+    adr = Path(__file__).resolve().parents[4] / "docs" / "adr" / "ADR-0016-b11-node-red-automatisering.md"
+    kop2 = adr.read_text(encoding="utf-8").split("### 2. ", 1)[1].split("\n### 3. ", 1)[0]
+    assert "niets naar de Hub" not in kop2 and "niets van de flow naar de Hub" not in kop2
+    assert "geen actieverzoek naar de Hub" in kop2 and "`flow.action.rejected`" in kop2
+
+
 @pytest.mark.parametrize(
     ("action_id", "target", "parameters", "reden"),
     [

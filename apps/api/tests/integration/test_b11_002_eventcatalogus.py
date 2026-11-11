@@ -380,11 +380,19 @@ def test_blocked_flow_keeps_its_token_but_gets_nothing_and_may_request_nothing(
     claimed = b11.claim(linked, token)
     assert claimed["items"] == [] and claimed["flow_status"] == "geblokkeerd"
     assert sorted(d["status"] for d in _deliveries(linked, auth, detail["id"])) == ["geclaimd", "wachtend"]
+    rejected_before = len(b11.outbox(linked, "flow.action.rejected"))
     r = b11.request_action(linked, token, "notification.send", target={"type": "user", "id": "user-1"})
     assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd"
     # R-VEILIG-6: een verzoek dat ook om een andere reden niet mag, houdt die eigen reden (ADR-0016 kop 2)
     r = b11.request_action(linked, token, "energy.device.switch", target={"type": "device", "id": "lamp-1"})
     assert r.status_code == 403 and r.json()["details"]["reason"] == "onbekende_actie"
+    # R-VEILIG-7: per geweigerd verzoek precies één event flow.action.rejected naar de Hub, geen actieverzoek
+    rejected = b11.outbox(linked, "flow.action.rejected")[rejected_before:]
+    assert [(e["payload"]["action_id"], e["payload"]["reden"]) for e in rejected] == [
+        ("notification.send", "flow_geblokkeerd"),
+        ("energy.device.switch", "onbekende_actie"),
+    ]
+    assert b11.outbox(linked, "flow.action.requested") == []
     assert b11.ack(linked, token, earlier[0]["id"]).status_code == 200
     assert b11.claim(linked, token)["items"] == []
     r = b11.post_event(linked, fake_hub, b11.envelope())
