@@ -587,6 +587,29 @@ def test_removing_the_owner_revokes_the_tokens(linked: Any, auth: Any, flow: Any
     assert r.status_code == 401 and r.json()["details"]["reason"] == "flow_token_ingetrokken"
 
 
+def test_tokens_of_a_flow_that_disappears_from_node_red_are_revoked_for_good(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """R-TECH-4: verdwijnt het tabblad uit Node-RED, dan worden de tokens ingetrokken; komt een tabblad met hetzelfde
+    id terug (de flow wordt dan weer actief), dan werken de oude tokens niet weer."""
+    detail, token = flow
+    node_red_fake.deploy(simple_flow(tab_id="tabander00000001", label="Ander"))
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "verwijderd"
+    tokens = linked.get(f"{A}/flows/{detail['id']}/tokens", headers=auth("admin")).json()["items"]
+    assert [(t["status"], t["revoked_reason"]) for t in tokens] == [("ingetrokken", "flow_verwijderd")]
+    r = linked.get(f"{FLOW_API}/me", headers=b11.bearer(token))
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "flow_token_ingetrokken"
+
+    node_red_fake.deploy(simple_flow())  # hetzelfde tabblad komt terug
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "actief"
+    r = linked.get(f"{FLOW_API}/me", headers=b11.bearer(token))
+    assert r.status_code == 401 and r.json()["details"]["reason"] == "flow_token_ingetrokken"
+    r = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY)
+    assert r.status_code == 401
+
+
 def test_flow_settings_need_if_match(linked: Any, auth: Any, flow: Any) -> None:
     detail, _ = flow
     body = {"status": "gepauzeerd", "reden": "x"}

@@ -78,6 +78,101 @@ def test_health_reports_an_isolation_deviation(linked: Any, fake_hub: Any, auth:
     assert check["detail"]["afwijkingen"]
 
 
+def test_old_isolation_measurement_is_unknown_never_healthy(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """R-TECH-1 (ADR-0016 kop 2 en 8): een isolatiemeting ouder dan 15 minuten telt niet meer, ook als hij in orde
+    was en de worker niet meer meet; de stand is dan onbekend, nooit gezond."""
+    from integrations.domains.automation import snapshots as flow_snapshots
+    from integrations.models import ServiceState
+    from integrations.timeutil import iso
+
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow())
+    b11.snapshot(linked, auth)
+    assert linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()["status"] == "gemeten_in_orde"
+    assert checks(linked, fake_hub)["automatisering"]["status"] == "healthy"
+
+    def measured(ago: timedelta) -> None:
+        with linked.app.state.db.sessions() as s:
+            row = s.get(ServiceState, flow_snapshots.ISOLATION_KEY)
+            assert row is not None
+            row.value = {**row.value, "measured_at": iso(utcnow() - ago)}
+            s.commit()
+
+    measured(flow_snapshots.ISOLATION_MAX_AGE - timedelta(minutes=1))
+    assert checks(linked, fake_hub)["automatisering"]["status"] == "healthy", "binnen 15 minuten: nog vers"
+    measured(flow_snapshots.ISOLATION_MAX_AGE + timedelta(minutes=1))
+    got = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["isolatie"]
+    assert got["status"] == "onbekend" and got["reden"] == "meting_verouderd", got
+    check = checks(linked, fake_hub)["automatisering"]
+    assert check["status"] == "unknown" and check["reason_code"] == "meting_verouderd", check
+    assert check["detail"]["isolatie"] == "onbekend"
+
+
+def test_unreachable_node_red_does_not_clear_a_measured_deviation(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """R-TECH-6: een eerder gemeten afwijking wordt niet 'onbekend' omdat Node-RED even niet antwoordt."""
+    setup_node_red(linked, fake_hub, auth, harden=False, flows=simple_flow())
+    assert linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()["status"] == "afwijking"
+    node_red_fake.up = False
+    report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
+    assert report["status"] == "afwijking" and report["verouderd"] is True, report
+    assert report["afwijkingen"], "de eerder gemeten afwijkingen blijven zichtbaar"
+    got = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["isolatie"]
+    assert got["status"] == "afwijking" and got["verouderd"] is True
+    check = checks(linked, fake_hub)["automatisering"]
+    assert check["status"] == "degraded" and check["reason_code"] == "isolatie_afwijking"
+
+
+def test_failed_sync_is_measured_as_down_or_degraded_never_healthy(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-TECH-2 (B11: "een externe storing mag niet als succes worden gelogd"): elke synchronisatie is ook de
+    meting van de bron node_red; een mislukte synchronisatie geeft 'down' (onbereikbaar of 5xx) of 'degraded'."""
+    import httpx
+
+    def source_health() -> dict[str, Any]:
+        r = linked.get("/integrations/v1/sources/node_red", headers=auth("viewer"))
+        assert r.status_code == 200, r.text
+        health: dict[str, Any] = r.json()["runtime"]["health"]
+        return health
+
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow())
+    b11.snapshot(linked, auth)
+    assert (source_health()["status"], source_health()["reason_code"]) == ("healthy", "synchronisatie_ok")
+
+    node_red_fake.up = False  # ConnectError
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 503 and r.json()["code"] == "node_red_unavailable", r.text
+    assert (source_health()["status"], source_health()["reason_code"]) == ("down", "onbereikbaar")
+
+    node_red_fake.up = True
+    original = node_red_fake.handle
+
+    def answer(status: int, body: bytes) -> Any:
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and request.url.path == "/flows":
+                return httpx.Response(status, content=body, headers={"content-type": "application/json"})
+            return original(request)
+
+        return handle
+
+    monkeypatch.setattr(node_red_fake, "handle", answer(500, b'{"fout": "intern"}'))
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 503, r.text
+    assert (source_health()["status"], source_health()["reason_code"]) == ("down", "http_5xx")
+
+    monkeypatch.setattr(node_red_fake, "handle", answer(200, b"geen json"))
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 502 and r.json()["code"] == "node_red_fout", r.text
+    assert (source_health()["status"], source_health()["reason_code"]) == ("degraded", "antwoord_ongeldig")
+
+    monkeypatch.setattr(node_red_fake, "handle", original)
+    b11.snapshot(linked, auth)
+    assert source_health()["status"] == "healthy"
+
+
 def test_health_reports_a_dead_letter(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
     setup_node_red(linked, fake_hub, auth, flows=simple_flow())
     b11.snapshot(linked, auth)

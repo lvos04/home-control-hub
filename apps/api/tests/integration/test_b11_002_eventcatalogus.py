@@ -389,6 +389,42 @@ def test_blocked_flow_keeps_its_token_but_gets_nothing_and_may_request_nothing(
     assert b11.outbox(linked, "flow.action.requested") == []
 
 
+def test_too_long_chain_is_not_delivered_and_cannot_lead_to_a_request(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any
+) -> None:
+    """R-TECH-5 (ADR-0016 kop 3): een keten van herkomst van 8 of meer flows wordt niet afgeleverd, en een
+    actieverzoek op een aflevering met zo'n keten wordt geweigerd (tweede laag)."""
+    from sqlalchemy import update
+
+    from integrations.domains.automation import inbox
+    from integrations.domains.automation.models import AutomationEvent
+
+    detail, token = flow
+    others = [inbox.chain_entry(uuid.uuid4()) for _ in range(inbox.MAX_CHAIN)]
+    r = b11.post_event(linked, fake_hub, b11.envelope(payload={"vermogen_w": 1, "origin_chain": others}))
+    assert r.status_code == 201, r.text
+    assert r.json()["afleveringen"] == 0
+    assert r.json()["niet_afgeleverd"] == [{"flow_id": detail["id"], "reden": "keten_te_lang"}]
+    # één korter: wel afgeleverd
+    r = b11.post_event(linked, fake_hub, b11.envelope(payload={"vermogen_w": 1, "origin_chain": others[:-1]}))
+    assert r.json()["afleveringen"] == 1, r.text
+    item = b11.claim(linked, token)["items"][0]
+    assert len(item["origin_chain"]) == inbox.MAX_CHAIN - 1
+    with linked.app.state.db.sessions() as s:  # de keten van dat event is intussen te lang (bv. een oudere rij)
+        s.execute(update(AutomationEvent).where(AutomationEvent.seq == item["event_seq"]).values(origin_chain=others))
+        s.commit()
+    r = b11.request_action(
+        linked,
+        token,
+        "notification.send",
+        target={"type": "user", "id": "user-1"},
+        parameters={"tekst": "x"},
+        trigger_delivery_id=item["id"],
+    )
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "keten_te_lang", r.text
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
 def test_trigger_filter_limits_what_a_flow_gets(linked: Any, fake_hub: Any, auth: Any, flow: Any) -> None:
     detail, token = flow
     r = b11.put_flow(
