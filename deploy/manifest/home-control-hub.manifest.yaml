@@ -122,6 +122,13 @@ dependencies:
     reason_nl: >-
       B13-002…005 lezen Authentik (officiële TrueNAS-catalogusapp, 'Mount Docker Socket' uit); zonder Authentik werken
       B13-001 en de rest en tonen B13-002…005 'niet ingesteld'.
+  - app_id: node-red
+    kind: optional
+    reason_nl: >-
+      B11-001…005 bewaken Node-RED (eigen standaard Custom App; installatieweg is het manifest van jelly-leon-platform,
+      install/manifests/node-red.manifest.yaml: gepinde image, als 568:568, geen Docker-socket, alleen LAN); zonder
+      Node-RED werkt de rest en toont de automatisering 'niet ingesteld'. Instellingen hier:
+      deploy/truenas/NODE_RED_CUSTOM_APP.md.
 sso: none
 risk:
   install: R2
@@ -132,7 +139,9 @@ upgrade:
   tag_only_rollback_safe: false
   notes_nl: >-
     Alembic-migraties bij de start (0001 basisschema, 0002 B13 P1, 0003 replaycache contract 1.2, 0004 noodtoegang
-    contract 1.3: 100.64.0.0/10 alleen nog privé met toestemming van een beheerder), met een pg_dump vooraf. Terug naar een oudere tag kan pas nadat de back-up of dataset-snapshot van vóór de update is hersteld.
+    contract 1.3: 100.64.0.0/10 alleen nog privé met toestemming van een beheerder, 0005 B11 automatisering: flows,
+    flow-tokens, events, afleveringen, versies en herstel), met een pg_dump vooraf. Terug naar een oudere tag kan pas
+    nadat de back-up of dataset-snapshot van vóór de update is hersteld.
     De koppeling met de Hub staat in /appdata/secrets/hub-link.json en wordt bij de eerste start van 1.2 eenmalig uit
     de database overgezet.
 decisions_required: [D01, D02, D03, D16, D17]

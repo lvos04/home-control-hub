@@ -14,8 +14,10 @@ App-formulier** van TrueNAS: geen YAML, geen *Install via YAML*, geen docker com
 > **Verificatiestatus: NIET GEVALIDEERD (echte NAS).** De image is in een Linux/Docker-bouwomgeving gebouwd en gestart
 > zoals het formulier hem start (standaard Docker-capabilities, **zonder** no-new-privileges en **zonder** cap-drop;
 > `deploy/allinone/smoke-test.sh`): elk proces, ook PID 1, draait na de start als 568 zonder capabilities en met
-> no-new-privileges, die de image zelf zet. Het TrueNAS-formulier zelf is niet op echte TrueNAS-hardware doorlopen;
-> de veldnamen volgen het standaard Custom App-formulier (`ix-app`) van TrueNAS 24.10/25.x en kunnen per versie iets
+> no-new-privileges, die de image zelf zet. De rooktest controleert ook B11: de flow-API geeft zonder flow-token
+> `401 flow_token_ontbreekt` en met een onbekend flow-token `401 flow_token_ongeldig`, en migratie `0005` is
+> uitgevoerd. NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md. Het
+> TrueNAS-formulier zelf is niet op echte TrueNAS-hardware doorlopen; de veldnamen volgen het standaard Custom App-formulier (`ix-app`) van TrueNAS 24.10/25.x en kunnen per versie iets
 > afwijken. Jouw TrueNAS-versie (D01), poolnaam/dataset (D02) en NAS-adres (D03) zijn onbekend: vul je eigen waarden in.
 
 ## Wat je nodig hebt
@@ -121,6 +123,9 @@ dat zelf via **Edit**. Een ingetrokken dienst weigert alle Hub-aanroepen tot hij
 | `HUB_KEY_FINGERPRINT` | verwachte sleutelset-vingerafdruk van de Hub; staat hij er, dan moet hij kloppen |
 | `HCH_PUBLIC_URL` | adres waarop de Hub deze app bereikt, alleen ter informatie bij het koppelen |
 | `HCH_AUTHENTIK_SYNC_INTERVAL_S` | hoe vaak (seconden) logins en rechten uit Authentik gelezen worden; standaard `300`, `0` = uit |
+| `HCH_NODE_RED_SYNC_INTERVAL_S` | hoe vaak (seconden) de flows uit Node-RED gelezen en gecontroleerd worden; standaard `60`, `0` = uit |
+| `HCH_NODE_RED_DATA_DIR` | pad in de container waar de datamap van Node-RED **alleen-lezen** is gekoppeld (bv. `/node-red-data`); leeg = versies van flows zonder credentials |
+| `HCH_NODE_RED_ALLOWED_MODULES` | extra toegestane Node-RED-modules, gescheiden door komma's; leeg = alleen de kern `node-red` |
 
 De oude naam `ENROLLMENT_TOKEN` wordt in deze release nog gelezen (met een waarschuwing in de app-log) en vervalt
 daarna; gebruik `HUB_ENROLLMENT_TOKEN`. Zet hier **nooit** wachtwoorden of API-sleutels. Credentials van andere apps
@@ -138,6 +143,33 @@ controleer je in Authentik: alleen `view`-rechten). Deze app leest alleen; wijzi
 die pas met een door de Hub ondertekende opdracht kunnen worden uitgevoerd (nog niet beschikbaar). Back-up en
 upgrade: zie `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
 
+## Node-RED koppelen (B11, optioneel)
+
+Node-RED is een **eigen standaard Custom App**. De installatieweg is het manifest van `jelly-leon-platform`
+(`install/manifests/node-red.manifest.yaml`, gebruiker `568:568`); deze app beschrijft geen eigen formuliervelden
+voor Node-RED. Wat je hier instelt staat in `deploy/truenas/NODE_RED_CUSTOM_APP.md`. In het kort:
+
+1. Installeer Node-RED volgens dat manifest. Er is geen anonieme toegang tot de editor (besluit C-11); het manifest
+   volgt dat pas na stap S-P2-410, tot dan geeft de controle `anoniem_geweigerd` een afwijking.
+2. Een beheerder en het dienstaccount voor deze app komen er via een voorziening zonder geheim in het formulier
+   (besluit C-12; ontwerp in `appstore-en-fork`, bouw na fase P2). Het beveiligingsprofiel van deze app is **geen**
+   installatiestap: zet geen argumenten, wachtwoord-hashes of sleutels in het formulier van Node-RED.
+3. Vul in de Hub bij de bron *Node-RED* het LAN-adres in en zet de bron aan. Een wachtwoord vul je niet in.
+4. Laat de isolatie meten. Wat de app niet kan meten (niet als root, geen Docker-socket, alleen LAN) loop je zelf na
+   met de controlelijst in dat document.
+
+Flows voeren zelf niets uit: een flow vraagt een actie aan, de Hub beslist. De boiler schakelen, iets verwijderen en
+opdrachten op het systeem worden altijd geweigerd. Een flow met een verboden node wordt geblokkeerd.
+
+**Optionele tweede opslagregel** (alleen als een herstel ook credentials moet terugzetten): *Storage Configuration* →
+*Add* → Host Path = de dataset van Node-RED, Mount Path `/node-red-data`, **Read Only aan**, en zet
+`HCH_NODE_RED_DATA_DIR` op `/node-red-data`. De app leest daar alleen het door Node-RED versleutelde
+`flows_cred.json`.
+
+Status: met een Node-RED-simulator getest; de aannames over Node-RED gemeten tegen de gepinde image in lokale
+containers (met het eigen profiel van deze app, niet met het manifest). **NIET GEVALIDEERD (echte NAS): niet als
+Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.**
+
 ## Updaten en terugdraaien
 
 - **Updaten:** app → **Edit** → Tag naar de nieuwe `<versie>@sha256:<digest>` → **Update**. Bij openstaande
@@ -148,9 +180,12 @@ upgrade: zie `docs/runbooks/AUTHENTIK_BACKUP_UPGRADE.md`.
 - **Contract 1.2:** de database kreeg migratie `0003` en de koppeling met de Hub verhuist bij de eerste
   start eenmalig uit de database naar `/appdata/secrets/hub-link.json`. Terug naar een oudere image kan alleen met de
   back-up of ZFS-snapshot van vóór de update.
-- **Contract 1.3 (deze versie):** migratie `0004` (noodtoegang: `100.64.0.0/10` telt alleen nog als privé als een
+- **Contract 1.3:** migratie `0004` (noodtoegang: `100.64.0.0/10` telt alleen nog als privé als een
   beheerder dat bewust toestaat) en `hub-link.json` met `schema_version` `"1.3"` (oudere versies lezen dat; een
   bestaande koppeling blijft). Terug naar een oudere image: alleen met de back-up of ZFS-snapshot van vóór de update.
+- **Automatisering (B11, deze versie):** migratie `0005` (flows, flow-tokens, events en afleveringen, versies en
+  herstel). Bestaande gegevens blijven ongewijzigd. Terug naar een oudere image: alleen met de back-up of
+  ZFS-snapshot van vóór de update.
 - **Terugdraaien:** zolang een release geen databasewijziging heeft (zie de releasenotes, veld
   `tag_only_rollback_safe`), kun je de Tag terugzetten. Bij een schemawijziging: zet de ZFS-snapshot van vóór de
   update terug, of gebruik de back-up uit `/appdata/backups`. `app.rollback` van TrueNAS werkt niet voor een
