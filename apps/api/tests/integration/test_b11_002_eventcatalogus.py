@@ -332,6 +332,63 @@ def test_paused_flow_gets_nothing_until_resumed(linked: Any, fake_hub: Any, auth
     assert claimed["items"] == [] and claimed["flow_status"] == "gepauzeerd"
 
 
+def _deliveries(linked: Any, auth: Any, flow_id: str) -> list[dict[str, Any]]:
+    r = linked.get(f"{A}/deliveries", params={"flow_id": flow_id}, headers=auth("viewer"))
+    assert r.status_code == 200, r.text
+    items: list[dict[str, Any]] = r.json()["items"]
+    return items
+
+
+def test_waiting_delivery_is_held_back_while_the_flow_is_paused(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any
+) -> None:
+    """R-TECH-3: een aflevering die al wachtte toen de flow werd gepauzeerd, gaat pas na het hervatten naar de flow."""
+    detail, token = flow
+    assert b11.post_event(linked, fake_hub, b11.envelope()).json()["afleveringen"] == 1
+    r = b11.put_flow(
+        linked, auth, detail["id"], "state", {"status": "gepauzeerd", "reden": "onderhoud"}, role="operator"
+    )
+    assert r.status_code == 200, r.text
+    claimed = b11.claim(linked, token)
+    assert claimed["items"] == [] and claimed["flow_status"] == "gepauzeerd"
+    assert [d["status"] for d in _deliveries(linked, auth, detail["id"])] == ["wachtend"]
+    r = b11.put_flow(linked, auth, detail["id"], "state", {"status": "actief", "reden": "klaar"}, role="operator")
+    assert r.status_code == 200, r.text
+    items = b11.claim(linked, token)["items"]
+    assert len(items) == 1 and items[0]["status"] == "geclaimd"
+
+
+def test_blocked_flow_keeps_its_token_but_gets_nothing_and_may_request_nothing(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """R-TECH-3 en R-VEILIG-5 (ADR-0016 kop 2): een flow die geblokkeerd raakt terwijl er al afleveringen wachten,
+    houdt zijn token, maar krijgt niets meer en mag niets aanvragen. Wat de flow nog wel kan: zijn eigen stand lezen
+    (/me, met de reden) en een eerder opgehaalde aflevering bevestigen; die wordt niet opnieuw afgeleverd."""
+    from tests.fakes.node_red_fake import exec_flow
+
+    detail, token = flow
+    assert b11.post_event(linked, fake_hub, b11.envelope()).json()["afleveringen"] == 1
+    earlier = b11.claim(linked, token)["items"]
+    assert len(earlier) == 1
+    assert b11.post_event(linked, fake_hub, b11.envelope()).json()["afleveringen"] == 1  # wacht nog
+    node_red_fake.deploy(exec_flow(tab_id=TAB, label="Nu met shell"))
+    assert b11.snapshot(linked, auth)["geblokkeerd"] == [TAB]
+
+    me = linked.get(f"{b11.FLOW_API}/me", headers=b11.bearer(token))
+    assert me.status_code == 200, me.text
+    assert me.json()["flow"]["status"] == "geblokkeerd" and me.json()["flow"]["blocked_reason"] == "verboden_node"
+    claimed = b11.claim(linked, token)
+    assert claimed["items"] == [] and claimed["flow_status"] == "geblokkeerd"
+    assert sorted(d["status"] for d in _deliveries(linked, auth, detail["id"])) == ["geclaimd", "wachtend"]
+    r = b11.request_action(linked, token, "notification.send", target={"type": "user", "id": "user-1"})
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd"
+    assert b11.ack(linked, token, earlier[0]["id"]).status_code == 200
+    assert b11.claim(linked, token)["items"] == []
+    r = b11.post_event(linked, fake_hub, b11.envelope())
+    assert r.json()["afleveringen"] == 0 and r.json()["niet_afgeleverd"][0]["reden"] == "flow_geblokkeerd"
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
 def test_trigger_filter_limits_what_a_flow_gets(linked: Any, fake_hub: Any, auth: Any, flow: Any) -> None:
     detail, token = flow
     r = b11.put_flow(

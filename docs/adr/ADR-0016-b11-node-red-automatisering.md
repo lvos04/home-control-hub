@@ -83,9 +83,14 @@ Deze ronde bouwt de vijf werkpakketten:
   via link-nodes (`link out`, `link in`, `link call`) met elkaar verbonden zijn, ook via een subflow of via een
   ander tabblad, delen hun bevindingen; een `link call` met `linkType: dynamic` telt als verbonden met elk tabblad
   met een `link in`. Een flow met een verboden node, een onbekend type of een module buiten de allowlist (in het
-  eigen tabblad of in een verbonden tabblad) wordt **geblokkeerd**: geen events, geen
-  nieuwe tokens, elk verzoek met een bestaand token wordt geweigerd, en een event `flow.policy.blocked` gaat naar de
-  Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een beheerder of operator hem bewust hervat.
+  eigen tabblad of in een verbonden tabblad) wordt **geblokkeerd**, en een event `flow.policy.blocked` gaat naar de
+  Hub. Een geblokkeerde flow krijgt geen events (ook afleveringen die al wachtten, blijven staan), geen nieuwe tokens
+  en mag niets aanvragen: elk actieverzoek is `403 flow_geblokkeerd` en wordt vastgelegd. Een bestaand token blijft
+  bestaan, maar opent alleen nog: de eigen stand lezen (`GET …/flow-api/me` toont de status en de reden, en
+  `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het bevestigen (`ack`/`nack`) van een aflevering die al
+  vóór de blokkade was opgehaald; die wordt niet opnieuw afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets
+  naar de flow en niets van de flow naar de Hub. Is het beleid weer in orde, dan blijft de flow gepauzeerd tot een
+  beheerder of operator hem bewust hervat.
 
 ### 3. Eventtypencatalogus en afleveren (B11-002)
 
