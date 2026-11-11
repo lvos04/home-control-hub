@@ -330,7 +330,7 @@ def automation_policy(request: Request, _p: Principal = Depends(require_reader))
         "node_red_image": {"repository": NODE_RED_IMAGE, "tag": NODE_RED_TAG, "digest": NODE_RED_DIGEST},
         "never_nl": [
             "Geen shell-/exec-uitvoering vanuit flows.",
-            "Geen R3-actie (bv. dataset verwijderen) zonder admin-goedkeuring.",
+            "Verwijderen of wissen (bv. een dataset) kan nooit via een flow, ook niet met goedkeuring.",
             "Boiler schakelen is via elke route verboden.",
         ],
     }

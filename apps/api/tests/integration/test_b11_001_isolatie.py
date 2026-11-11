@@ -234,6 +234,12 @@ def test_policy_lists_the_forbidden_nodes(linked: Any, auth: Any) -> None:
     assert "exec" in body["forbidden_node_types"]
     assert body["node_red_image"]["digest"].startswith("sha256:")
     assert ":latest" not in str(body["node_red_image"])
+    # R-TECH-8: de teksten volgen de strenge lezing van ADR-0016 kop 4 (nooit via een flow, ook niet met goedkeuring)
+    from integrations.domains.automation.catalog import SOURCES
+
+    texts = [*body["never_nl"], *(t for src in SOURCES for t in src.forbidden_nl)]
+    assert any("kan nooit via een flow, ook niet met goedkeuring" in t for t in body["never_nl"])
+    assert not any("zonder admin-goedkeuring" in t for t in texts), texts
 
 
 # ------------------------------------------------------------------------------------------------- geheimen blijven weg

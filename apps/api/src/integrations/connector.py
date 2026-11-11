@@ -106,7 +106,7 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
         "app_id": APP_ID,
         "source_version": __version__,
         "schema_version": SCHEMA_VERSION,
-        # apply bestaat alleen voor acties met apply_status 'ondertekend_verzoek' (zie actions hieronder)
+        # apply bestaat alleen voor acties met apply_status 'vereist_execution_request' (zie actions hieronder)
         "capabilities": ["read", "propose", "apply", "stream"],
         "unavailable_capabilities": ["rollback"],
         "stream_mode": "polling via /connector/v1/events en push naar de Hub-inbox",

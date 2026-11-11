@@ -114,7 +114,7 @@ SOURCES: tuple[SourceSpec, ...] = (
         notes_nl="Editor alleen achter eigen aanmelding op het LAN; geen Docker-socket; geen onbeheerde modules.",
         forbidden_nl=(
             "Geen exec-node of andere shell-uitvoering in flows (B11-001).",
-            "Geen dataset-delete of andere R3-actie vanuit een flow zonder admin-goedkeuring (B11-003, EX45).",
+            "Verwijderen of wissen (bv. een dataset) kan nooit via een flow, ook niet met goedkeuring (B11-003, EX45).",
             "Boiler schakelen is via elke route verboden (EX27).",
         ),
     ),
