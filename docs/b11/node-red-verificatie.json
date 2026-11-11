@@ -1,0 +1,386 @@
+{
+  "checked_on": "2026-11-11",
+  "tool": "tools/node_red_verify.py",
+  "image": {
+    "repository": "docker.io/nodered/node-red",
+    "tag": "5.0.9",
+    "digest": "sha256:2ccd38b4066648bd5e17430c50a2f8102c566a82fd4f2fc5c342e61664d6896f",
+    "image_id": "sha256:2ccd38b4066648bd5e17430c50a2f8102c566a82fd4f2fc5c342e61664d6896f"
+  },
+  "omgeving": "lokale Docker-containers op de ontwikkelmachine (geen NAS, geen echte apparaten)",
+  "validatie_echte_nas": "NIET GEVALIDEERD (echte NAS)",
+  "niet_gemeten": [
+    "installatie via het formulier van de TrueNAS Custom App",
+    "netwerkafscherming op de NAS (alleen LAN)",
+    "dataset-rechten en de alleen-lezen koppeling van de datamap"
+  ],
+  "checks": [
+    {
+      "id": "tag_wijst_naar_digest",
+      "ok": true,
+      "title_nl": "De tag in het register wijst naar de gepinde digest",
+      "detail": {
+        "register": "sha256:2ccd38b4066648bd5e17430c50a2f8102c566a82fd4f2fc5c342e61664d6896f",
+        "gepind": "sha256:2ccd38b4066648bd5e17430c50a2f8102c566a82fd4f2fc5c342e61664d6896f"
+      }
+    },
+    {
+      "id": "kaal_geen_aanmelding",
+      "ok": true,
+      "title_nl": "Zonder adminAuth geeft GET /auth/login een leeg object",
+      "detail": {
+        "body": {}
+      }
+    },
+    {
+      "id": "kaal_anoniem_leesbaar",
+      "ok": true,
+      "title_nl": "Zonder adminAuth is alles anoniem leesbaar",
+      "detail": {
+        "http": {
+          "/flows": 200,
+          "/nodes": 200,
+          "/settings": 200
+        }
+      }
+    },
+    {
+      "id": "kaal_exec_geladen",
+      "ok": true,
+      "title_nl": "Zonder nodesExcludes is de exec-node geladen",
+      "detail": {
+        "verboden_geladen": [
+          "exec"
+        ]
+      }
+    },
+    {
+      "id": "kaal_alleen_kernmodule",
+      "ok": true,
+      "title_nl": "De image bevat alleen nodes uit de kernmodule 'node-red'",
+      "detail": {
+        "modules": [
+          "node-red"
+        ]
+      }
+    },
+    {
+      "id": "kaal_instellingen",
+      "ok": true,
+      "title_nl": "Standaard: function-modules aan, palette open, credentials met een systeemsleutel",
+      "detail": {
+        "functionExternalModules": true,
+        "flowEncryptionType": "system",
+        "externalModules": {}
+      }
+    },
+    {
+      "id": "kaal_env_credential_secret_genegeerd",
+      "ok": true,
+      "title_nl": "De omgevingsvariabele NODE_RED_CREDENTIAL_SECRET wordt door de image niet gebruikt (alleen --define werkt)",
+      "detail": {
+        "flowEncryptionType": "system"
+      }
+    },
+    {
+      "id": "kaal_diagnostics_unset",
+      "ok": true,
+      "title_nl": "Diagnostics meldt adminAuth: UNSET",
+      "detail": {
+        "adminAuth": "UNSET"
+      }
+    },
+    {
+      "id": "versie_is_gepinde_tag",
+      "ok": true,
+      "title_nl": "De image meldt de gepinde versie",
+      "detail": {
+        "version": "5.0.9",
+        "tag": "5.0.9"
+      }
+    },
+    {
+      "id": "kaal_client_weigert",
+      "ok": true,
+      "title_nl": "De client van deze dienst leest niets uit een onbeveiligde Node-RED",
+      "detail": {
+        "reden": "niet_beveiligd"
+      }
+    },
+    {
+      "id": "kaal_isolatie_afwijking",
+      "ok": true,
+      "title_nl": "De isolatiecontrole meldt een onbeveiligde Node-RED als afwijking",
+      "detail": {
+        "status": "afwijking",
+        "afwijkingen": [
+          "editor_aanmelding",
+          "anoniem_geweigerd"
+        ]
+      }
+    },
+    {
+      "id": "gebruiker_niet_root",
+      "ok": true,
+      "title_nl": "De image draait standaard als een gewone gebruiker",
+      "detail": {
+        "uid": "1000",
+        "verwacht": 1000
+      }
+    },
+    {
+      "id": "profiel_vraagt_aanmelding",
+      "ok": true,
+      "title_nl": "Met het profiel vraagt de editor een aanmelding",
+      "detail": {
+        "type": "credentials"
+      }
+    },
+    {
+      "id": "profiel_anoniem_401",
+      "ok": true,
+      "title_nl": "Zonder aanmelding: 401 op flows, nodes en instellingen",
+      "detail": {
+        "http": {
+          "/flows": 401,
+          "/nodes": 401,
+          "/settings": 401
+        }
+      }
+    },
+    {
+      "id": "profiel_anoniem_schrijven_401",
+      "ok": true,
+      "title_nl": "Zonder aanmelding kan niemand flows zetten",
+      "detail": {
+        "http": 401
+      }
+    },
+    {
+      "id": "fout_wachtwoord_403",
+      "ok": true,
+      "title_nl": "Een fout wachtwoord geeft 403",
+      "detail": {
+        "http": 403
+      }
+    },
+    {
+      "id": "dienstaccount_scope_ster_geweigerd",
+      "ok": true,
+      "title_nl": "Het dienstaccount krijgt geen token met scope '*'",
+      "detail": {
+        "http": 403
+      }
+    },
+    {
+      "id": "beheeraccount_kan_aanmelden",
+      "ok": true,
+      "title_nl": "Het beheeraccount meldt aan met het bcrypt-wachtwoord uit het profiel",
+      "detail": {
+        "http": 200
+      }
+    },
+    {
+      "id": "profiel_isolatie_in_orde",
+      "ok": true,
+      "title_nl": "De isolatiecontrole van deze dienst meet het profiel als in orde",
+      "detail": {
+        "status": "gemeten_in_orde",
+        "controles": {
+          "editor_aanmelding": "ok",
+          "anoniem_geweigerd": "ok",
+          "beheer_aanmelding_gezet": "ok",
+          "exec_node_afwezig": "ok",
+          "modules_toegestaan": "ok",
+          "palette_installatie_uit": "ok",
+          "function_modules_uit": "ok",
+          "credentials_versleuteld": "ok",
+          "dienstaccount_minimaal": "ok"
+        },
+        "niet_meetbaar": [
+          "niet_root",
+          "geen_docker_socket",
+          "prive_netwerk"
+        ]
+      }
+    },
+    {
+      "id": "dienstaccount_rechten",
+      "ok": true,
+      "title_nl": "Het dienstaccount heeft precies zijn minimale rechten",
+      "detail": {
+        "rechten": [
+          "flows.read",
+          "flows.write",
+          "nodes.read",
+          "settings.read",
+          "diagnostics.read"
+        ]
+      }
+    },
+    {
+      "id": "profiel_exec_niet_geladen",
+      "ok": true,
+      "title_nl": "Met nodesExcludes is de exec-node niet geladen",
+      "detail": {
+        "verboden_geladen": []
+      }
+    },
+    {
+      "id": "dienstaccount_kan_niets_installeren",
+      "ok": true,
+      "title_nl": "Het dienstaccount kan geen module installeren",
+      "detail": {
+        "http": 404
+      }
+    },
+    {
+      "id": "palette_installatie_uit",
+      "ok": true,
+      "title_nl": "Ook de beheerder kan via de editor geen module installeren (404)",
+      "detail": {
+        "http": 404
+      }
+    },
+    {
+      "id": "flows_v2_vorm",
+      "ok": true,
+      "title_nl": "GET /flows (v2) geeft de flows en een rev (sha256-hex)",
+      "detail": {
+        "rev_lengte": 64,
+        "nodes": 2
+      }
+    },
+    {
+      "id": "beheerder_zet_flows",
+      "ok": true,
+      "title_nl": "De beheerder zet flows met credentials (v2 + rev)",
+      "detail": {
+        "http": 200
+      }
+    },
+    {
+      "id": "flows_zonder_credentials",
+      "ok": true,
+      "title_nl": "GET /flows geeft nooit credentials terug",
+      "detail": {
+        "nodes": 3,
+        "met_credentials": []
+      }
+    },
+    {
+      "id": "credentials_bestand_versleuteld",
+      "ok": true,
+      "title_nl": "flows_cred.json is één versleuteld blok {\"$\": \"<32 hex><base64>\"}",
+      "detail": {
+        "sleutels": [
+          "$"
+        ]
+      }
+    },
+    {
+      "id": "credentials_aanwezig_voor_herstel",
+      "ok": true,
+      "title_nl": "Node-RED kent de credentials van de node (wachtwoord alleen als has_password)",
+      "detail": {
+        "http": 200,
+        "velden": [
+          "has_password",
+          "user"
+        ]
+      }
+    },
+    {
+      "id": "dienstaccount_leest_geen_credentials",
+      "ok": true,
+      "title_nl": "Het dienstaccount kan geen credentials opvragen",
+      "detail": {
+        "http": 401
+      }
+    },
+    {
+      "id": "verouderde_rev_geweigerd",
+      "ok": true,
+      "title_nl": "POST /flows met een verouderde rev geeft 409 (niets overschreven)",
+      "detail": {
+        "reden": "versie_conflict"
+      }
+    },
+    {
+      "id": "na_weigering_ongewijzigd",
+      "ok": true,
+      "title_nl": "Na de weigering is de rev ongewijzigd",
+      "detail": {}
+    },
+    {
+      "id": "na_leegmaken_geen_credentials",
+      "ok": true,
+      "title_nl": "Na het weghalen van de flows zijn de credentials weg",
+      "detail": {
+        "velden": []
+      }
+    },
+    {
+      "id": "herstel_flows_gelijk",
+      "ok": true,
+      "title_nl": "Na het herstel zijn de flows byte-gelijk (checksum) aan de momentopname",
+      "detail": {
+        "checksum_gelijk": true
+      }
+    },
+    {
+      "id": "herstel_credentials_terug",
+      "ok": true,
+      "title_nl": "Het versleutelde blok zet de credentials terug zonder dat deze dienst ze kan lezen",
+      "detail": {
+        "http": 200,
+        "velden": [
+          "has_password",
+          "user"
+        ]
+      }
+    },
+    {
+      "id": "exec_flow_aangenomen_maar_gescand",
+      "ok": true,
+      "title_nl": "Node-RED neemt een flow met een (niet geladen) exec-node aan; de scan van deze dienst blokkeert de flow",
+      "detail": {
+        "http": 200,
+        "geblokkeerd": [
+          "verboden_node"
+        ]
+      }
+    },
+    {
+      "id": "exec_type_niet_geregistreerd",
+      "ok": true,
+      "title_nl": "Het type exec blijft ongeregistreerd (de node kan niet draaien)",
+      "detail": {
+        "flows_state_http": 200
+      }
+    },
+    {
+      "id": "andere_sleutel_geweigerd",
+      "ok": true,
+      "title_nl": "Met een andere credentialSecret weigert Node-RED het blok (400 credentials_load_failed)",
+      "detail": {
+        "reden": "credentials_niet_te_ontsleutelen"
+      }
+    },
+    {
+      "id": "andere_sleutel_ongewijzigd",
+      "ok": true,
+      "title_nl": "Na die weigering zijn de flows ongewijzigd",
+      "detail": {}
+    },
+    {
+      "id": "token_ingetrokken",
+      "ok": true,
+      "title_nl": "Na POST /auth/revoke is het token ongeldig",
+      "detail": {
+        "http": 401
+      }
+    }
+  ],
+  "all_ok": true
+}
