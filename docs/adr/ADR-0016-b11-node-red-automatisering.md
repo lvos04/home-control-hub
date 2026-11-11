@@ -234,7 +234,12 @@ gemeten.
 ## Gevolgen
 
 - Migratie `0005` (momentopnamen, flow-tokens, events, afleveringen, herstel). Terug naar een oudere image kan alleen
-  met de back-up of de dataset-snapshot van vóór de update.
+  met de back-up of de dataset-snapshot van vóór de update. Een geweigerd actieverzoek zonder reden (van vóór `0005`,
+  of na terug naar `0004`) krijgt bij de upgrade de reden `reden_onbekend`. De upgrade is getest op een gevulde
+  `0004`-database (gebruikers en SSO, kluis, audit en de automatiseringstabellen): heen, terug, opnieuw heen en de
+  back-up van vóór de upgrade teruggezet, telkens zonder verschil (`test_migratie_0005_gevuld.py`). Rijen die `0005`
+  niet kan aannemen (dubbele triggers, een `risk_claim` buiten R0–R3) laten de upgrade in zijn geheel stoppen; de
+  database blijft dan ongewijzigd op `0004`.
 - Nieuwe afhankelijkheid `bcrypt` (voor de `adminAuth`-hash zoals Node-RED hem verwacht).
 - Nieuwe optionele instellingen: `HCH_NODE_RED_SYNC_INTERVAL_S`, `HCH_NODE_RED_DATA_DIR`,
   `HCH_NODE_RED_ALLOWED_MODULES`.

@@ -12,6 +12,10 @@ Gewijzigd (P0-tabellen): ``automation_flow`` (status ``geblokkeerd``/``verwijder
 ``automation_flow_run`` (simulatie: voorbeeld-events, runlog, uitkomst), ``automation_action_request`` (doel,
 parameters, reden, eigenaar, risicovoorbeeld, ontdubbelsleutel, weigerreden, terugmelding van de Hub).
 
+Bestaande rijen: een actieverzoek met status ``geweigerd`` zonder reden (van vóór deze revisie, of na
+``migrate --down 0004``, waarbij de reden vervalt) krijgt de reden ``reden_onbekend``; zo faalt de nieuwe
+CHECK-constraint niet en gaat er niets verloren.
+
 Terugdraaien: de nieuwe tabellen en kolommen vervallen (momentopnamen, tokens, events, afleveringen en
 herstelvoorstellen gaan daarbij verloren); flows met status ``geblokkeerd`` of ``verwijderd`` worden ``onbekend``.
 
@@ -383,6 +387,11 @@ def upgrade() -> None:
         op.f("ck_automation_flow_version_policy_status"),
         "automation_flow_version",
         "policy_status IN ('in_orde','geblokkeerd')",
+    )
+    # een geweigerd verzoek zonder reden (P0, of terug naar 0004 en weer omhoog): reden invullen, niets weggooien
+    op.execute(
+        "UPDATE automation_action_request SET rejected_reason = 'reden_onbekend' "
+        "WHERE status = 'geweigerd' AND rejected_reason IS NULL"
     )
     op.create_check_constraint(
         op.f("ck_automation_action_request_rejected_has_reason"),
