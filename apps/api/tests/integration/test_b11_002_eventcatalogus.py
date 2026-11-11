@@ -382,6 +382,9 @@ def test_blocked_flow_keeps_its_token_but_gets_nothing_and_may_request_nothing(
     assert sorted(d["status"] for d in _deliveries(linked, auth, detail["id"])) == ["geclaimd", "wachtend"]
     r = b11.request_action(linked, token, "notification.send", target={"type": "user", "id": "user-1"})
     assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd"
+    # R-VEILIG-6: een verzoek dat ook om een andere reden niet mag, houdt die eigen reden (ADR-0016 kop 2)
+    r = b11.request_action(linked, token, "energy.device.switch", target={"type": "device", "id": "lamp-1"})
+    assert r.status_code == 403 and r.json()["details"]["reason"] == "onbekende_actie"
     assert b11.ack(linked, token, earlier[0]["id"]).status_code == 200
     assert b11.claim(linked, token)["items"] == []
     r = b11.post_event(linked, fake_hub, b11.envelope())

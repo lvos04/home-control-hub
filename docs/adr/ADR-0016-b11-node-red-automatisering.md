@@ -92,8 +92,9 @@ Deze ronde bouwt de vijf werkpakketten:
   bevinding `verwijzing_onbekend` (fail-closed). Een flow met een verboden node, een onbekend type, een module
   buiten de allowlist of zo'n onbekende verwijzing (in het eigen tabblad of in een verbonden tabblad) wordt
   **geblokkeerd**, en een event `flow.policy.blocked` gaat naar de Hub. Een geblokkeerde flow krijgt geen events (ook
-  afleveringen die al wachtten, blijven staan), geen nieuwe tokens en mag niets aanvragen: elk actieverzoek is
-  `403 flow_geblokkeerd` en wordt vastgelegd. Een bestaand token blijft
+  afleveringen die al wachtten, blijven staan) en geen nieuwe tokens; elk actieverzoek wordt geweigerd (403) en
+  vastgelegd, met reden `flow_geblokkeerd`, of de eigen reden als het verzoek ook om een andere reden niet mag
+  (bijvoorbeeld `onbekende_actie`); er gaat dan niets naar de Hub. Een bestaand token blijft
   bestaan, maar opent alleen nog: de eigen stand lezen (`GET …/flow-api/me` toont de status en de reden, en
   `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het bevestigen (`ack`/`nack`) van een aflevering die al
   vóór de blokkade was opgehaald; die wordt niet opnieuw afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets
