@@ -20,7 +20,7 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   voert nooit iets uit. Alleen de acties van de vaste lijst uit contract §8 kunnen worden aangevraagd; al het
   andere wordt geweigerd. De boiler schakelen, Emby als doel, verwijderen, shell, beleid wijzigen, betaalde acties
   en onzichtbare of niet-ASCII-tekens in een doel worden altijd geweigerd, ook met een ruim token. Hetzelfde event
-  vijf keer geeft één verzoek. Limiet per flow en actie.
+  vijf keer geeft één verzoek. Limiet per flow en actie, en per flow over alle acties samen.
 - **Proefrun (B11-004).** Vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd. Een flow met nodes die
   zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging.
 - **Versies en herstel (B11-005).** Versleutelde momentopnamen (credentials alleen als door Node-RED versleuteld

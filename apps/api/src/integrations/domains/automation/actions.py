@@ -48,6 +48,9 @@ from .models import (
 ACTION_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,3}$")
 SCOPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+){0,3}(\.\*)?$")
 DEFAULT_MAX_PER_HOUR = 30
+#: grens per flow over álle acties samen, ook geweigerde verzoeken (elk verzoek is een event naar de Hub): een ruime
+#: scope geeft zo geen onbegrensde stroom verzoeken; een rij ``*`` in de grenzen van de flow maakt dit strenger
+FLOW_MAX_PER_HOUR = 30
 ANY_ACTION = "*"
 MAX_PARAM_BYTES = 8 * 1024
 #: zo lang mag de Hub een verzoek van een flow hooguit in behandeling nemen (ActionProposal.expires_in_seconds)
@@ -267,7 +270,8 @@ class RateLimited(Exception):
         self.limit = limit
 
 
-def _limits(session: Session, flow_id: uuid.UUID, action_id: str) -> tuple[int, int]:
+def _limits(session: Session, flow_id: uuid.UUID, action_id: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    """``((max_per_uur, wachttijd_s) voor deze actie, (max_per_uur, wachttijd_s) voor de hele flow)``."""
     rows = {
         r.action_id: r
         for r in session.scalars(
@@ -276,28 +280,38 @@ def _limits(session: Session, flow_id: uuid.UUID, action_id: str) -> tuple[int, 
             )
         )
     }
-    row = rows.get(action_id) or rows.get(ANY_ACTION)
-    return (row.max_per_hour, row.cooldown_s) if row is not None else (DEFAULT_MAX_PER_HOUR, 0)
+    own, every = rows.get(action_id), rows.get(ANY_ACTION)
+    per_action = (own.max_per_hour, own.cooldown_s) if own is not None else (DEFAULT_MAX_PER_HOUR, 0)
+    per_flow = (every.max_per_hour, every.cooldown_s) if every is not None else (FLOW_MAX_PER_HOUR, 0)
+    return per_action, per_flow
 
 
-def check_rate(session: Session, flow_id: uuid.UUID, action_id: str, now: datetime) -> None:
-    max_per_hour, cooldown_s = _limits(session, flow_id, action_id)
+def _check_window(
+    session: Session, flow_id: uuid.UUID, action_id: str | None, max_per_hour: int, cooldown_s: int, now: datetime
+) -> None:
+    """Telt de verzoeken (ook geweigerde) van de flow in het laatste uur; ``action_id`` None = alle acties samen."""
     window = now - timedelta(hours=1)
+    conditions = [AutomationActionRequest.flow_id == flow_id, AutomationActionRequest.created_at > window]
+    if action_id is not None:
+        conditions.append(AutomationActionRequest.action_id == action_id)
     count, oldest, newest = session.execute(
         select(
             func.count(), func.min(AutomationActionRequest.created_at), func.max(AutomationActionRequest.created_at)
-        ).where(
-            AutomationActionRequest.flow_id == flow_id,
-            AutomationActionRequest.action_id == action_id,
-            AutomationActionRequest.created_at > window,
-        )
+        ).where(*conditions)
     ).one()
-    limit = {"max_per_uur": max_per_hour, "wachttijd_s": cooldown_s}
+    limit = {"max_per_uur": max_per_hour, "wachttijd_s": cooldown_s, "geldt_voor": action_id or ANY_ACTION}
     if count >= max_per_hour:
         wait = int((oldest + timedelta(hours=1) - now).total_seconds()) + 1 if oldest else 60
         raise RateLimited(max(1, wait), limit)
     if cooldown_s and newest is not None and (now - newest).total_seconds() < cooldown_s:
         raise RateLimited(max(1, int(cooldown_s - (now - newest).total_seconds()) + 1), limit)
+
+
+def check_rate(session: Session, flow_id: uuid.UUID, action_id: str, now: datetime) -> None:
+    """Twee grenzen: per flow en actie, en per flow over alle acties samen (``*``). Gooit :class:`RateLimited`."""
+    per_action, per_flow = _limits(session, flow_id, action_id)
+    _check_window(session, flow_id, action_id, *per_action, now)
+    _check_window(session, flow_id, None, *per_flow, now)
 
 
 @dataclass

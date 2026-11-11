@@ -2377,7 +2377,7 @@
             "description": "Validation Error"
           },
           "429": {
-            "description": "rate_limited — te veel verzoeken van deze flow voor deze actie"
+            "description": "rate_limited — te veel verzoeken van deze flow (voor deze actie of in totaal)"
           },
           "503": {
             "description": "hub_unavailable — deze dienst is niet met de Hub gekoppeld"

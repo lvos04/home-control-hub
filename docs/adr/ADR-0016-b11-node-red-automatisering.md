@@ -141,7 +141,10 @@ Deze ronde bouwt de vijf werkpakketten:
   lijst.
 - **Ontdubbeling:** hetzelfde event dat vijf keer binnenkomt geeft één aflevering en één actieverzoek (sleutel over
   flow, event, actie en exacte parameters). Elke mutatie vraagt een `Idempotency-Key`.
-- **Grenzen:** standaard 30 verzoeken per uur per flow en actie; een beheerder kan dat alleen strenger zetten.
+- **Grenzen:** standaard 30 verzoeken per uur per flow en actie, en daarnaast 30 per uur per flow over alle acties
+  samen; ook geweigerde verzoeken tellen mee (elk verzoek is een event naar de Hub), zodat een ruime scope geen
+  onbegrensde stroom verzoeken geeft. Een rij `*` in de grenzen van een flow geldt voor alle acties van die flow
+  samen. Een beheerder kan dit alleen strenger zetten. Een afgeremd verzoek (`429`) wordt niet vastgelegd.
 - Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
   ongezien alsnog uitgevoerd zou worden.
 - De Hub meldt de uitkomst terug met `POST …/action-requests/{id}/result` (alleen dienst-JWT). Een eindstand

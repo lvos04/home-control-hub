@@ -773,7 +773,7 @@ def put_flow_triggers(
 
 class LimitEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    #: een action_id of ``*`` (alle acties van deze flow)
+    #: een action_id, of ``*``: alle acties van deze flow samen (naast de grens per actie)
     action_id: str = Field(min_length=1, max_length=80)
     #: nooit ruimer dan de standaard; 0 = deze actie mag de flow niet aanvragen
     max_per_hour: int = Field(ge=0, le=actions.DEFAULT_MAX_PER_HOUR)

@@ -200,6 +200,7 @@ def me(session: Session = Depends(get_session), identity: FlowIdentity = Depends
         ],
         "rate_limits": {
             "standaard_max_per_uur": actions.DEFAULT_MAX_PER_HOUR,
+            "standaard_max_per_uur_per_flow": actions.FLOW_MAX_PER_HOUR,
             "eigen": [
                 {"action_id": r.action_id, "max_per_hour": r.max_per_hour, "cooldown_s": r.cooldown_s} for r in limits
             ],
@@ -308,7 +309,7 @@ def _hub_linked(request: Request) -> bool:
         200: {"description": "Al eerder aangevraagd voor hetzelfde event (ontdubbeld), of proefrun (gesimuleerd)"},
         202: {"description": "Aangevraagd bij de Hub (event flow.action.requested)"},
         403: {"description": "forbidden — geweigerd en vastgelegd (details.reason)"},
-        429: {"description": "rate_limited — te veel verzoeken van deze flow voor deze actie"},
+        429: {"description": "rate_limited — te veel verzoeken van deze flow (voor deze actie of in totaal)"},
         503: {"description": "hub_unavailable — deze dienst is niet met de Hub gekoppeld"},
     },
 )
@@ -369,7 +370,7 @@ def request_action(
             raise ApiError(
                 429,
                 "rate_limited",
-                "Te veel verzoeken van deze flow voor deze actie; probeer het later opnieuw.",
+                "Te veel verzoeken van deze flow (voor deze actie of in totaal); probeer het later opnieuw.",
                 {"limiet": exc.limit, "retry_after_s": exc.retry_after},
                 {"Retry-After": str(exc.retry_after)},
             ) from exc

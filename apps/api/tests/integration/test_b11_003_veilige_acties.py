@@ -437,6 +437,56 @@ def test_rate_limit_per_flow_and_action(linked: Any, auth: Any, flow: Any) -> No
     assert r.status_code == 422
 
 
+def test_star_limit_counts_all_actions_of_the_flow_together(linked: Any, auth: Any, flow: Any) -> None:
+    """R-VEILIG-2: ``*`` is een grens voor de hele flow, niet een terugval per actie."""
+    detail, token = flow
+    r = b11.put_flow(
+        linked,
+        auth,
+        detail["id"],
+        "rate-limits",
+        {"rate_limits": [{"action_id": "*", "max_per_hour": 1, "cooldown_s": 0}]},
+    )
+    assert r.status_code == 200, r.text
+    assert b11.request_action(linked, token, "app.restart", target=APP).status_code == 202
+    for other in ("app.stop", "app.start", "notification.send"):
+        r = b11.request_action(linked, token, other, target=APP if other != "notification.send" else USER)
+        assert r.status_code == 429, (other, r.text)
+        assert r.json()["details"]["limiet"]["geldt_voor"] == "*"
+    assert len(_requests(linked, auth)) == 1
+    assert len(b11.outbox(linked, "flow.action.requested")) == 1
+
+
+def test_a_flow_has_a_fixed_limit_over_all_its_requests(linked: Any, auth: Any, flow: Any) -> None:
+    """R-VEILIG-2: ook zonder eigen grens geeft een ruime scope geen onbegrensde stroom verzoeken (en events) naar de
+    Hub: na FLOW_MAX_PER_HOUR verzoeken per uur, ook geweigerde en met steeds een andere actie, volgt 429."""
+    from integrations.domains.automation import actions
+
+    detail, _ = flow
+    r = linked.post(
+        f"{A}/flows/{detail['id']}/tokens",
+        json={"label": "ruim", "allowed_actions": ["zfs.*", "app.*", "notification.send"]},
+        headers=idem(auth("admin")),
+    )
+    assert r.status_code == 201, r.text
+    wide = r.json()["flow_token"]
+    allowed = sorted(actions.FLOW_ACTIONS)
+    unknown = [f"onbekend.actie.n{i}" for i in range(actions.FLOW_MAX_PER_HOUR - len(allowed))]
+    statuses = []
+    for action_id in [*allowed, *unknown]:
+        target = USER if action_id == "notification.send" else APP
+        params = NOTIFY if action_id == "notification.send" else {}
+        statuses.append(b11.request_action(linked, wide, action_id, target=target, parameters=params).status_code)
+    assert statuses.count(202) == len(allowed) and statuses.count(403) == len(unknown), statuses
+    assert len(statuses) == actions.FLOW_MAX_PER_HOUR == 30
+    r = b11.request_action(linked, wide, "app.restart", target=APP)
+    assert r.status_code == 429, r.text
+    assert r.json()["details"]["limiet"] == {"max_per_uur": 30, "wachttijd_s": 0, "geldt_voor": "*"}
+    assert int(r.headers["Retry-After"]) >= 1
+    sent = len(b11.outbox(linked, "flow.action.requested")) + len(b11.outbox(linked, "flow.action.rejected"))
+    assert sent == actions.FLOW_MAX_PER_HOUR, "na de grens gaat er niets meer naar de Hub"
+
+
 def test_cooldown_between_requests(linked: Any, auth: Any, flow: Any) -> None:
     detail, token = flow
     r = b11.put_flow(
