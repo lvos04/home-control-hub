@@ -1,6 +1,8 @@
 """Worker: koppelen met het env-token, de koppeling onderhouden (bevestigen, token roteren op verzoek van de Hub,
 ondertekende sleutelrotaties pollen; contract 1.3 §3.6–§3.8, §4.5), outbox pushen, Authentik synchroniseren (B13-004),
-verlopen noodactivaties sluiten en opruimen (idempotency, JWT-replaycache, oude Authentik-events).
+Node-RED uitlezen (B11: momentopnamen, flowbeleid, isolatiemeting — alleen lezen), eigen events aanbieden aan flows,
+verlopen noodactivaties, claims, proefruns en herstelvoorstellen sluiten en opruimen (idempotency, JWT-replaycache,
+oude Authentik-events, afgehandelde afleveringen).
 
 Na elke ronde schrijft de worker een **hartslag** in ``service_state`` (``worker_hartslag``: tijd, duur, mislukte
 stappen, laatste geslaagde push); de connector-health leest die als de vaste checks ``worker`` en ``jobs`` (contract
@@ -20,6 +22,10 @@ import httpx
 from . import events
 from .config import Settings
 from .db import Database
+from .domains.automation import inbox as flow_inbox
+from .domains.automation import restore as flow_restore
+from .domains.automation import simulate as flow_simulate
+from .domains.automation import snapshots as flow_snapshots
 from .domains.sso import authaudit
 from .domains.sso.authentik.client import AuthentikError, client_from_source
 from .domains.sso.service import close_expired_activations
@@ -37,15 +43,27 @@ log = logging.getLogger("integrations.worker")
 
 #: sleutel in service_state met de hartslag van de worker (geen geheimen)
 HEARTBEAT_KEY = "worker_hartslag"
+#: de isolatie van Node-RED wordt ruim binnen de houdbaarheid van een meting (15 minuten) opnieuw gemeten
+ISOLATION_INTERVAL_S = 300.0
 
 
 @dataclass
 class WorkerState:
     last_purge: float = 0.0
     next_authentik_sync: float = 0.0
+    next_node_red_sync: float = 0.0
+    next_isolation_check: float = 0.0
     last_push_ok: str | None = None
     stats: dict[str, int] = field(
-        default_factory=lambda: {"pushed": 0, "push_failed": 0, "closed_activations": 0, "authentik_syncs": 0}
+        default_factory=lambda: {
+            "pushed": 0,
+            "push_failed": 0,
+            "closed_activations": 0,
+            "authentik_syncs": 0,
+            "node_red_syncs": 0,
+            "node_red_sync_failed": 0,
+            "flow_events": 0,
+        }
     )
 
 
@@ -127,6 +145,33 @@ class Worker:
             s.commit()
         self.state.stats["authentik_syncs"] += 1
 
+    def automation_step(self, now: float) -> None:
+        """B11: eigen events aanbieden aan flows, verlopen claims/proefruns/herstelvoorstellen sluiten en — alleen als
+        Node-RED als bron is ingesteld en aan staat — flows uitlezen (momentopname, flowbeleid) en de isolatie meten.
+        Deze stap schrijft nooit naar Node-RED."""
+        moment = utcnow()
+        trace = str(uuid.uuid4())
+        with self.db.sessions() as s:
+            self.state.stats["flow_events"] += flow_inbox.feed_own_outbox(s, moment, trace)
+            flow_inbox.release_expired(s, moment, trace)
+            flow_simulate.expire_runs(s, moment)
+            flow_restore.expire(s, moment)
+            s.commit()
+        interval = self.settings.node_red_sync_interval_s
+        if interval <= 0 or now < self.state.next_node_red_sync:
+            return
+        self.state.next_node_red_sync = now + interval
+        with self.db.sessions() as s:
+            if not flow_snapshots.configured(s):
+                return  # niet ingesteld/uit: niets te doen (de status toont dat al)
+            result = flow_snapshots.sync(s, self.settings, self.vault, self.transport, trace_id=trace)
+            s.commit()
+            self.state.stats["node_red_syncs" if result.ok else "node_red_sync_failed"] += 1
+            if now >= self.state.next_isolation_check:
+                self.state.next_isolation_check = now + ISOLATION_INTERVAL_S
+                flow_snapshots.run_isolation_check(s, self.settings, self.vault, self.transport, trace_id=trace)
+                s.commit()
+
     def housekeeping_step(self, now: float) -> None:
         with self.db.sessions() as s:
             self.state.stats["closed_activations"] += close_expired_activations(s)
@@ -134,6 +179,7 @@ class Worker:
                 purge_expired(s)
                 purge_jti(s)
                 authaudit.purge_old_events(s)
+                flow_inbox.purge(s, utcnow())
                 self.state.last_purge = now
             s.commit()
 
@@ -141,7 +187,7 @@ class Worker:
         now = time.monotonic()
         started = utcnow()
         failed: list[str] = []
-        names = ("start", "koppelen", "koppeling", "push", "authentik", "onderhoud")
+        names = ("start", "koppelen", "koppeling", "push", "authentik", "automatisering", "onderhoud")
         for name, step in zip(
             names,
             (
@@ -150,6 +196,7 @@ class Worker:
                 self.link_step,
                 self.push_step,
                 lambda: self.authentik_step(now),
+                lambda: self.automation_step(now),
                 lambda: self.housekeeping_step(now),
             ),
             strict=True,

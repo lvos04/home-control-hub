@@ -14,6 +14,7 @@ from .bodylimit import BodyLimitMiddleware
 from .config import Settings
 from .connector import router as connector_router
 from .db import Database
+from .domains.automation.flowapi import router as automation_flow_router
 from .domains.automation.router import router as automation_router
 from .domains.energy.router import router as energy_router
 from .domains.network.router import router as network_router
@@ -112,6 +113,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
         sso_authentik_router,
         network_router,
         automation_router,
+        automation_flow_router,
         energy_router,
     ):
         app.include_router(r)

@@ -11,6 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import APP_ID, __version__
+from .domains.automation import inbox as flow_inbox
+from .domains.automation import snapshots as flow_snapshots
 from .domains.sso import service as sso_service
 from .models import IntegrationSource, OutboxEvent, ServiceState
 from .security.secrets import secrets_present
@@ -109,6 +111,42 @@ def _worker_check(session: Session, interval_s: float) -> tuple[dict[str, Any], 
     }
 
 
+def _automation_check(session: Session) -> dict[str, Any] | None:
+    """Eigen check ``automatisering`` (B11), alleen als Node-RED is ingesteld en aan staat ("niet ingesteld" is geen
+    meting). Een gemeten afwijking in de isolatie, een mislukte synchronisatie, een geblokkeerde flow of een
+    vastgelopen aflevering is ``degraded``; een isolatie die (nog) niet vers gemeten is, is ``unknown``."""
+    if not flow_snapshots.configured(session):
+        return None
+    now = utcnow()
+    isolation = flow_snapshots.isolation_state(session, now)
+    sync = flow_snapshots.state_get(session, flow_snapshots.SYNC_KEY) or {}
+    flows = flow_snapshots.count_flows(session)
+    queue = flow_inbox.queue_stats(session, now)
+    dead = int(queue["afleveringen"].get("dead_letter", 0))
+    detail = {
+        "isolatie": isolation["status"],
+        "afwijkingen": list(isolation.get("afwijkingen") or []),
+        "synchronisatie_ok": sync.get("ok"),
+        "laatste_synchronisatie": sync.get("laatste_ok"),
+        "flows": flows,
+        "dead_letter": dead,
+        "niet_afgeleverd_24u": queue["niet_afgeleverd_24u"],
+    }
+    observed = _parse(isolation.get("measured_at")) or _parse(sync.get("laatste_poging"))
+    if isolation["status"] == "afwijking":
+        return _check("automatisering", "degraded", detail, "isolatie_afwijking", observed_at=observed)
+    if sync.get("ok") is False:
+        return _check("automatisering", "degraded", detail, "synchronisatie_mislukt", observed_at=observed)
+    if flows.get("geblokkeerd"):
+        return _check("automatisering", "degraded", detail, "flow_geblokkeerd", observed_at=observed)
+    if dead:
+        return _check("automatisering", "degraded", detail, "dead_letter", observed_at=observed)
+    if isolation["status"] != "gemeten_in_orde":
+        reason = str(isolation.get("reden") or "isolatie_niet_gemeten")
+        return _check("automatisering", "unknown", detail, reason, observed_at=observed)
+    return _check("automatisering", "healthy", detail, None, observed_at=observed)
+
+
 def _parse(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -125,7 +163,7 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
       eerste slechtste check.
     - Vaste namen: ``database``, ``worker`` (``observed_at`` = laatste hartslag), ``jobs`` (``detail.wachtrij``,
       ``detail.bezig``, ``detail.laatste_job_klaar``; een wachtrij die niet afneemt → ``degraded``) en ``hub_link``.
-      Eigen checks: ``migraties``, ``hub_sleutels``, ``herstelregister`` en ``bronnen``.
+      Eigen checks: ``migraties``, ``hub_sleutels``, ``herstelregister``, ``automatisering`` (B11) en ``bronnen``.
     - Wat niet is ingesteld, is geen check (geen bron ingesteld, leeg herstelregister): "niet ingesteld" is geen
       meting en zou het totaal anders nooit groen laten worden (zoals Peil 1.1.1, E10). Een ingestelde bron zonder
       verse meting telt als ``unknown`` met ``meting_verouderd`` (§6.2)."""
@@ -201,6 +239,10 @@ def connector_health(request: Request, session: Session) -> dict[str, Any]:
                     reasons[0]["code"] if reasons else None,
                 )
             )
+
+        automation = _automation_check(session)
+        if automation is not None:
+            checks.append(automation)
 
         from .sources import ALL_SOURCES, effective_probe
 
