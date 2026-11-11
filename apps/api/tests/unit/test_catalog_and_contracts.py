@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from integrations.config import Settings
-from integrations.domains.automation.catalog import FORBIDDEN_NODE_TYPES
+from integrations.domains.automation.catalog import FORBIDDEN_NODE_TYPES, NODE_RED_DIGEST, NODE_RED_TAG
 from integrations.domains.energy.catalog import EXPECTED_METER_ROLES
 from integrations.domains.sso.authentik import compat
 from integrations.domains.sso.catalog import APP_COVERAGE
@@ -34,8 +34,18 @@ def test_no_unverified_claims_about_external_apps() -> None:
     for spec in ALL_SOURCES.values():
         if spec.source_id == "authentik":
             assert spec.api_verification == "geverifieerd_docs" and spec.api_verification_ref
+        elif spec.source_id == "node_red":
+            # B11: gemeten tegen een lokale container van de gepinde image; de echte NAS blijft NIET GEVALIDEERD
+            assert spec.api_verification == "geverifieerd_installatie"
+            assert "NIET GEVALIDEERD" in spec.api_verification_ref
+            assert "docs/b11/node-red-verificatie.json" in spec.api_verification_ref
         else:
             assert spec.api_verification == "te_verifieren", spec.source_id
+    nodered = json.loads((REPO_ROOT / "docs/b11/node-red-verificatie.json").read_text(encoding="utf-8"))
+    assert (
+        nodered["all_ok"] and nodered["image"]["tag"] == NODE_RED_TAG and nodered["image"]["digest"] == NODE_RED_DIGEST
+    )
+    assert nodered["validatie_echte_nas"] == "NIET GEVALIDEERD (echte NAS)"
     report = json.loads((REPO_ROOT / "docs/b13/authentik-api-verificatie.json").read_text(encoding="utf-8"))
     assert report["all_ok"] and {r["version"] for r in report["results"]} == {
         f"{y}.{m}.{p}" for y, m, p in compat.RELEASE_LINES
@@ -55,9 +65,18 @@ def test_no_unverified_claims_about_external_apps() -> None:
     assert {s.domain for s in ALL_SOURCES.values()} == {"network", "automation", "sso", "energy"}
 
 
-def test_built_capabilities_are_exactly_b13() -> None:
+def test_built_capabilities_are_exactly_b13_and_b11() -> None:
     built = {c.capability_id for s in ALL_SOURCES.values() for c in s.capabilities if c.build_status == "gebouwd"}
     assert built == {
+        "automation.isolation.check",
+        "automation.flows.read",
+        "automation.event_types.read",
+        "automation.events.deliver",
+        "automation.action.propose",
+        "automation.simulation.run",
+        "automation.flows.snapshot",
+        "automation.flows.restore.propose",
+        "automation.flows.rollback",
         "sso.recovery.register",
         "sso.break_glass.drill",
         "sso.authentik.health.read",
@@ -75,6 +94,14 @@ def test_built_capabilities_are_exactly_b13() -> None:
     # uitvoeren in Authentik is nergens gebouwd (vereist een ondertekend ExecutionRequest, P2)
     applies = [c for s in ALL_SOURCES.values() for c in s.capabilities if c.kind == "apply"]
     assert applies and all(c.build_status == "niet_gebouwd" for c in applies)
+    # de enige gebouwde wijziging in een bron is het terugzetten van flows (B11-005), en alleen met een ExecutionRequest
+    writes = {
+        c.capability_id
+        for s in ALL_SOURCES.values()
+        for c in s.capabilities
+        if c.kind in ("apply", "rollback") and c.build_status == "gebouwd"
+    }
+    assert writes == {"automation.flows.rollback"}
 
 
 def test_safety_rules_in_catalog() -> None:

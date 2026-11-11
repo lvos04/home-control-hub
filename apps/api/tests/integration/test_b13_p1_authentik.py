@@ -133,9 +133,12 @@ def test_hub_oidc_proposal_is_preview_only(
     assert authentik_fake.writes == []  # er is niets naar Authentik geschreven
     again = _propose(c, h, key=key, risk_claim="R0", reason="Hub-login via Authentik")
     assert again.json()["proposal_id"] == p["proposal_id"] and again.headers.get("Idempotent-Replay") == "true"
-    # toepassen kan (nog) niet: eerlijk 501, ook met een voorstel-id
-    a = c.post("/connector/v1/apply", json={"proposal_id": p["proposal_id"]}, headers=h)
+    # toepassen kan (nog) niet: eerlijk 501 voor deze actie, vóórdat er iets van het verzoek wordt verbruikt
+    a = c.post("/connector/v1/apply", json={"proposal": {"action_id": "sso.oidc.hub.register"}}, headers=idem(h))
     assert a.status_code == 501 and a.json()["details"]["reden"] == "nog_niet_toepasbaar"
+    # een los voorstel-id is geen uitvoeringsverzoek: geweigerd op de vorm, er gebeurt niets
+    a = c.post("/connector/v1/apply", json={"proposal_id": p["proposal_id"]}, headers=idem(h))
+    assert a.status_code == 422 and a.json()["code"] == "execution_request_ongeldig"
     assert authentik_fake.writes == []
     listed = c.get(f"{BASE}/proposals", headers=h).json()["items"]
     assert [x["proposal_id"] for x in listed] == [p["proposal_id"]]
@@ -357,7 +360,9 @@ def test_b13_004_viewer_cannot_change_anything_or_get_credentials(paired_client:
             ):
                 mutating += 1
                 r = c.request(method.upper(), url, headers=idem(viewer), json={})
-                assert r.status_code == 403, (method, path, r.status_code)
+                # de flow-API (B11-003) kent alleen flow-tokens: een Hub-JWT komt daar helemaal niet binnen (401)
+                refused = 401 if path.startswith("/integrations/v1/automation/flow-api/") else 403
+                assert r.status_code == refused, (method, path, r.status_code)
     assert mutating >= 25
     for url in (
         f"{BASE}/rights",

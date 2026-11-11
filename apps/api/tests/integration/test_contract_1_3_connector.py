@@ -79,9 +79,9 @@ def test_unknown_never_green_and_not_configured_is_no_check(paired_client: Any, 
     with c.app.state.db.sessions() as s:
         s.add(
             IntegrationSource(
-                source_id="node_red",
-                domain="automation",
-                base_url="http://bron-node-red.test:1880",
+                source_id="adguard_home",
+                domain="network",
+                base_url="http://bron-adguard.test:3000",
                 enabled=True,
                 last_probe_at=utcnow() - timedelta(minutes=16),
                 last_probe_status="healthy",
@@ -95,12 +95,12 @@ def test_unknown_never_green_and_not_configured_is_no_check(paired_client: Any, 
     assert health["status"] == "unknown" and health["reason_code"] == "meting_verouderd"
     # vers en gezond → healthy; vers en down → down (slechtste)
     with c.app.state.db.sessions() as s:
-        row = s.get(IntegrationSource, "node_red")
+        row = s.get(IntegrationSource, "adguard_home")
         row.last_probe_at = utcnow()  # type: ignore[union-attr]
         s.commit()
     assert _health(c, h)["status"] == "healthy"
     with c.app.state.db.sessions() as s:
-        row = s.get(IntegrationSource, "node_red")
+        row = s.get(IntegrationSource, "adguard_home")
         row.last_probe_status = "down"  # type: ignore[union-attr]
         s.commit()
     health = _health(c, h)

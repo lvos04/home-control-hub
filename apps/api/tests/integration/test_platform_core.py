@@ -166,11 +166,13 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
     d = c.get("/connector/v1/discover", headers=h).json()
     assert d["app_id"] == "home-control-hub" and d["schema_version"] == "1.0"
-    assert set(d["capabilities"]) == {"read", "propose", "stream"}
-    assert set(d["unavailable_capabilities"]) == {"apply", "rollback"}
+    # B11-005: apply bestaat alleen voor acties met apply_status 'vereist_execution_request'; rollback blijft 501
+    assert set(d["capabilities"]) == {"read", "propose", "apply", "stream"}
+    assert set(d["unavailable_capabilities"]) == {"rollback"}
     assert {a["action_id"]: a["apply_status"] for a in d["actions"]} == {
         "sso.oidc.hub.register": "nog_niet_toepasbaar",
         "sso.sessions.revoke": "nog_niet_toepasbaar",
+        "automation.flows.restore": "vereist_execution_request",
     }
     assert set(d["domains"]) == {"network", "automation", "sso", "energy"} and d["timestamp_utc"].endswith("Z")
     assert d["limits"]["max_age_s"] == {"source": 900, "health": 900}  # contract 1.3 §6.2
@@ -196,11 +198,21 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     assert r.status_code == 403
 
 
-@pytest.mark.parametrize("path", ["/connector/v1/apply", "/connector/v1/rollback"])
-def test_connector_mutations_honestly_unavailable(paired_client: Any, auth: Any, path: str) -> None:
-    r = paired_client.post(path, json={}, headers=auth("admin"))
+def test_connector_rollback_honestly_unavailable(paired_client: Any, auth: Any) -> None:
+    r = paired_client.post("/connector/v1/rollback", json={}, headers=auth("admin"))
     assert r.status_code == 501 and r.json()["code"] == "capability_unavailable"
-    assert paired_client.post(path, json={}, headers=auth("viewer")).status_code == 403
+    assert paired_client.post("/connector/v1/rollback", json={}, headers=auth("viewer")).status_code == 403
+
+
+def test_connector_apply_needs_key_and_a_real_execution_request(paired_client: Any, auth: Any) -> None:
+    """B11-005: apply voert alleen een ondertekend ExecutionRequest uit; een leeg of los verzoek doet niets."""
+    c = paired_client
+    r = c.post("/connector/v1/apply", json={}, headers=auth("admin"))
+    assert r.status_code == 400 and r.json()["code"] == "idempotency_key_required"
+    r = c.post("/connector/v1/apply", json={}, headers=idem(auth("admin")))
+    assert r.status_code == 422 and r.json()["code"] == "execution_request_ongeldig"
+    for role in ("viewer", "operator"):
+        assert c.post("/connector/v1/apply", json={}, headers=idem(auth(role))).status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -209,8 +221,6 @@ def test_connector_mutations_honestly_unavailable(paired_client: Any, auth: Any,
         "/integrations/v1/network/devices",
         "/integrations/v1/network/dns/summary",
         "/integrations/v1/network/tunnels",
-        "/integrations/v1/automation/flows",
-        "/integrations/v1/automation/event-types",
         "/integrations/v1/energy/meters",
         "/integrations/v1/energy/usage",
         "/integrations/v1/energy/advice",
@@ -232,7 +242,14 @@ def test_domain_structures(paired_client: Any, auth: Any) -> None:
         i["measurement_status"] == "onbekend" and i["quality"] == "onbekend" and i["read_only"] for i in cov["items"]
     )
     pol = c.get("/integrations/v1/automation/policy", headers=h).json()
-    assert "exec" in pol["forbidden_node_types"] and pol["forbidden_node_types_verification"] == "te_verifieren"
+    # B11-001: gemeten tegen een lokale container van de gepinde image (echte NAS: NIET GEVALIDEERD)
+    assert "exec" in pol["forbidden_node_types"]
+    assert pol["forbidden_node_types_verification"] == "geverifieerd_installatie"
+    # B11: niet ingesteld is een eerlijke lege stand met 'ingesteld: false', geen 501 meer en geen verzonnen flows
+    flows = c.get("/integrations/v1/automation/flows", headers=h)
+    assert flows.status_code == 200 and flows.json()["items"] == [] and flows.json()["ingesteld"] is False
+    types = c.get("/integrations/v1/automation/event-types", headers=h)
+    assert types.status_code == 200 and types.json()["items"]
     caps = c.get("/integrations/v1/network/capabilities", headers=h).json()
     assert {s["source_id"] for s in caps["sources"]} == {
         "netalertx",

@@ -36,12 +36,17 @@ pytestmark = pytest.mark.integration
 OPENAPI = REPO_ROOT / "docs" / "openapi" / "home-control-hub.openapi.json"
 PUBLIC = {"/healthz", "/readyz"}
 MUTATING = {"post", "put", "patch", "delete"}
-# POST zonder wijziging (alleen beoordelen/controleren) en de eerlijke 501's van het connectorcontract
+# POST zonder wijziging (alleen beoordelen/controleren) en de eerlijke 501 van het connectorcontract
+# (apply vraagt sinds B11-005 een Idempotency-Key en een ondertekend ExecutionRequest)
 NON_MUTATING_POSTS = {
     "/integrations/v1/sso/break-glass/evaluate",
     "/integrations/v1/sso/recovery/kit/verify",
 }
-UNAVAILABLE = {"/connector/v1/apply", "/connector/v1/rollback"}
+UNAVAILABLE = {"/connector/v1/rollback"}
+# B11-003: de flow-API kent alleen flow-tokens; een Hub-JWT (welke rol ook) komt er niet binnen
+FLOW_API = "/integrations/v1/automation/flow-api/"
+# B11: wat alleen de Hub zelf (dienst-JWT) mag aanbieden of terugmelden
+SERVICE_ONLY = re.compile(r"^/integrations/v1/automation/(events|action-requests/[^/]+/result)$")
 PATH_VALUES = {"source_id": "authentik"}
 
 
@@ -76,12 +81,27 @@ def test_every_route_requires_auth_and_a_role(paired_client: Any, hub_keys: Any,
     # geldig ondertekend, maar alleen de rol 'kind': nergens toegang (least privilege)
     kind = {"Authorization": f"Bearer {hub_keys.token(['kind'])}"}
     r = _call(c, method, url, kind)
+    if url.startswith(FLOW_API):
+        # ook een geldige Hub-JWT is hier geen toegangsbewijs (zelfs niet die van een beheerder)
+        admin = {"Authorization": f"Bearer {hub_keys.token(['admin'])}"}
+        for response in (r, _call(c, method, url, admin)):
+            assert response.status_code == 401, (method, url, response.status_code)
+            assert response.json()["details"]["reason"] == "flow_token_ongeldig"
+        return
     assert r.status_code == 403 and r.json()["code"] == "forbidden", (method, url, r.status_code)
 
 
 @pytest.mark.parametrize(("method", "url"), [(m, u) for m, u in ROUTES if m in MUTATING])
-def test_every_mutation_requires_idempotency_key(paired_client: Any, auth: Any, method: str, url: str) -> None:
-    r = _call(paired_client, method, url, auth("admin"))
+def test_every_mutation_requires_idempotency_key(
+    paired_client: Any, auth: Any, fake_hub: FakeHub, method: str, url: str
+) -> None:
+    if url.startswith(FLOW_API):
+        # geen toegang met een Hub-JWT; de Idempotency-Key-eis met een geldig flow-token staat in
+        # test_b11_003_veilige_acties.py::test_flow_api_mutations_need_an_idempotency_key
+        assert _call(paired_client, method, url, auth("admin")).status_code == 401
+        return
+    headers = fake_hub.service_auth() if method == "post" and SERVICE_ONLY.fullmatch(url) else auth("admin")
+    r = _call(paired_client, method, url, headers)
     if url in NON_MUTATING_POSTS:
         assert r.status_code == 422  # alleen invoervalidatie; er wordt niets gewijzigd
     elif url in UNAVAILABLE:

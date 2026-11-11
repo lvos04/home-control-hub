@@ -243,7 +243,7 @@ def test_apply_never_executes_even_with_a_signed_looking_request(
         headers=idem(h),
     ).json()
     request_like = {
-        "proposal": {"proposal_id": p["proposal_id"], "preview_hash": p["preview_hash"]},
+        "proposal": {"action_id": "sso.oidc.hub.register", "parameters": {"redirect_uris": [REDIRECT]}},
         "approval": {"approval_id": str(uuid.uuid4()), "preview_hash": p["preview_hash"], "one_time_nonce": "n"},
         "policy_decision": {"risk_class": "R2", "rule_ids": ["x"], "policy_hash": "0" * 64},
         "issued_at": iso(utcnow()),
@@ -257,6 +257,10 @@ def test_apply_never_executes_even_with_a_signed_looking_request(
         for url in ("/connector/v1/apply", "/connector/v1/rollback"):
             r = c.post(url, json=request_like, headers=idem(who))  # per wijziging een nieuwe JWT (zoals de Hub)
             assert r.status_code == 501 and r.json()["code"] == "capability_unavailable", (url, r.text)
+        # zonder action_id (alleen een voorstel-id) is het geen uitvoeringsverzoek: geweigerd op de vorm
+        los = {**request_like, "proposal": {"proposal_id": p["proposal_id"], "preview_hash": p["preview_hash"]}}
+        r = c.post("/connector/v1/apply", json=los, headers=idem(who))
+        assert r.status_code == 422 and r.json()["code"] == "execution_request_ongeldig", r.text
     for role in ("viewer", "operator", "kind"):
         assert c.post("/connector/v1/apply", json=request_like, headers=idem(auth(role))).status_code == 403
     after = _all_rows_text(c)
