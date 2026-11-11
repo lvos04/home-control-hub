@@ -8,6 +8,9 @@
   wijzigingen terug en krijgt het resultaat van de winnaar.
 - De verzoek-hash is een HMAC met een sleutel uit de vault: ook een wachtwoordzin in het verzoek is daaruit niet
   terug te rekenen. Mislukte verzoeken (fout) worden niet opgeslagen en hebben niets gewijzigd.
+- Eenmalige geheimen (een flow-token, het eerste wachtwoord van een profiel) staan nooit in de opgeslagen kopie:
+  de route geeft met ``stored`` een functie mee die het antwoord maskeert vóór het bewaren. Een herhaling van zo'n
+  verzoek krijgt dus het gemaskeerde antwoord; het geheim wordt precies één keer getoond.
 """
 
 from __future__ import annotations
@@ -57,6 +60,8 @@ def run_idempotent(
     key: uuid.UUID,
     payload: Any,
     action: Callable[[], Result],
+    *,
+    stored: Callable[[Any], Any] | None = None,
 ) -> JSONResponse:
     vault = request.app.state.vault
     canonical = json.dumps(
@@ -84,6 +89,7 @@ def run_idempotent(
         session.rollback()
         raise
     body_json = jsonable_encoder(body)
+    stored_json = jsonable_encoder(stored(body_json)) if stored is not None else body_json
     stmt = (
         insert(IdempotencyRecord)
         .values(
@@ -93,7 +99,7 @@ def run_idempotent(
             path=request.url.path[:500],
             request_hash=req_hash,
             status_code=status_code,
-            response_body=body_json,
+            response_body=stored_json,
             response_headers=headers,
             created_at=utcnow(),
         )

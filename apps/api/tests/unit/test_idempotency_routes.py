@@ -23,6 +23,8 @@ from fastapi.routing import APIRoute
 
 from integrations.app import create_app
 from integrations.config import Settings
+from integrations.domains.automation.flowapi import PREFIX as FLOW_API_PREFIX
+from integrations.domains.automation.flowapi import FlowAuthFirstRoute, flow_identity
 from integrations.idempotency import idempotency_key
 from integrations.security.auth import AuthFirstRoute, current_principal
 
@@ -33,7 +35,6 @@ MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/koppelen"): "formulier-POST van de statuspagina: een browserformulier kan geen header meesturen; "
     "bescherming via formuliertoken, herkomstcontrole, pogingenlimiet, koppelen_bezig en eenmalige code (§5, RV10)",
-    ("POST", "/connector/v1/apply"): "geeft altijd 501 capability_unavailable (§5: alleen zolang dat zo is)",
     ("POST", "/connector/v1/rollback"): "geeft altijd 501 capability_unavailable (§5: alleen zolang dat zo is)",
     ("POST", "/integrations/v1/sso/break-glass/evaluate"): "geen bijwerking behalve audit en tellers: …/evaluate (§5)",
     ("POST", "/integrations/v1/sso/recovery/kit/verify"): "geen bijwerking behalve audit en tellers: …/verify (§5)",
@@ -77,12 +78,30 @@ def test_every_mutating_route_requires_an_idempotency_key_or_is_exempt_with_reas
 def test_every_authenticated_route_authenticates_first() -> None:
     """RV9/§4.7: aanmelding vóór body, rol en Idempotency-Key; alleen /koppelen, /healthz, /readyz en / zonder."""
     zonder_aanmelding = set()
+    flow_api = set()
     for route in _routes(_app().routes):
         if _uses(route.dependant, current_principal):
             assert isinstance(route, AuthFirstRoute), route.path
+        elif _uses(route.dependant, flow_identity):
+            # B11: de flow-API kent alleen flow-tokens (nooit een Hub-JWT) en authenticeert net zo eerst (ADR-0016)
+            assert isinstance(route, FlowAuthFirstRoute), route.path
+            assert route.path.startswith(FLOW_API_PREFIX + "/"), route.path
+            flow_api.add(route.path)
         else:
             zonder_aanmelding.add(route.path)
     assert zonder_aanmelding == {"/", "/koppelen", "/healthz", "/readyz"}
+    assert flow_api == {
+        f"{FLOW_API_PREFIX}/me",
+        f"{FLOW_API_PREFIX}/deliveries/claim",
+        f"{FLOW_API_PREFIX}/deliveries/{{delivery_id}}/ack",
+        f"{FLOW_API_PREFIX}/deliveries/{{delivery_id}}/nack",
+        f"{FLOW_API_PREFIX}/actions",
+        f"{FLOW_API_PREFIX}/actions/{{request_id}}",
+    }
+    # en omgekeerd: buiten de flow-API accepteert geen enkele route een flow-token
+    for route in _routes(_app().routes):
+        if not route.path.startswith(FLOW_API_PREFIX + "/"):
+            assert not _uses(route.dependant, flow_identity), route.path
 
 
 def _api_errors() -> list[tuple[str, int, str, int]]:

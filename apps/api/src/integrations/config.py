@@ -10,6 +10,7 @@ gelezen, met een waarschuwing in de log; daarna vervalt hij.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,6 +71,13 @@ class Settings:
     break_glass_test_max_age_days: int = 90
     # B13-004: hoe vaak de worker events en de rechtenkaart uit Authentik leest (0 = uit)
     authentik_sync_interval_s: int = 300
+    # B11: hoe vaak de worker de flows van Node-RED leest en bij een wijziging een momentopname maakt (0 = uit)
+    node_red_sync_interval_s: int = 60
+    # B11-005: alleen-lezen gekoppelde datamap van Node-RED (voor het door Node-RED zélf versleutelde
+    # ``flows_cred.json``); leeg = credentials horen niet bij een momentopname (eerlijk gemeld, nooit verzonnen)
+    node_red_data_dir: Path | None = None
+    # B11-001: toegestane Node-RED-modules (allowlist voor plugins); alles daarbuiten blokkeert de flow
+    node_red_allowed_modules: tuple[str, ...] = ("node-red",)
     # Bewust GEEN instelling voor vertrouwde proxies: X-Forwarded-*-headers worden nooit gebruikt (uvicorn met
     # proxy_headers=False; B13-003: geen toegang via X-Forwarded-User of vergelijkbare headers).
     worker_interval_s: float = 10.0
@@ -100,9 +108,28 @@ class Settings:
             hub_key_poll_interval_s=float(min(900, max(1, _int("HCH_HUB_KEY_POLL_S", 900)))),
             break_glass_test_max_age_days=_int("HCH_BREAK_GLASS_MAX_AGE_DAYS", 90),
             authentik_sync_interval_s=_int("HCH_AUTHENTIK_SYNC_INTERVAL_S", 300),
+            node_red_sync_interval_s=_int("HCH_NODE_RED_SYNC_INTERVAL_S", 60),
+            node_red_data_dir=Path(nr_dir) if (nr_dir := _opt("HCH_NODE_RED_DATA_DIR")) else None,
+            node_red_allowed_modules=_modules(_opt("HCH_NODE_RED_ALLOWED_MODULES")),
             worker_interval_s=float(_int("HCH_WORKER_INTERVAL_S", 10)),
             allow_loopback_hub=_bool("HCH_ALLOW_LOOPBACK_HUB"),
         )
+
+
+_MODULE_RE = re.compile(r"^(@[a-z0-9][a-z0-9._-]{0,60}/)?[a-z0-9][a-z0-9._-]{0,80}$")
+
+
+def _modules(raw: str | None) -> tuple[str, ...]:
+    """Komma-gescheiden allowlist van Node-RED-modules; ``node-red`` (de kern) hoort er altijd bij."""
+    names = ["node-red"]
+    for part in (raw or "").split(","):
+        name = part.strip()
+        if not name or name in names:
+            continue
+        if not _MODULE_RE.match(name):
+            raise ValueError(f"HCH_NODE_RED_ALLOWED_MODULES bevat een ongeldige modulenaam: {name!r}")
+        names.append(name)
+    return tuple(names)
 
 
 def _normalize_url(url: str | None) -> str | None:

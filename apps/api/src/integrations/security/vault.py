@@ -54,6 +54,15 @@ class Vault:
         if row is not None:
             session.delete(row)
 
+    def seal(self, aad: bytes, plaintext: bytes) -> tuple[bytes, bytes]:
+        """Versleutelt een blob (bv. een momentopname van flows) gebonden aan ``aad``; geeft ``(nonce, ciphertext)``."""
+        nonce = os.urandom(12)
+        return nonce, self._aead.encrypt(nonce, plaintext, aad)
+
+    def unseal(self, aad: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
+        """Ontsleutelt een blob van :meth:`seal`; een andere ``aad`` of gewijzigde data geeft ``InvalidTag``."""
+        return self._aead.decrypt(nonce, ciphertext, aad)
+
     def request_hmac(self, data: bytes) -> str:
         """Gesleutelde hash (bv. voor Idempotency-records): niet terug te rekenen zonder de vault-sleutel."""
         return hmac.new(self._hmac_key, data, hashlib.sha256).hexdigest()
