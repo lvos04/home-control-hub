@@ -264,6 +264,29 @@ def test_client_rejects_unexpected_flow_answers(fake: NodeRedFake, body: bytes, 
     assert err.value.reason == reason  # nooit een lege lijst als 'geen flows'
 
 
+def test_client_turns_a_broken_compressed_answer_into_its_own_error(fake: NodeRedFake) -> None:
+    """R-TECH-7: elke fout wordt NodeRedError met een vaste reason, ook een antwoord dat niet te decoderen is."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/flows":
+            calls.append(request.url.path)
+            return httpx.Response(
+                200,
+                content=b"dit is geen gzip",
+                headers={"content-type": "application/json", "content-encoding": "gzip"},
+            )
+        return fake.handle(request)
+
+    c = NodeRedClient(BASE, policy.SERVICE_USER, SERVICE_PW, SETTINGS, httpx.MockTransport(handler), lambda _s: None)
+    with pytest.raises(NodeRedError) as err:
+        c.get_flows()
+    assert (err.value.reason, err.value.path) == ("antwoord_ongeldig", "/flows")
+    assert calls == ["/flows"], "een kapot antwoord is geen netwerkfout: niet herhalen"
+    e = api_error(err.value)
+    assert (e.status_code, e.code) == (502, "node_red_fout")
+
+
 def test_api_error_mapping_covers_every_reason_class() -> None:
     for reason in CONFIG_REASONS:
         e = api_error(NodeRedError(reason))

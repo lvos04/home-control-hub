@@ -171,6 +171,9 @@ class NodeRedClient:
                     last = NodeRedError("timeout", None, path)
                 except httpx.TransportError:
                     last = NodeRedError("onbereikbaar", None, path)
+                except httpx.DecodingError as exc:
+                    # bv. "Content-Encoding: gzip" met een body die geen gzip is: geen netwerkfout, niet herhalen
+                    raise NodeRedError("antwoord_ongeldig", None, path) from exc
                 else:
                     if status not in RETRY_STATUS or attempt == attempts:
                         return status, bytes(body)
