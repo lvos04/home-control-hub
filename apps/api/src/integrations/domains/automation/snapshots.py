@@ -19,6 +19,9 @@
   blokkeren bij mislukken en het herstel in ``restore.py``) neemt eerst :func:`lock_register`, vóór hij
   :func:`latest_snapshot` en het flowregister leest. Zo schrijven een herstel en de worker nooit tegelijk dezelfde
   flowversie; zonder slot gaf dat een uniekheidsfout en legde het blokkeren bij mislukken alle flows stil.
+- **Proefrun bij blokkeren:** raakt een flow geblokkeerd (flowbeleid in :func:`apply_scan`, of blokkeren bij
+  mislukken in :func:`block_every_flow`), dan wordt zijn lopende proefrun direct afgesloten
+  (``simulate.close_for_block``).
 """
 
 from __future__ import annotations
@@ -345,6 +348,15 @@ def _emit(session: Session, event_type: str, flow: AutomationFlow, trace_id: str
     )
 
 
+def _close_dry_runs(session: Session, flow: AutomationFlow, now: datetime) -> None:
+    """Een geblokkeerde flow heeft geen proefrun meer: een proefrun die nog loopt wordt direct afgesloten
+    (``simulate.close_for_block``; R-TECH-1 en R-VEILIG-2 van S-P2-300). Pas hier geladen, omdat ``simulate`` via
+    ``inbox`` deze module nodig heeft."""
+    from . import simulate
+
+    simulate.close_for_block(session, flow, now=now)
+
+
 def apply_scan(
     session: Session,
     scan: policy.ScanResult,
@@ -354,7 +366,8 @@ def apply_scan(
     trace_id: str,
     now: datetime,
 ) -> list[str]:
-    """Werkt het flowregister bij met de uitkomst van de scan. Geeft de bron-id's van geblokkeerde flows terug."""
+    """Werkt het flowregister bij met de uitkomst van de scan. Een proefrun van een geblokkeerde flow wordt afgesloten
+    (:func:`_close_dry_runs`). Geeft de bron-id's van geblokkeerde flows terug."""
     existing = {
         f.source_flow_id: f
         for f in session.scalars(select(AutomationFlow).where(AutomationFlow.source_id == SOURCE_ID))
@@ -420,6 +433,7 @@ def apply_scan(
                             "gevolg_nl": "Deze flow krijgt geen events en mag geen acties aanvragen.",
                         },
                     )
+            _close_dry_runs(session, flow, now)
         elif flow.status == "geblokkeerd" and flow.blocked_reason in POLICY_REASONS:
             # het beleid is weer in orde: de flow blijft gepauzeerd tot een beheerder hem bewust hervat
             flow.status = "gepauzeerd"
@@ -446,7 +460,8 @@ def apply_scan(
 def block_every_flow(session: Session, *, trace_id: str, now: datetime) -> list[str]:
     """Zet elke flow van de bron die nog bestaat op ``geblokkeerd`` met reden :data:`SYNC_FAILED` (een verwijderde flow
     blijft verwijderd: hij heeft geen token meer en krijgt niets). Per flow die nog niet geblokkeerd was gaat een event
-    ``flow.policy.blocked`` naar de Hub. Geeft de bron-id's van de geblokkeerde flows terug."""
+    ``flow.policy.blocked`` naar de Hub. Een proefrun die nog loopt wordt afgesloten (:func:`_close_dry_runs`). Geeft
+    de bron-id's van de geblokkeerde flows terug."""
     reason = SYNC_FAILED
     blocked: list[str] = []
     rows = session.scalars(
@@ -458,6 +473,7 @@ def block_every_flow(session: Session, *, trace_id: str, now: datetime) -> list[
         blocked.append(flow.source_flow_id)
         was_blocked = flow.status == "geblokkeerd"
         if was_blocked and flow.blocked_reason == reason:
+            _close_dry_runs(session, flow, now)
             continue
         flow.status = "geblokkeerd"
         flow.blocked_reason = reason
@@ -477,6 +493,7 @@ def block_every_flow(session: Session, *, trace_id: str, now: datetime) -> list[
                     "geen acties aanvragen tot een synchronisatie weer slaagt en een beheerder hem hervat.",
                 },
             )
+        _close_dry_runs(session, flow, now)
     return blocked
 
 

@@ -313,8 +313,9 @@ def active_dry_run(session: Session, flow_id: uuid.UUID, now: datetime) -> Autom
 
 def dry_run_for(session: Session, flow: AutomationFlow, now: datetime) -> AutomationFlowRun | None:
     """De lopende proefrun die voor deze flow telt: nooit voor een geblokkeerde flow. Een proefrun die al liep vóór de
-    blokkade geeft dan geen voorbeeld-events meer uit en simuleert geen actieverzoeken; de flow krijgt niets en elk
-    verzoek wordt geweigerd zoals bij elke geblokkeerde flow (ADR-0016 kop 2; vervolgpunt R-VEILIG-3 van S-P2-295)."""
+    blokkade wordt bij het blokkeren afgesloten (``simulate.close_for_block``); deze controle is de tweede laag. De
+    flow krijgt dan niets en elk verzoek wordt geweigerd zoals bij elke geblokkeerde flow (ADR-0016 kop 2;
+    vervolgpunt R-VEILIG-3 van S-P2-295)."""
     if flow.status == "geblokkeerd":
         return None
     return active_dry_run(session, flow.id, now)

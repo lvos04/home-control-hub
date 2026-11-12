@@ -42,7 +42,9 @@ from ...timeutil import iso, utcnow
 from . import actions, inbox, simulate
 from .models import (
     AutomationActionRequest,
+    AutomationDelivery,
     AutomationFlow,
+    AutomationFlowRun,
     AutomationFlowToken,
     AutomationRateLimit,
     AutomationTrigger,
@@ -251,10 +253,35 @@ def claim(
     return run_idempotent(request, session, identity.principal, key, body.model_dump(), action)
 
 
+def _refuse_closed_dry_run(session: Session, identity: FlowIdentity, delivery_id: uuid.UUID) -> None:
+    """Een voorbeeld-aflevering van een proefrun die is afgesloten (bij het blokkeren, na verlopen of klaar), of van een
+    geblokkeerde flow, wordt niet bevestigd: 409 ``proefrun_afgesloten``, en de run blijft zoals hij is (R-TECH-1 en
+    R-VEILIG-2 van S-P2-300). Sloten in dezelfde volgorde als ``simulate.close_for_block``: flow, proefrun, en daarna
+    (bij de aanroeper) de aflevering. ``run_id`` van een aflevering verandert nooit; die wordt zonder slot gelezen."""
+    run_id = session.scalar(
+        select(AutomationDelivery.run_id).where(
+            AutomationDelivery.id == delivery_id, AutomationDelivery.flow_id == identity.flow_id
+        )
+    )
+    if run_id is None:
+        return  # een gewone aflevering (of een onbekende: die geeft hierna 404)
+    flow = _flow(session, identity, lock=True)
+    run = session.get(AutomationFlowRun, run_id, with_for_update=True)
+    if flow.status == "geblokkeerd" or run is None or run.status != "bezig":
+        raise ApiError(
+            409,
+            "proefrun_afgesloten",
+            "Deze aflevering hoort bij een proefrun die is afgesloten (de flow is geblokkeerd, of de proefrun is "
+            "verlopen of klaar); er is niets bevestigd.",
+            {"run_id": str(run_id), "run_status": run.status if run is not None else None, "flow_status": flow.status},
+        )
+
+
 def _delivery_result(
     session: Session, identity: FlowIdentity, delivery_id: uuid.UUID, error: str | None, tid: str
 ) -> Result:
     now = utcnow()
+    _refuse_closed_dry_run(session, identity, delivery_id)
     delivery = inbox.get_delivery(session, identity.flow_id, delivery_id)
     if delivery is None:
         raise not_found("Aflevering")

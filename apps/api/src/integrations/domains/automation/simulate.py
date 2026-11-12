@@ -9,7 +9,11 @@ legt vast wat de flow ermee doet. Zolang de proefrun loopt:
 - wordt een mislukte aflevering niet herhaald: de uitzondering staat in het runlog.
 
 Een geblokkeerde flow heeft geen proefrun: :func:`start_run` weigert, en een proefrun die al liep vóór de blokkade
-telt daarna niet meer (``inbox.dry_run_for``): de flow krijgt niets en elk actieverzoek wordt geweigerd.
+wordt bij het blokkeren direct afgesloten (:func:`close_for_block`): ``mislukt`` met ``flow_geblokkeerd``, de open
+voorbeeld-afleveringen in ``dead_letter``. Daarna krijgt de flow niets uit die proefrun, wordt elk actieverzoek
+geweigerd, wordt een ack of nack van een van zijn voorbeeld-afleveringen geweigerd (``flowapi``, 409
+``proefrun_afgesloten``) en kan hij nooit als vergelijkingsrun dienen (alleen ``klaar`` telt). Ook na het opheffen
+van de blokkade telt die proefrun niet meer.
 
 **Grens (eerlijk):** deze dienst schermt het pad via de flow-API af. Een node die zelf naar buiten gaat (``http
 request``, ``mqtt out`` …) valt buiten wat deze dienst kan tegenhouden. Daarom meldt de proefrun die nodes als
@@ -35,6 +39,8 @@ from .models import AutomationDelivery, AutomationEvent, AutomationFlow, Automat
 MAX_SAMPLES = 20
 RUN_TTL = timedelta(minutes=15)
 MAX_RUNLOG = 500
+#: foutcode van een proefrun die is afgesloten omdat de flow geblokkeerd raakte (ook de fout van zijn afleveringen)
+BLOCKED = "flow_geblokkeerd"
 UNSHIELDED_NL = (
     "Deze flow bevat nodes die zelf naar buiten kunnen gaan. Deze dienst kan die tijdens een proefrun niet "
     "tegenhouden; alleen actieverzoeken via de flow-API worden afgeschermd."
@@ -230,7 +236,9 @@ def _compare(run: AutomationFlowRun, baseline: AutomationFlowRun) -> dict[str, A
     }
 
 
-def _finish(session: Session, run: AutomationFlowRun, now: datetime) -> None:
+def _finish(session: Session, run: AutomationFlowRun, now: datetime, *, error_code: str | None = None) -> None:
+    """Rondt de proefrun af. Met ``error_code`` is hij altijd ``mislukt`` met die code (bijvoorbeeld
+    :data:`BLOCKED`); anders ``klaar``, of ``mislukt`` met ``aflevering_mislukt`` als een aflevering mislukte."""
     rows = session.scalars(select(AutomationDelivery).where(AutomationDelivery.run_id == run.id)).all()
     by_status = Counter(d.status for d in rows)
     actions = [e for e in run.runlog or [] if e.get("soort") == "actie"]
@@ -249,12 +257,53 @@ def _finish(session: Session, run: AutomationFlowRun, now: datetime) -> None:
         result["vergelijking"] = _compare(run, baseline) if baseline is not None else {"baseline": "niet_meer_bewaard"}
     run.result = result
     run.finished_at = now
-    if failed:
+    if error_code is not None:
+        run.status = "mislukt"
+        run.error_code = error_code
+    elif failed:
         run.status = "mislukt"
         run.error_code = "aflevering_mislukt"
     else:
         run.status = "klaar"
     _log(run, {"t": iso(now), "soort": "einde", "status": run.status})
+
+
+def close_for_block(session: Session, flow: AutomationFlow, *, now: datetime) -> int:
+    """Een flow is geblokkeerd geraakt (flowbeleid of blokkeren bij mislukken, ``snapshots``): zijn lopende proefrun
+    telt niet meer en wordt hier direct afgesloten (R-TECH-1 en R-VEILIG-2 van S-P2-300). De open
+    voorbeeld-afleveringen gaan naar ``dead_letter`` (fout :data:`BLOCKED`), het runlog krijgt een regel
+    ``geblokkeerd`` met de reden en daarna ``einde``, en de run staat op ``mislukt`` met :data:`BLOCKED`.
+
+    Volgorde van sloten: eerst wat al aan de flow is gewijzigd (``flush``), dan de proefrun, dan zijn afleveringen;
+    dezelfde volgorde als bij ack en nack van een voorbeeld-aflevering (``flowapi``). Geeft het aantal afgesloten
+    proefruns terug (0 als er geen liep)."""
+    session.flush()
+    runs = session.scalars(
+        select(AutomationFlowRun)
+        .where(
+            AutomationFlowRun.flow_id == flow.id,
+            AutomationFlowRun.mode == "dry_run",
+            AutomationFlowRun.status == "bezig",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    for run in runs:
+        rows = session.scalars(
+            select(AutomationDelivery)
+            .where(AutomationDelivery.run_id == run.id, AutomationDelivery.status.in_(("wachtend", "geclaimd")))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+        for d in rows:
+            d.status = "dead_letter"
+            d.lease_until = None
+            d.finished_at = now
+            d.last_error = BLOCKED
+        session.flush()
+        _log(run, {"t": iso(now), "soort": "geblokkeerd", "reden": flow.blocked_reason, "niet_verwerkt": len(rows)})
+        _finish(session, run, now, error_code=BLOCKED)
+    return len(runs)
 
 
 def settle(session: Session, delivery: AutomationDelivery, *, now: datetime) -> AutomationFlowRun | None:

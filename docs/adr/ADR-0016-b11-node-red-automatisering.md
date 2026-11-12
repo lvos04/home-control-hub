@@ -214,10 +214,17 @@ Deze ronde bouwt de vijf werkpakketten:
   uitkomst per verzoek (in het antwoord en in het runlog) is alleen `zou_worden_aangevraagd` of `zou_worden_geweigerd`
   (met de reden van de weigering); het resultaat van de run telt beide.
 - **Geblokkeerde flow:** een geblokkeerde flow start geen proefrun (`409 flow_geblokkeerd`). Raakt een flow
-  geblokkeerd terwijl zijn proefrun al loopt, dan telt die proefrun niet meer: `claim` geeft geen voorbeeld-events
-  meer, `GET …/flow-api/me` toont geen proefrun en een actieverzoek wordt niet gesimuleerd maar geweigerd zoals bij
-  elke geblokkeerde flow (kop 2: `403` met reden `flow_geblokkeerd`, vastgelegd, geen actieverzoek naar de Hub). De
-  proefrun zelf loopt af op zijn vaste eindtijd (15 minuten na de start) en staat dan op `mislukt` (`verlopen`).
+  geblokkeerd terwijl zijn proefrun al loopt (door het flowbeleid of door blokkeren bij mislukken, kop 2), dan wordt
+  die proefrun in dezelfde transactie afgesloten: status `mislukt` met `error_code` `flow_geblokkeerd`, de open
+  voorbeeld-afleveringen naar `dead_letter` (fout `flow_geblokkeerd`), en in het runlog na de start alleen nog een
+  regel `geblokkeerd` (met de reden) en `einde`. Daarna geeft `claim` geen voorbeeld-events meer, toont
+  `GET …/flow-api/me` geen proefrun en wordt een actieverzoek niet gesimuleerd maar geweigerd zoals bij elke
+  geblokkeerde flow (kop 2: `403` met reden `flow_geblokkeerd`, vastgelegd, geen actieverzoek naar de Hub). Een ack
+  of nack van een voorbeeld-aflevering van een afgesloten proefrun (of van een geblokkeerde flow) wordt geweigerd
+  (`409 proefrun_afgesloten`) en verandert de proefrun niet; ook een voorbeeld-event dat vóór de blokkade geclaimd
+  was, komt dus niet meer in het runlog. Zo'n proefrun kan nooit als vergelijkingsrun dienen
+  (`422 vergelijking_ongeldig`: alleen een afgeronde proefrun telt). Ook na het opheffen van de blokkade (de flow
+  staat dan gepauzeerd) telt die proefrun niet meer; een nieuwe proefrun kan wel.
 - **Grens van de afscherming (eerlijk gemeld):** de dienst kan alleen het pad via de flow-API afschermen. Een flow
   met nodes die zelf naar buiten gaan (HTTP, MQTT, TCP, …) kan de dienst niet tegenhouden. Zo'n proefrun start
   alleen na een uitdrukkelijke bevestiging (`bevestig_niet_afgeschermd`), en de run zegt dat erbij.

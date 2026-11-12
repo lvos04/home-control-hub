@@ -35,7 +35,9 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   serverfout.
 - **Proefrun (B11-004).** Vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd. Een flow met nodes die
   zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging. Raakt een flow geblokkeerd terwijl zijn
-  proefrun al loopt, dan krijgt hij niets meer en worden zijn verzoeken geweigerd (niet meer gesimuleerd).
+  proefrun al loopt, dan wordt die proefrun direct afgesloten (`mislukt`, `flow_geblokkeerd`; open voorbeeld-events
+  naar dead-letter): hij geeft niets meer, zijn verzoeken worden geweigerd (niet meer gesimuleerd), een ack of nack
+  daarna wordt geweigerd (`409 proefrun_afgesloten`) en hij telt ook na het opheffen van de blokkade niet meer.
 - **Versies en herstel (B11-005).** Versleutelde momentopnamen (credentials alleen als door Node-RED versleuteld
   blok), een diff zonder waarden, en herstel als voorstel dat alleen met een door de Hub ondertekend ExecutionRequest
   wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen. Synchronisatie,

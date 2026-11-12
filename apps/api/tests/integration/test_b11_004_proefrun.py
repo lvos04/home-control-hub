@@ -265,21 +265,44 @@ def test_failed_delivery_in_a_dry_run_is_logged_and_not_retried(linked: Any, aut
     assert r.status_code == 409 and r.json()["code"] == "aflevering_niet_vastgelopen"
 
 
+def block_by_policy(linked: Any, auth: Any, node_red_fake: Any, flow_id: str) -> None:
+    """Grof blokkeren: een verboden node in een ander tabblad blokkeert ook deze flow (ADR-0016 kop 2)."""
+    node_red_fake.deploy([*simple_flow(), *exec_flow()])
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, flow_id)["status"] == "geblokkeerd"
+
+
+def assert_closed_by_the_block(linked: Any, auth: Any, run_id: str, open_deliveries: int) -> dict[str, Any]:
+    """De proefrun is bij het blokkeren direct afgesloten: mislukt met ``flow_geblokkeerd``, de open voorbeeld-
+    afleveringen staan in dead_letter, en na de start komt in het runlog alleen nog de blokkade en het einde."""
+    done = run_of(linked, auth, run_id)
+    assert done["status"] == "mislukt" and done["error_code"] == "flow_geblokkeerd", done
+    assert done["finished_at"]
+    assert [e["soort"] for e in done["runlog"]] == ["start", "geblokkeerd", "einde"], done["runlog"]
+    blocked = done["runlog"][1]
+    assert blocked["niet_verwerkt"] == open_deliveries and blocked["reden"]
+    assert done["result"]["afleveringen"] == {"verwerkt": 0, "mislukt": open_deliveries}
+    assert done["result"]["aangevraagd_bij_de_hub"] == 0
+    rows = linked.get(f"{A}/deliveries", params={"flow_id": done["flow_id"]}, headers=auth("viewer")).json()["items"]
+    of_run = [d for d in rows if d["run_id"] == run_id]
+    assert len(of_run) == open_deliveries
+    assert {(d["status"], d["last_error"]) for d in of_run} == {("dead_letter", "flow_geblokkeerd")}
+    return done
+
+
 def test_a_dry_run_that_started_before_the_block_gives_nothing_and_simulates_nothing(
     linked: Any, auth: Any, flow: Any, node_red_fake: Any
 ) -> None:
     """Vervolgpunt R-VEILIG-3 (S-P2-295): een proefrun die al liep voordat de flow geblokkeerd raakte. Daarna krijgt
     de flow geen voorbeeld-events meer en wordt een actieverzoek niet gesimuleerd maar geweigerd, zoals bij elke
-    geblokkeerde flow (ADR-0016 kop 2): 403 ``flow_geblokkeerd``, niets naar de Hub en geen regel in het runlog."""
+    geblokkeerde flow (ADR-0016 kop 2): 403 ``flow_geblokkeerd``, niets naar de Hub. Het blokkeren sluit de proefrun
+    direct af (R-TECH-1 en R-VEILIG-2 van S-P2-300): geen aflevering en geen gesimuleerde actie in het runlog."""
     detail, token = flow
     run = start(linked, auth, detail["id"], sample_ids=["energie-meting", "backup-mislukt"]).json()
     assert run["status"] == "bezig"
     assert linked.get(f"{FLOW_API}/me", headers=b11.bearer(token)).json()["dry_run"]["run_id"] == run["id"]
 
-    # grof blokkeren: een verboden node in een ander tabblad blokkeert ook deze flow
-    node_red_fake.deploy([*simple_flow(), *exec_flow()])
-    b11.snapshot(linked, auth)
-    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "geblokkeerd"
+    block_by_policy(linked, auth, node_red_fake, detail["id"])
 
     claimed = b11.claim(linked, token)
     assert claimed["items"] == [] and claimed["dry_run"] is False and claimed["flow_status"] == "geblokkeerd"
@@ -290,8 +313,119 @@ def test_a_dry_run_that_started_before_the_block_gives_nothing_and_simulates_not
     assert a.json()["code"] == "forbidden" and a.json()["details"]["reason"] == "flow_geblokkeerd"
     assert "dry_run" not in a.json()
     assert b11.outbox(linked, "flow.action.requested") == []
-    log = run_of(linked, auth, run["id"])["runlog"]
-    assert [e["soort"] for e in log] == ["start"], "geen aflevering en geen gesimuleerde actie na de blokkade"
+    assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=2)
+
+
+def test_a_delivery_claimed_before_the_block_cannot_be_acked_after_it(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """R-TECH-1 (S-P2-300): een voorbeeld-event dat vóór de blokkade geclaimd is en erna bevestigd wordt. De ack wordt
+    geweigerd (409 ``proefrun_afgesloten``) en rondt de proefrun niet af: hij blijft mislukt met ``flow_geblokkeerd``,
+    zonder aflevering in het runlog, en kan nooit als vergelijkingsrun dienen (422 ``vergelijking_ongeldig``)."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    claimed = b11.claim(linked, token)
+    assert [i["dry_run"] for i in claimed["items"]] == [True]
+    delivery_id = claimed["items"][0]["id"]
+
+    block_by_policy(linked, auth, node_red_fake, detail["id"])
+    before = assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=1)
+
+    a = b11.request_action(
+        linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=delivery_id
+    )
+    assert a.status_code == 403 and a.json()["details"]["reason"] == "flow_geblokkeerd", a.text
+    r = b11.ack(linked, token, delivery_id)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "proefrun_afgesloten"
+    assert r.json()["details"] == {"run_id": run["id"], "run_status": "mislukt", "flow_status": "geblokkeerd"}
+    assert run_of(linked, auth, run["id"]) == before, "de geweigerde ack verandert de proefrun niet"
+    assert linked.get(f"{FLOW_API}/me", headers=b11.bearer(token)).json()["dry_run"] is None
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+    # zo'n proefrun is nooit een vergelijkingsrun, ook niet na het opheffen van de blokkade
+    node_red_fake.deploy(simple_flow())
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "gepauzeerd"
+    r = start(linked, auth, detail["id"], sample_ids=["energie-meting"], baseline_run_id=run["id"])
+    assert r.status_code == 422 and r.json()["code"] == "vergelijking_ongeldig", r.text
+
+
+def test_ack_and_nack_after_the_block_are_refused_and_change_nothing(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """PROEF5 van R-VEILIG (S-P2-300): twee voorbeeld-events zijn vóór de blokkade geclaimd. Na de blokkade wordt een
+    actieverzoek met een van die afleveringen als trigger geweigerd en vastgelegd (403), en worden ack en nack allebei
+    geweigerd (409 ``proefrun_afgesloten``). Er komt geen regel meer in het runlog en niets gaat naar de Hub."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting", "backup-mislukt"]).json()
+    items = b11.claim(linked, token)["items"]
+    assert len(items) == 2
+    block_by_policy(linked, auth, node_red_fake, detail["id"])
+
+    a = b11.request_action(
+        linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=items[0]["id"]
+    )
+    assert a.status_code == 403 and a.json()["details"]["reason"] == "flow_geblokkeerd", a.text
+    ack = b11.ack(linked, token, items[0]["id"])
+    nack = b11.nack(linked, token, items[1]["id"], "kapot")
+    assert (ack.status_code, ack.json()["code"]) == (409, "proefrun_afgesloten"), ack.text
+    assert (nack.status_code, nack.json()["code"]) == (409, "proefrun_afgesloten"), nack.text
+    assert b11.claim(linked, token)["items"] == []
+    assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=2)
+    assert b11.outbox(linked, "flow.action.requested") == []
+    assert len(b11.outbox(linked, "flow.action.rejected")) == 1
+
+
+def test_after_the_block_is_lifted_the_old_dry_run_does_not_count(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """PROEF6 van R-VEILIG (S-P2-300): de verboden node verdwijnt weer en de flow wordt gepauzeerd (zonder beheerder).
+    De oude proefrun telt dan niet meer: geen voorbeeld-events, een actieverzoek wordt niet gesimuleerd maar geweigerd
+    (de flow is niet actief), en het runlog blijft zoals het bij de blokkade was. Een nieuwe proefrun kan wel."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    block_by_policy(linked, auth, node_red_fake, detail["id"])
+    node_red_fake.deploy(simple_flow())
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "gepauzeerd"
+
+    claimed = b11.claim(linked, token)
+    assert claimed["items"] == [] and claimed["dry_run"] is False and claimed["run_id"] is None
+    a = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY)
+    assert a.status_code == 403 and a.json()["details"]["reason"] == "flow_niet_actief", a.text
+    assert "dry_run" not in a.json()
+    assert linked.get(f"{FLOW_API}/me", headers=b11.bearer(token)).json()["dry_run"] is None
+    assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=1)
+    assert b11.outbox(linked, "flow.action.requested") == []
+    again = start(linked, auth, detail["id"], sample_ids=["energie-meting"])
+    assert again.status_code == 201 and again.json()["id"] != run["id"], again.text
+
+
+def test_a_failed_sync_that_blocks_every_flow_also_closes_the_dry_run(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any, node_red_fake: Any, make_settings: Any, monkeypatch: Any
+) -> None:
+    """Blokkeren bij mislukken (``snapshots.block_every_flow``) sluit een lopende proefrun net zo af als het
+    flowbeleid: mislukt met ``flow_geblokkeerd`` en de open voorbeeld-afleveringen in dead_letter."""
+    from integrations.domains.automation import snapshots
+
+    detail, token = flow
+    worker = Worker(make_settings(node_red_sync_interval_s=60), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting", "backup-mislukt"]).json()
+    assert len(b11.claim(linked, token)["items"]) == 2
+
+    def fails(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("ingespoten fout")
+
+    monkeypatch.setattr(snapshots, "apply_scan", fails)
+    worker.automation_step(200.0)
+    monkeypatch.undo()
+    assert worker.state.stats["node_red_sync_failed"] == 1
+    flow_now = b11.flow_detail(linked, auth, detail["id"])
+    assert (flow_now["status"], flow_now["blocked_reason"]) == ("geblokkeerd", "synchronisatie_mislukt")
+    done = assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=2)
+    assert done["runlog"][1]["reden"] == "synchronisatie_mislukt"
 
 
 def test_paused_flow_can_be_tried_before_it_is_resumed(linked: Any, auth: Any, flow: Any) -> None:
