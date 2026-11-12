@@ -164,6 +164,36 @@ def storable[T](value: T) -> T:
     return value
 
 
+#: een NUL-teken of een losse surrogaat (een geldig surrogaatpaar wordt bij het lezen van de JSON al één teken)
+_UNSTORABLE_CHAR_RE = re.compile("[\x00\ud800-\udfff]")
+
+
+def cleaned(value: Any) -> Any:
+    """Een kopie waarin elk NUL-teken en elke losse surrogaat (in tekst en sleutels, op elke diepte) een ``?`` is.
+    Alleen om een actieverzoek met zulke tekens toch met :func:`local_refusal` te beoordelen (R-VEILIG-4 van
+    S-P2-310), nooit om te bewaren. Een ``?`` verandert de woordcontrole niet (:func:`_fold` laat het weg) en is een
+    zichtbaar ASCII-teken. Worden twee sleutels gelijk, dan krijgt de latere ``?`` en een volgnummer erbij (``id?1``):
+    er valt niets weg wat de weigerlijst moet zien, en een cijfer erbij maakt of breekt geen verboden woord. Lineair
+    (ook bij veel gelijke sleutels); recursief, want doel en parameters zijn dan al op ``MAX_NESTING`` gecontroleerd."""
+    if isinstance(value, str):
+        return _UNSTORABLE_CHAR_RE.sub("?", value)
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        next_number: dict[Any, int] = {}
+        for key, item in value.items():
+            new_key = cleaned(key)
+            if new_key in out:
+                base, number = new_key, next_number.get(new_key, 1)
+                while (new_key := f"{base}?{number}") in out:
+                    number += 1
+                next_number[base] = number + 1
+            out[new_key] = cleaned(item)
+        return out
+    if isinstance(value, list):
+        return [cleaned(item) for item in value]
+    return value
+
+
 def _fold(text: str) -> str:
     """Voor de woordcontrole: NFKC, zonder accenten, onzichtbare tekens en scheidingstekens, in kleine letters."""
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
@@ -375,12 +405,17 @@ def request_action(
     trigger_delivery_id: uuid.UUID | None,
     trace_id: str,
     now: datetime,
+    refused: str | None = None,
 ) -> Outcome:
-    """Beoordeelt en registreert één actieverzoek. Gooit :class:`RateLimited`; committeert niet."""
+    """Beoordeelt en registreert één actieverzoek. Gooit :class:`RateLimited`; committeert niet.
+
+    ``refused``: een weigering van de harde weigerlijst die de flow-API al heeft vastgesteld voor een verzoek met tekst
+    die niet op te slaan is (:func:`cleaned`); doel en parameters zijn dan leeg en de reden is de weigerreden. Het
+    verzoek wordt dan altijd als die weigering behandeld, nooit aangevraagd."""
     delivery, trigger_event, trigger_error = _trigger(session, flow, trigger_delivery_id)
     chain = list(trigger_event.origin_chain or []) if trigger_event is not None else []
-    refusal: str | None = None
-    if redact({"p": parameters, "t": target}) != {"p": parameters, "t": target}:
+    refusal: str | None = refused
+    if refusal is None and redact({"p": parameters, "t": target}) != {"p": parameters, "t": target}:
         refusal = "geheim_in_parameters"
     refusal = refusal or local_refusal(action_id, target, parameters)
     if refusal is None and not in_scope(action_id, list(token.allowed_actions or [])):

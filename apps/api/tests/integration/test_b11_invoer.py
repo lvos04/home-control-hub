@@ -9,10 +9,12 @@ gewone tekst werkt gewoon, zodat vaststaat dat de ``422`` door dat ene teken kom
 parameters van een actieverzoek staat ook in
 ``test_b11_003_veilige_acties.py::test_lone_surrogate_in_target_or_parameters_is_a_422``.
 
-Eén uitzondering (R-VEILIG-3 van S-P2-310, ADR-0016 kop 4): vraagt een flow een actie aan die op de harde weigerlijst
-staat (zoals een dataset verwijderen of de boiler schakelen), dan is het antwoord de vastgelegde weigering (``403``,
-rij, audit, ``flow.action.rejected``), zonder doel, parameters en reden; het teken staat nergens. Een cursor met zo'n
-teken is ``400 invalid_cursor`` (R-VEILIG-2 en R-TECH-2 van S-P2-310).
+Eén uitzondering (R-VEILIG-3 en R-VEILIG-4 van S-P2-310, ADR-0016 kop 4): weigert de harde weigerlijst een
+actieverzoek van een flow ook als elk NUL-teken en elke losse surrogaat in doel en parameters een ``?`` is (een actie
+op de weigerlijst, zoals een dataset verwijderen of de boiler schakelen, of de boiler of Emby in het doel of de
+parameters van een andere actie), dan is het antwoord de vastgelegde weigering (``403``, rij, audit,
+``flow.action.rejected``), zonder doel, parameters en reden; het teken staat nergens. Een cursor met zo'n teken is
+``400 invalid_cursor`` (R-VEILIG-2 en R-TECH-2 van S-P2-310).
 """
 
 from __future__ import annotations
@@ -198,6 +200,168 @@ def test_forbidden_action_with_unstorable_text_is_refused_and_recorded_without_t
     assert again.status_code == 403 and again.json()["details"] == r.json()["details"], again.text
     assert len(linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]) == 1
     assert len(b11.outbox(linked, "flow.action.rejected")) == 1
+
+
+@pytest.fixture
+def restart_flow(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> tuple[dict[str, Any], str]:
+    """Een flow die ook ``app.restart`` mag aanvragen: een weigering die van doel of parameters afhangt, mag dan niet
+    door de scope worden opgevangen."""
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow())
+    b11.snapshot(linked, auth)
+    return b11.ready_flow(linked, auth, TAB, "notification.send", "app.restart", triggers=("energy.reading.recorded",))
+
+
+#: R-VEILIG-4 van S-P2-310: een boiler- of Emby-poging in het doel of de parameters van een actie die zelf niet op de
+#: harde weigerlijst staat (``app.restart``), met een NUL of een losse surrogaat ergens in het verzoek:
+#: ``naam -> (doel, parameters, reden, weigerreden)`` als ruwe JSON, met ``{N}`` voor het teken
+SLEUTELS = "emby_twee_sleutels_die_alleen_in_zo_n_teken_verschillen"
+CONTENT_REFUSALS = {
+    "boiler_in_parameters": (
+        '{"type":"app","id":"jellyfin"}',
+        '{"apparaat":"boiler","x":"{N}"}',
+        '"test"',
+        "boiler_nooit",
+    ),
+    "boiler_in_parameters_teken_in_doel": (
+        '{"type":"app","id":"jellyfin{N}"}',
+        '{"apparaat":"boiler"}',
+        '"test"',
+        "boiler_nooit",
+    ),
+    "boiler_in_parameters_teken_in_reden": (
+        '{"type":"app","id":"jellyfin"}',
+        '{"apparaat":"boiler"}',
+        '"test {N}"',
+        "boiler_nooit",
+    ),
+    "boiler_met_teken_in_het_woord": (
+        '{"type":"app","id":"jellyfin"}',
+        '{"apparaat":"boi{N}ler"}',
+        '"test"',
+        "boiler_nooit",
+    ),
+    "emby_als_doel": ('{"type":"app","id":"emby{N}"}', "{}", '"test"', "emby_nooit_door_platform"),
+    "emby_als_doel_teken_in_parameters": (
+        '{"type":"app","id":"emby"}',
+        '{"x":"{N}"}',
+        '"test"',
+        "emby_nooit_door_platform",
+    ),
+    # twee sleutels die alleen in zo'n teken verschillen (de tweede met een andere losse surrogaat): bij het opschonen
+    # worden beide "id?", en geen van beide valt weg
+    SLEUTELS: ('{"id{N}":"emby","id\\udfff":"jellyfin"}', "{}", '"test"', "emby_nooit_door_platform"),
+}
+
+
+def _recorded_refusal(linked: Any, auth: Any, r: Any, action_id: str, reason_code: str, audit_before: int) -> None:
+    """De vastgelegde weigering zonder de tekst: ``403`` met de weigerreden, één rij ``geweigerd`` zonder doel en
+    parameters en met de weigerreden als reden, één auditregel, één ``flow.action.rejected`` met ernst ``hoog``, niets
+    naar de Hub, en het teken staat nergens."""
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "forbidden" and r.json()["details"]["reason"] == reason_code, r.text
+    assert "\ud800" not in r.text and "\x00" not in r.text
+    rows = linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["id"] == r.json()["details"]["action_request_id"]
+    assert (row["action_id"], row["status"], row["rejected_reason"]) == (action_id, "geweigerd", reason_code)
+    assert (row["target"], row["parameters"], row["reason"]) == ({}, {}, reason_code), row
+    new_audit = b11.audit_rows(linked)[audit_before:]
+    assert [a["action"] for a in new_audit] == ["automation.action.rejected"], new_audit
+    rejected = b11.outbox(linked, "flow.action.rejected")
+    assert len(rejected) == 1 and rejected[0]["payload"]["reden"] == reason_code, rejected
+    assert rejected[0]["payload"]["ernst"] == "hoog"
+    assert b11.outbox(linked, "flow.action.requested") == []
+    stored = b11.everything_stored(linked)
+    assert "\x00" not in stored and "\ud800" not in stored
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+@pytest.mark.parametrize("case", list(CONTENT_REFUSALS))
+def test_boiler_or_emby_in_target_or_parameters_with_unstorable_text_is_refused_and_recorded(
+    linked: Any, auth: Any, restart_flow: Any, case: str, bad: str
+) -> None:
+    """R-VEILIG-4 van S-P2-310 (EX27; Emby, contract §2.3 regel 3): de harde weigerlijst beoordeelt het verzoek ook met
+    een opgeschoonde kopie van doel en parameters (elk NUL-teken en elke losse surrogaat een ``?``). Een boiler- of
+    Emby-poging in het doel of de parameters van ``app.restart`` (dat de flow mag aanvragen) ontloopt met zo'n teken
+    de vastlegging dus niet: dezelfde vastgelegde weigering als zonder het teken, zonder de tekst."""
+    _, token = restart_flow
+    target, parameters, reason, reason_code = (part.replace("{N}", BAD[bad]) for part in CONTENT_REFUSALS[case])
+    raw = f'{{"action_id":"app.restart","target":{target},"parameters":{parameters},"reason":{reason}}}'
+    audit_before = len(b11.audit_rows(linked))
+    headers = idem(b11.bearer(token))
+    r = _send(linked, "POST", f"{FLOW_API}/actions", raw, headers)
+    _recorded_refusal(linked, auth, r, "app.restart", reason_code, audit_before)
+    # dezelfde Idempotency-Key geeft hetzelfde antwoord en legt niets opnieuw vast
+    again = _send(linked, "POST", f"{FLOW_API}/actions", raw, headers)
+    assert again.status_code == 403 and again.json()["details"] == r.json()["details"], again.text
+    assert len(linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]) == 1
+    if case != SLEUTELS:  # daar zou "zonder het teken" twee keer dezelfde sleutel geven
+        # zonder het teken is het dezelfde weigering (nu met doel en parameters): de 403 hangt niet van het teken af
+        plain = _send(linked, "POST", f"{FLOW_API}/actions", raw.replace(BAD[bad], ""), idem(b11.bearer(token)))
+        assert plain.status_code == 403 and plain.json()["details"]["reason"] == reason_code, plain.text
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+@pytest.mark.parametrize(
+    ("action_id", "target", "parameters"),
+    [
+        # niets verbodens: na het opschonen weigert de weigerlijst niets
+        ("app.restart", '{"type":"app","id":"jellyfin{N}"}', "{}"),
+        # een melding óver de boiler mag (alleen tekst): met het teken blijft het een invoerfout
+        ("notification.send", '{"type":"user","id":"user-1"}', '{"tekst":"de boiler{N}"}'),
+    ],
+)
+def test_unstorable_text_without_a_hard_refusal_stays_a_422_after_cleaning(
+    linked: Any, auth: Any, restart_flow: Any, action_id: str, target: str, parameters: str, bad: str
+) -> None:
+    """Het opschonen is alleen om te beoordelen: weigert de harde weigerlijst het opgeschoonde verzoek niet, dan blijft
+    het een ``422 validation_error`` met het veld, zonder vastlegging (zoals elke andere invoerfout)."""
+    detail, token = restart_flow
+    raw = (
+        f'{{"action_id":"{action_id}","target":{target.replace("{N}", BAD[bad])},'
+        f'"parameters":{parameters.replace("{N}", BAD[bad])},"reason":"test"}}'
+    )
+    before = _state(linked, auth, detail["id"])
+    r = _send(linked, "POST", f"{FLOW_API}/actions", raw, idem(b11.bearer(token)))
+    _refused(r, {"validation_error"})
+    assert [f["veld"] for f in r.json()["details"]["fouten"]] == ["target" if "{N}" in target else "parameters"]
+    assert _state(linked, auth, detail["id"]) == before
+    assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
+    ok = _send(linked, "POST", f"{FLOW_API}/actions", raw.replace(BAD[bad], ""), idem(b11.bearer(token)))
+    assert ok.status_code == 202, ok.text
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+def test_above_8_kb_only_the_name_of_the_action_counts(linked: Any, auth: Any, restart_flow: Any, bad: str) -> None:
+    """Op inhoud (boiler, Emby, tekens) beoordeelt de weigerlijst doel en parameters alleen tot 8 kB, net als zonder
+    die tekens (daarboven ``422 parameters_te_groot`` zonder vastlegging); zo kost een verzoek van bijna 1 MiB met zo'n
+    teken niet meer dan zonder. Een actie die op naam op de weigerlijst staat, wordt ook daarboven vastgelegd, zonder
+    de tekst, en een reden met zo'n teken wordt dan niet op 500 tekens gecontroleerd (ADR-0016 kop 4)."""
+    detail, token = restart_flow
+    s, big = BAD[bad], "a" * (8 * 1024)
+    boiler = (
+        '{"action_id":"app.restart","target":{"type":"app","id":"jellyfin"},'
+        f'"parameters":{{"apparaat":"boiler","x":"{big}{s}"}},"reason":"test"}}'
+    )
+    before = _state(linked, auth, detail["id"])
+    r = _send(linked, "POST", f"{FLOW_API}/actions", boiler, idem(b11.bearer(token)))
+    _refused(r, {"validation_error"})
+    assert [f["veld"] for f in r.json()["details"]["fouten"]] == ["parameters"], r.text
+    assert _state(linked, auth, detail["id"]) == before
+    # zonder het teken: wat boven 8 kB altijd gebeurt, een 422 zonder vastlegging
+    plain = _send(linked, "POST", f"{FLOW_API}/actions", boiler.replace(s, ""), idem(b11.bearer(token)))
+    assert plain.status_code == 422 and plain.json()["code"] == "parameters_te_groot", plain.text
+    assert _state(linked, auth, detail["id"]) == before
+    assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
+    # op naam: ook boven 8 kB en met een reden van meer dan 500 tekens vastgelegd, zonder de tekst
+    dataset = (
+        '{"action_id":"zfs.dataset.delete","target":{"type":"dataset","id":"data-x"},'
+        f'"parameters":{{"x":"{big}{s}"}},"reason":"{"r" * 600}{s}"}}'
+    )
+    audit_before = len(b11.audit_rows(linked))
+    r = _send(linked, "POST", f"{FLOW_API}/actions", dataset, idem(b11.bearer(token)))
+    _recorded_refusal(linked, auth, r, "zfs.dataset.delete", "destructief_verboden", audit_before)
 
 
 @pytest.mark.parametrize("bad", list(BAD))

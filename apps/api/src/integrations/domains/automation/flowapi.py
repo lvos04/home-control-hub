@@ -26,6 +26,7 @@ from datetime import timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, ValidatorFunctionWrapHandler, field_validator
 from sqlalchemy import select
@@ -175,32 +176,52 @@ class ActionIn(BaseModel):
         """Een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die in UTF-8 kan), ook in
         een sleutel of diep genest, is een invoerfout (422 ``validation_error``), geen serverfout bij de
         groottecontrole (vervolgpunt R-VEILIG-5 van S-P2-295). Hetzelfde geldt voor een NUL-teken, dat PostgreSQL niet
-        opslaat (S-P2-310). Behalve bij een actie op de harde weigerlijst: zie :func:`_refused_anyway`."""
-        return value if _refused_anyway(info) else actions.storable(value)
+        opslaat (S-P2-310). Met een geldige ``action_id`` beslist :func:`request_action` dat, met het hele verzoek:
+        zie :func:`_judged_with_the_whole_request`."""
+        return value if _judged_with_the_whole_request(info) else actions.storable(value)
 
     @field_validator("reason", mode="wrap")
     @classmethod
     def _reason_text(cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> str:
         """Een NUL-teken in de reden is een invoerfout (422), geen serverfout in de database (S-P2-310); een losse
-        surrogaat weigert de tekstcontrole van pydantic zelf al (422). Behalve bij een actie op de harde weigerlijst
-        (zie :func:`_refused_anyway`): dan wordt de reden niet gecontroleerd, want hij wordt niet bewaard."""
-        if isinstance(value, str) and actions.unstorable(value) and _refused_anyway(info):
+        surrogaat weigert de tekstcontrole van pydantic zelf al (422). Met een geldige ``action_id`` beslist
+        :func:`request_action` dat (zie :func:`_judged_with_the_whole_request`); de reden wordt dan niet op lengte
+        gecontroleerd: wordt het verzoek geweigerd, dan wordt hij niet bewaard, en anders is het een 422."""
+        if isinstance(value, str) and actions.unstorable(value) and _judged_with_the_whole_request(info):
             return value
         return actions.storable(handler(value))
 
 
-def _refused_anyway(info: ValidationInfo) -> bool:
-    """Staat de (geldige) ``action_id`` op de harde weigerlijst (:func:`actions.local_refusal` zonder doel en
-    parameters: boiler, shell, vernietigend, beleid, betaald of buiten de vaste lijst)? Dan is tekst die niet op te
-    slaan is geen reden voor een ``422`` zonder spoor: het verzoek wordt geweigerd en vastgelegd zonder doel,
-    parameters en reden (R-VEILIG-3 van S-P2-310; zie :func:`request_action`)."""
-    action_id = info.data.get("action_id")
-    return isinstance(action_id, str) and actions.local_refusal(action_id, {}, {}) is not None
+def _judged_with_the_whole_request(info: ValidationInfo) -> bool:
+    """Is de ``action_id`` al geldig? Dan laat :class:`ActionIn` een NUL-teken of losse surrogaat in doel, parameters
+    of reden door en beslist :func:`request_action` met het hele verzoek: weigert de harde weigerlijst het ook met een
+    opgeschoonde kopie van doel en parameters (:func:`actions.cleaned`; op inhoud tot 8 kB, daarboven op naam), dan
+    is het de gewone vastgelegde weigering zonder doel, parameters en reden; anders dezelfde ``422 validation_error``
+    met het veld als hier (R-VEILIG-3 en R-VEILIG-4 van S-P2-310). Een veldcontrole ziet alleen de velden vóór zich;
+    zo telt ook een boiler in de parameters als het teken in het doel staat."""
+    return isinstance(info.data.get("action_id"), str)
 
 
-#: de tekstvelden van een actieverzoek die bij een actie op de harde weigerlijst niet worden bewaard als er tekst in
-#: staat die niet op te slaan is
+#: de tekstvelden van een actieverzoek die niet worden bewaard als er tekst in staat die niet op te slaan is (het
+#: verzoek wordt dan geweigerd en vastgelegd, of het is een 422)
 TEXT_FIELDS = ("target", "parameters", "reason")
+
+
+def _unstorable_text(fields: list[str]) -> RequestValidationError:
+    """Dezelfde ``422 validation_error`` als :func:`actions.storable` in een veldcontrole geeft: per veld het veld en
+    de vaste melding, zonder de invoer."""
+    return RequestValidationError(
+        [
+            {"type": "value_error", "loc": ("body", name), "msg": f"Value error, {actions.UNSTORABLE_NL}"}
+            for name in fields
+        ]
+    )
+
+
+def _param_bytes(target: dict[str, Any], parameters: dict[str, Any]) -> int:
+    """Grootte van doel en parameters samen in UTF-8, zoals tegen ``actions.MAX_PARAM_BYTES`` gemeten (alleen voor
+    tekst die op te slaan is: een losse surrogaat kan niet in UTF-8)."""
+    return len(json.dumps({"p": parameters, "t": target}, ensure_ascii=False).encode("utf-8"))
 
 
 def _flow(session: Session, identity: FlowIdentity, *, lock: bool = False) -> AutomationFlow:
@@ -398,15 +419,24 @@ def request_action(
     tid: str = Depends(trace_id),
 ) -> Any:
     target, parameters, reason = body.target, body.parameters, body.reason
+    refused: str | None = None
     fingerprint: dict[str, Any]
-    if any(actions.unstorable(getattr(body, name)) for name in TEXT_FIELDS):
-        # Alleen mogelijk bij een actie op de harde weigerlijst (ActionIn geeft anders 422): de weigering wordt gewoon
-        # vastgelegd (rij, audit, flow.action.rejected), maar zonder doel, parameters en reden; de reden is de
-        # weigerreden. De Idempotency-Key herkent het verzoek aan de ingevoerde tekst, als ASCII-escapes.
-        refusal = actions.local_refusal(body.action_id, {}, {})
-        if refusal is None:  # kan niet (zie ActionIn); fail-closed
-            raise ApiError(422, "validation_error", "De invoer is ongeldig.")
-        target, parameters, reason = {}, {}, refusal
+    unstorable = [name for name in TEXT_FIELDS if actions.unstorable(getattr(body, name))]
+    if unstorable:
+        # Een NUL-teken of losse surrogaat (ActionIn laat die bij een geldige action_id door). De harde weigerlijst
+        # beoordeelt het verzoek met een kopie van doel en parameters waarin die tekens een "?" zijn; op inhoud alleen
+        # tot 8 kB, net als zonder die tekens (daarboven alleen op naam). Weigert ze het, dan wordt de weigering
+        # gewoon vastgelegd (rij, audit, flow.action.rejected), maar zonder doel, parameters en reden; de reden is de
+        # weigerreden. Anders een 422 zonder vastlegging. De Idempotency-Key herkent het verzoek aan de ingevoerde
+        # tekst, als ASCII-escapes (R-VEILIG-3 en R-VEILIG-4 van S-P2-310).
+        clean_target, clean_parameters = actions.cleaned(body.target), actions.cleaned(body.parameters)
+        if _param_bytes(clean_target, clean_parameters) <= actions.MAX_PARAM_BYTES:
+            refused = actions.local_refusal(body.action_id, clean_target, clean_parameters)
+        else:
+            refused = actions.local_refusal(body.action_id, {}, {})
+        if refused is None:
+            raise _unstorable_text(unstorable)
+        target, parameters, reason = {}, {}, refused
         fingerprint = {
             **body.model_dump(mode="json", exclude=set(TEXT_FIELDS)),
             "niet_op_te_slaan": json.dumps(
@@ -414,7 +444,7 @@ def request_action(
             ),
         }
     else:
-        size = len(json.dumps({"p": parameters, "t": target}, ensure_ascii=False).encode("utf-8"))
+        size = _param_bytes(target, parameters)
         if size > actions.MAX_PARAM_BYTES:
             raise ApiError(
                 422,
@@ -459,6 +489,7 @@ def request_action(
                 trigger_delivery_id=body.trigger_delivery_id,
                 trace_id=tid,
                 now=now,
+                refused=refused,
             )
         except actions.RateLimited as exc:
             raise ApiError(
