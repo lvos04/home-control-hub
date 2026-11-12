@@ -101,13 +101,13 @@
  },
  {
   "id": "B11-002",
-  "status": "Niet gestart",
-  "validatie": "Niet getest",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Triggers met schema-versie. Niet getest: alleen datamodel; 'onbekende schema-versie verdwijnt niet stil' niet gebouwd.",
+  "status": "Bezig",
+  "validatie": "Unit-getest; Sim-getest",
+  "bewijs": "commit 52be9e9, c5adabd, 88b2c51; apps/api/tests/unit/test_automation_rules.py::test_unknown_schema_version_is_kept_and_named_not_dropped; ::test_events_outside_the_catalog_are_classified; ::test_typed_event_payload_is_checked; apps/api/tests/integration/test_b11_002_eventcatalogus.py::test_unknown_schema_version_is_kept_visible_and_reported; ::test_events_outside_the_catalogue_are_stored_but_never_delivered; ::test_broken_envelope_is_refused_and_not_stored; ::test_duplicate_events_are_delivered_once; ::test_order_per_source_is_kept; ::test_failed_delivery_waits_and_blocks_later_events_of_that_source; ::test_delivery_ends_in_dead_letter_and_can_be_requeued; ::test_sensitive_events_are_never_handed_to_a_flow; ::test_too_long_chain_is_not_delivered_and_cannot_lead_to_a_request; apps/api/tests/integration/test_b11_003_veilige_acties.py::test_same_event_five_times_gives_one_action; ::test_event_caused_by_a_flows_own_action_is_not_delivered_back; GitHub Actions ci-run 43172985224 (commit abec6cd): python, statuspagina-ui en image geslaagd",
+  "blokkade": "Events van andere apps komen nog niet binnen: de Hub (ai-server-manager) stuurt ze niet door naar deze dienst en contract §7 kent dat pad niet (ADR-0016, Meldingen bij het contract punt 2). Nodig: dat doorsturen bouwen in ai-server-manager (met een contractpunt), daarna een proef met de echte Hub en met Node-RED op de NAS; die vraagt ook het dienstaccount van besluit C-12 (ontwerp S-P2-510).",
+  "opmerking": "EX46, flow-deel: vijf keer hetzelfde event geeft één aflevering (en één rij in GET …/automation/events en één actieverzoek). Catalogus volgens contract §7: een onbekende schema-versie, een onbekend type, een ongeldige payload of een bron buiten haar domein wordt bewaard met een status, is zichtbaar in GET …/automation/events, wordt nooit afgeleverd en wordt gemeld (automation.event.rejected). Wachtrij per bron (een mislukte aflevering houdt alleen die bron op), dead_letter na 10 pogingen, opnieuw aan te bieden door een beheerder of operator; keten van herkomst zonder lus en hooguit 8 flows; sensitive gaat nooit naar een flow. Tot de Hub doorstuurt, krijgen flows alleen de eigen events van deze dienst. Geen NAS-aantekening: er rest bouwwerk in ai-server-manager (zie blokkade).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-12"
  },
  {
   "id": "B11-003",
@@ -121,13 +121,13 @@
  },
  {
   "id": "B11-004",
-  "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (echte NAS)",
-  "bewijs": "",
-  "blokkade": "",
-  "opmerking": "Ontbrak in EVIDENCE.json (gevonden bij review P1). Acceptatie 'Geen echte apparaten gewijzigd tijdens test' is nog niet aantoonbaar: er bestaan nog geen flow-tests in deze repo. Toelichting validatie: Niet getest: simulatie/testfixtures voor Node-RED-flows niet gebouwd.",
+  "status": "Bezig",
+  "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "commit 1cb2eaf, c5adabd, 82a2861; apps/api/tests/unit/test_automation_rules.py::test_samples_are_fixed_valid_and_marked_as_examples; ::test_samples_cannot_be_changed_by_a_caller; apps/api/tests/integration/test_b11_004_proefrun.py::test_dry_run_requests_nothing_and_changes_nothing; ::test_changed_samples_are_an_error_not_a_silent_success; ::test_a_caller_cannot_change_the_samples; ::test_unshielded_nodes_need_an_explicit_confirmation; ::test_a_dry_run_that_started_before_the_block_gives_nothing_and_simulates_nothing; ::test_dry_run_refusals; ::test_abandoned_dry_run_expires_and_real_events_flow_again; GitHub Actions ci-run 43172985224 (commit abec6cd): python, statuspagina-ui en image geslaagd",
+  "blokkade": "NIET GEVALIDEERD (echte NAS): proefrun alleen tegen de nagebootste Node-RED; een node die zelf naar buiten gaat kan deze dienst niet tegenhouden. Nodig vóór een proefrun met de echte Node-RED op de NAS: het dienstaccount van besluit C-12 (ontwerp S-P2-510, bouw S-P3-490, S-P3-445 en S-P3-360; tot dan geeft het uitlezen van een Node-RED volgens het manifest node_red_niet_ingesteld/geen_aanmelding) en het scherm Automatisering in de Hub (nog niet gebouwd); daarna een proefrun op de NAS door de gebruiker.",
+  "opmerking": "Proefrun met vaste voorbeeld-events (checksum gepind; een gewijzigd voorbeeld geeft 503 simulation_unavailable). Tijdens de proefrun geen actieverzoek, geen event naar de Hub en niets naar Node-RED; de uitkomst per verzoek is alleen zou_worden_aangevraagd of zou_worden_geweigerd (ADR-0016 kop 5). Een geblokkeerde flow krijgt ook uit een proefrun die al liep vóór de blokkade niets en zijn verzoeken worden geweigerd (403 flow_geblokkeerd). Geen NAS-aantekening: vóór de NAS-proef rest nog bouwwerk (zie blokkade).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-12"
  },
  {
   "id": "B11-005",
