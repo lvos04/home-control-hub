@@ -41,9 +41,9 @@ from integrations.domains.automation.catalog import (
     FORBIDDEN_NODE_TYPES,
     NODE_RED_DIGEST,
     NODE_RED_IMAGE,
+    NODE_RED_IMAGE_UID,
     NODE_RED_PORT,
     NODE_RED_TAG,
-    NODE_RED_UID,
 )
 from integrations.domains.automation.nodered import NodeRedClient, NodeRedError
 
@@ -248,13 +248,15 @@ def verify_profile() -> None:
     base = start("profiel", policy.define_arguments(service_hash, admin_hash, secret_a))
     other = start("andere-sleutel", policy.define_arguments(service_hash, admin_hash, secret_b))
 
+    # een meting van de image (gestart zonder --user), geen installatievoorschrift: de installatie volgt het manifest
+    # van jelly-leon-platform en draait als 568:568 (catalog.NODE_RED_INSTALL_UID)
     uid = docker("exec", f"{PREFIX}-profiel", "id", "-u")
     check(
         "gebruiker_niet_root",
-        uid == str(NODE_RED_UID),
+        uid == str(NODE_RED_IMAGE_UID),
         "De image draait standaard als een gewone gebruiker",
         uid=uid,
-        verwacht=NODE_RED_UID,
+        verwacht=NODE_RED_IMAGE_UID,
     )
     login = raw(base, "GET", "/auth/login").json()
     check(

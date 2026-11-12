@@ -45,9 +45,9 @@ from .catalog import (
     FORBIDDEN_NODE_TYPES,
     NODE_RED_DIGEST,
     NODE_RED_IMAGE,
+    NODE_RED_INSTALL_UID,
     NODE_RED_PORT,
     NODE_RED_TAG,
-    NODE_RED_UID,
 )
 from .nodered import NodeRedClient, NodeRedError
 
@@ -703,7 +703,8 @@ class Profile:
             "image": {"repository": NODE_RED_IMAGE, "tag": NODE_RED_TAG, "digest": NODE_RED_DIGEST},
             "poort": {"container": NODE_RED_PORT, "protocol": "tcp", "host": "keuze uit de onboarding (alleen LAN)"},
             "opslag": {"mount_path": "/data", "soort": "eigen dataset voor Node-RED (keuze uit de onboarding)"},
-            "gebruiker": {"uid": NODE_RED_UID, "gid": NODE_RED_UID, "root": False},
+            # de installatiegebruiker van het manifest van jelly-leon-platform (S-P2-310); los van besluit C-12
+            "gebruiker": {"uid": NODE_RED_INSTALL_UID, "gid": NODE_RED_INSTALL_UID, "root": False},
             "nooit": [
                 "geen Docker-socket koppelen",
                 "geen privileged-modus of extra capabilities",

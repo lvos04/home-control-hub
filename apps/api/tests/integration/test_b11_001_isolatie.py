@@ -675,3 +675,27 @@ def test_new_admin_password_replaces_the_old_one(linked: Any, fake_hub: Any, aut
     assert second["beheerwachtwoord_vervangen"] is True
     assert second["beheerwachtwoord"] and second["beheerwachtwoord"] != first["beheerwachtwoord"]
     assert second["arguments"] != first["arguments"]
+
+
+# --------------------------------------------------------------------------------------------- installatiegebruiker
+def test_profile_names_the_installation_user_of_the_manifest_not_the_image_default(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """S-P2-310 bouwpunt 6: waar deze dienst een installatiegebruiker noemt (``gebruiker`` in het antwoord van het
+    beveiligingsprofiel), is dat 568:568, zoals het manifest van jelly-leon-platform (de installatieweg; contract kop 2:
+    één container "als 568:568 waar de image dat toestaat"). Niet 1000, de standaardgebruiker van de image (die blijft
+    alleen de meting ``gebruiker_niet_root`` in ``docs/b11/node-red-verificatie.json``). De argumenten, de accounts en
+    de ``credentialSecret`` van het profiel veranderen hier niet (besluit C-12)."""
+    first = setup_node_red(linked, fake_hub, auth)
+    assert first["gebruiker"] == {"uid": 568, "gid": 568, "root": False}
+    again = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin")))
+    assert again.status_code == 200, again.text
+    assert again.json()["gebruiker"] == {"uid": 568, "gid": 568, "root": False}
+    assert again.json()["arguments"] == first["arguments"]
+    assert again.json()["accounts"] == {
+        "dienst": {
+            "gebruiker": "hub-dienst",
+            "rechten": ["flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read"],
+        },
+        "beheer": {"gebruiker": "beheerder", "rechten": "*"},
+    }
