@@ -418,6 +418,8 @@ def test_same_event_five_times_gives_one_action(linked: Any, fake_hub: Any, auth
     env = b11.envelope(source_event_id="meter-1:piek-7")
     statuses = [b11.post_event(linked, fake_hub, env).status_code for _ in range(5)]
     assert statuses == [201, 200, 200, 200, 200]
+    stored = linked.get(f"{A}/events", headers=auth("viewer")).json()["items"]
+    assert [e["event_id"] for e in stored] == [env["event_id"]], "vijf keer hetzelfde event: één rij"
     items = b11.claim(linked, token)["items"]
     assert len(items) == 1
     answers = [
