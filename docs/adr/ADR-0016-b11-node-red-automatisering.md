@@ -93,12 +93,15 @@ Deze ronde bouwt de vijf werkpakketten:
   - de **beheerder of de operator**: bediening, dus een flow pauzeren of hervatten, de isolatie meten, een
     momentopname maken, een vastgelopen aflevering opnieuw aanbieden en een proefrun starten. Geen van deze routes
     schrijft in Node-RED of verruimt wat een flow mag; een geblokkeerde flow kan ook een operator niet hervatten;
-  - alleen de **Hub** (dienst-JWT): events aanbieden en de uitkomst van een actieverzoek melden;
+  - alleen de **Hub** (dienst-JWT): events aanbieden en de uitkomst van een actieverzoek melden. Op elke route van de
+    beheerder en van de operator krijgt de Hub `403` (contract §4.3: de rol `service` is nooit `admin`);
   - een **viewer** of een **kind** krijgt op elke schrijvende route `403`. Elke schrijvende route van de beheerder of
     de operator, en het melden van een uitkomst door de Hub, legt een auditregel vast (een aangeboden event staat in
     `GET …/automation/events`). Een geweigerde aanvraag legt niets vast.
-  `apps/api/tests/integration/test_b11_rechten.py` leest de schrijvende routes uit de app zelf en toetst deze indeling
-  per route: een nieuwe schrijvende route zonder plaats erin laat de test falen.
+  `apps/api/tests/integration/test_b11_rechten.py` leest de schrijvende routes uit de app zelf (de OpenAPI-beschrijving
+  en de router van de beheer-API) en toetst deze indeling per route en per rol (viewer, kind, operator en de Hub): een
+  nieuwe schrijvende route zonder plaats erin laat de test falen, en een route van de beheer-API of de flow-API met
+  `include_in_schema=False` (die niet in de OpenAPI-beschrijving staat) ook.
 - **Exec-node en grof blokkeren:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt
   (de node draait niet, maar de flow staat er). Daarom scant de dienst elke gelezen configuratie zelf: elke node (in
   een tabblad, in een subflow of als configuratienode, gebruikt of niet) tegen de verboden typen, de geïnstalleerde
@@ -228,7 +231,20 @@ Deze ronde bouwt de vijf werkpakketten:
   een losse surrogaat (een geldige JSON-escape zoals `\ud800`, maar geen tekst die in UTF-8 kan), in een tekstveld,
   een sleutel of diep genest, is op de flow-API en op de beheer-API een invoerfout: `422 validation_error` met het veld
   (`actions.storable`), en bij een event van de Hub `422 event_ongeldig`. Nooit een serverfout, en er wordt niets
-  vastgelegd.
+  vastgelegd. Twee uitzonderingen (aanvulling 2026-11-12, herstel S-P2-310):
+  - **Een actie op de harde weigerlijst** (de `action_id` is geldig en `actions.local_refusal` weigert hem al zonder
+    doel en parameters: boiler, shell, vernietigend, beleid, betaald, of buiten de vaste lijst) met zo'n teken in het
+    doel, de parameters of de reden: het antwoord is de gewone vastgelegde weigering, `403 forbidden` met de
+    weigerreden in `details.reason` (bijvoorbeeld `destructief_verboden` of `boiler_nooit`), met een rij `geweigerd`,
+    een auditregel en het event `flow.action.rejected` (ernst `hoog`). Doel, parameters en reden worden dan niet
+    bewaard (zoals bij `geheim_in_parameters`); als reden staat de weigerreden. Waarom `403` en geen `422`: de
+    weigering hangt niet van de tekst af (met gewone tekst wordt dezelfde actie net zo geweigerd), `403` is op deze
+    route het antwoord "geweigerd en vastgelegd", en een `422` zonder spoor liet een flow met één onzichtbaar teken
+    elke vastlegging en de melding met ernst `hoog` ontlopen (R-VEILIG-3 van S-P2-310). Een actie die niet op de
+    harde weigerlijst staat, met zo'n teken, blijft `422 validation_error` zonder vastlegging. De Idempotency-Key
+    herkent het verzoek aan de ingevoerde tekst (als ASCII-escapes in de vingerafdruk; die wordt niet bewaard).
+  - **Een cursor** met zo'n teken (alleen mogelijk met een zelfgemaakte cursor) is `400 invalid_cursor`, centraal in
+    `pagination.decode_cursor` voor elke lijstroute (R-VEILIG-2 en R-TECH-2 van S-P2-310).
 - Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
   ongezien alsnog uitgevoerd zou worden.
 - De Hub meldt de uitkomst terug met `POST …/action-requests/{id}/result` (alleen dienst-JWT). Een eindstand

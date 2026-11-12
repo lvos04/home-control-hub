@@ -68,10 +68,14 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   (besluit C-12).
 - Een NUL-teken of een losse surrogaat in een tekstveld van de flow-API of de beheer-API (ook in de lijst toegestane
   acties van een flow-token, de voorbeelden van een proefrun, de uitkomst die de Hub meldt en een event van de Hub)
-  is een invoerfout (`422`), geen serverfout; er wordt niets vastgelegd.
+  is een invoerfout (`422`), geen serverfout; er wordt niets vastgelegd. Uitzondering: vraagt een flow een actie aan
+  die op de harde weigerlijst staat (bijvoorbeeld een dataset verwijderen of de boiler schakelen), dan blijft het de
+  vastgelegde weigering (`403`, rij, audit, `flow.action.rejected`), zonder doel, parameters en reden. Een cursor
+  met zo'n teken is `400 invalid_cursor`. Zie ADR-0016 kop 4.
 - Rechten op de beheer-API vastgelegd in ADR-0016 kop 2 en getest per route: beleid en toegang (profiel, eigenaar,
   triggers, grenzen, flow-tokens) alleen voor de beheerder, bediening (pauzeren, isolatie meten, momentopname,
-  opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`.
+  opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`, de
+  Hub (dienst-JWT) op elke route van de beheerder en de operator.
 
 **Bekende grenzen**
 - De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een
