@@ -22,8 +22,11 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   beheerder ze hervat. Blokkeren bij mislukken (besluit van de gebruiker): loopt de synchronisatie vast nadat
   Node-RED antwoordde (bij het lezen, in de scan, het flowregister of de opslag), dan worden in een aparte transactie
   alle flows geblokkeerd met reden `synchronisatie_mislukt` en is de check `automatisering` degraded; nooit de oude
-  stand. Geeft Node-RED zelf een fout (onbereikbaar, te groot antwoord, 5xx, ongeldige JSON), dan blijft de stand
-  van de flows nog staan (open vervolgpunt). Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
+  stand. Dat geldt ook als Node-RED wel antwoordde maar het antwoord onbruikbaar is: groter dan 16 MiB, geen geldige
+  JSON of niet de verwachte vorm, of een onverwachte status (`antwoord_te_groot`, `antwoord_ongeldig`,
+  `onverwacht_antwoord`; de meting van de bron noemt de oorzaak). Antwoordt Node-RED niet (onbereikbaar, time-out)
+  of met een serverfout (5xx), dan blijft de stand van de flows staan en zegt alleen de synchronisatie eerlijk
+  `ok: false`. Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
 - **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
   afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
 - **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst
@@ -46,7 +49,12 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   blok), een diff zonder waarden, en herstel als voorstel dat alleen met een door de Hub ondertekend ExecutionRequest
   wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen. Synchronisatie,
   blokkeren bij mislukken en herstel schrijven het flowregister onder één slot: een herstel dat tegelijk met de
-  worker loopt, legt de flows niet meer stil.
+  worker loopt, legt de flows niet meer stil. Op dat slot wordt hooguit 30 seconden gewacht; daarna
+  `409 flowregister_bezig` en is er niets gewijzigd (een herstel houdt dan zijn nonce; de worker probeert het in de
+  volgende ronde opnieuw). Loopt een herstel vast nádat het naar Node-RED schreef, dan worden alle flows geblokkeerd
+  (blokkeren bij mislukken) en is het antwoord `500 herstel_niet_vastgelegd`. Het credentials-bestand telt alleen
+  als de datamap van Node-RED **alleen-lezen** is gekoppeld (gemeten met `fstatvfs`); een beschrijfbare koppeling is
+  `niet_gekoppeld`.
 - Connector-health: check `automatisering` (alleen als Node-RED is ingesteld).
 - `deploy/truenas/NODE_RED_CUSTOM_APP.md`: verwijst naar het manifest van `jelly-leon-platform`
   (`install/manifests/node-red.manifest.yaml`, 568:568) als installatieweg en beschrijft alleen wat in deze app
@@ -74,6 +82,11 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   boiler schakelen, of de boiler of Emby in het doel of de parameters van een andere actie, tot 8 kB net als zonder
   die tekens), dan blijft het de vastgelegde weigering (`403`, rij, audit, `flow.action.rejected`), zonder doel,
   parameters en reden. Een cursor met zo'n teken is `400 invalid_cursor`. Zie ADR-0016 kop 4.
+- `POST /connector/v1/propose` en `POST /connector/v1/apply`: een NUL-teken of een losse surrogaat in het verzoek
+  (ook in een sleutel) is `422 validation_error` vóór er iets gebeurt; eerst gaf dat een serverfout (`500`) of werd
+  het aangenomen. Bij `apply` wordt dan geen nonce verbruikt en niets bewaard. De controle zit centraal in
+  `idempotency.run_idempotent` en geldt dus ook voor de andere wijzigingen, voor het deel van het verzoek dat zij
+  daar laten vastleggen. Zie ADR-0016 kop 6.
 - Rechten op de beheer-API vastgelegd in ADR-0016 kop 2 en getest per route: beleid en toegang (profiel, eigenaar,
   triggers, grenzen, flow-tokens) alleen voor de beheerder, bediening (pauzeren, isolatie meten, momentopname,
   opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`, de

@@ -145,10 +145,19 @@ Deze ronde bouwt de vijf werkpakketten:
   automatisch heropenen). De vormen hierboven (lange id, NUL, losse surrogaat) zijn een gewone bevinding
   `vorm_ongeldig`, geen vastgelopen synchronisatie: tabblad-id, label en bevindingen bevatten zo'n teken nooit, en de
   momentopname bewaart de configuratie zelf ongewijzigd (versleuteld).
-  **Grens (open vervolgpunt):** kan de dienst de configuratie niet lezen omdat Node-RED of het netwerk een fout geeft
-  (onbereikbaar, time-out, 5xx, een antwoord groter dan 16 MiB of ongeldige JSON), dan blijft de stand van de flows
-  staan tot de volgende geslaagde synchronisatie; alleen de synchronisatie is dan `ok: false` en de check
-  `automatisering` `degraded`. Daarvoor is in deze herstelpoging niets gebouwd.
+  **Onbruikbaar antwoord (uitwerking van hetzelfde besluit, keuze B1 (b) in S-P2-320):** antwoordde Node-RED wel,
+  maar is het antwoord onbruikbaar — groter dan 16 MiB (`antwoord_te_groot`), geen geldige JSON of niet de verwachte
+  vorm (`antwoord_ongeldig`), of een status die de dienst niet verwacht, zoals 400 of 429 na de herhalingen
+  (`onverwacht_antwoord`) — dan geldt hetzelfde: elke flow geblokkeerd met `synchronisatie_mislukt`; de
+  synchronisatie noemt de oorzaak in `fout.oorzaak` en de meting van de bron is `degraded` met die reden.
+  **Geen blokkade** als Node-RED niet antwoordde (`onbereikbaar`, `timeout`) of met een serverfout (`http_5xx`), en
+  ook niet bij een fout in de instelling, de aanmelding of de rechten (zoals `niet_geconfigureerd`,
+  `aanmelding_geweigerd`, `geen_rechten`, `niet_gevonden`, `redirect`, `niet_beveiligd`): dan blijft de stand van de
+  flows staan tot de volgende geslaagde synchronisatie en zegt alleen de synchronisatie eerlijk `ok: false` (de
+  meting van de bron `down` of `degraded`, de check `automatisering` `degraded`). Na een storing of herstart van
+  Node-RED hoeft een beheerder dus niet elke flow opnieuw te hervatten.
+  **Ook na een herstel (S-P2-320):** loopt een herstel vast nádat het naar Node-RED schreef (zie kop 6), dan worden
+  op dezelfde manier alle flows geblokkeerd.
 - **Grens van de blokkade:** de blokkade geldt voor wat deze dienst doet (events afleveren, actieverzoeken
   doorsturen, tokens uitgeven); Node-RED zelf blijft de flows draaien. Omdat bij elke bevinding alle flows van de
   bron geblokkeerd zijn, maakt het voor de blokkade niet uit langs welke weg tabbladen tijdens het draaien berichten
@@ -304,7 +313,10 @@ Deze ronde bouwt de vijf werkpakketten:
   momentopname). Een beheerder kan er ook zelf één maken.
 - **Credentials:** `GET /flows` geeft nooit credentials terug (gemeten). Ze komen alleen mee als de datamap van
   Node-RED **alleen-lezen** aan deze app is gekoppeld (`HCH_NODE_RED_DATA_DIR`), en dan alleen als het door Node-RED
-  zelf versleutelde blok uit `flows_cred.json`. Een onversleuteld bestand wordt nooit meegenomen. Node-RED schrijft
+  zelf versleutelde blok uit `flows_cred.json`. Of de koppeling alleen-lezen is, meet de dienst zelf op de geopende
+  map (`fstatvfs`, vlag `ST_RDONLY`; S-P2-320): een beschrijfbare koppeling telt als `niet_gekoppeld` en het bestand
+  wordt dan niet geopend. Een echte alleen-lezen-koppeling is in de tests niet te maken (dat vraagt root); daar is
+  alleen die meting vervangen, en een beschrijfbare map is echt getest. Een onversleuteld bestand wordt nooit meegenomen. Node-RED schrijft
   zelf in die map: het bestand wordt daarom nooit via een symbolische koppeling gelezen, moet een gewoon bestand
   zijn (geen FIFO, map of apparaat) en wordt begrensd gelezen (hooguit 4 MiB); anders is de stand `onleesbaar`.
   Zonder die koppeling zegt de momentopname `credentials_status: niet_gekoppeld`. De code leest alleen dat bestand en
@@ -324,6 +336,13 @@ Deze ronde bouwt de vijf werkpakketten:
      ongewijzigd sinds het voorstel).
   3. Vóór het schrijven wordt de huidige stand als momentopname vastgelegd; na het schrijven leest de dienst terug
      en vergelijkt de checksum.
+  4. **Blokkeren bij mislukken na het schrijven (S-P2-320):** loopt het herstel vast nádat het naar Node-RED
+     schreef — een andere fout dan een gemeten fout van Node-RED, bij het schrijven, het teruglezen of het
+     vastleggen van de momentopname `na_herstel` — dan klopt het flowregister niet meer met Node-RED. Dan blokkeert
+     een eigen transactie elke flow met `synchronisatie_mislukt` (zoals in kop 2) en is het antwoord
+     `500 herstel_niet_vastgelegd` (met `flows_geblokkeerd`, het voorstel en de momentopname `voor_herstel`). Het
+     voorstel blijft op `toepassen_gestart`; de worker sluit het na de geldigheid af als onderbroken (uitkomst
+     onbekend). De nonce en de goedkeuring zijn al opgemaakt: het verzoek wordt nooit blind herhaald.
 - **Wie mag `apply` aanroepen:** een beheerder of de Hub-dienst. De bescherming zit in de ondertekende opdracht, niet
   in wie hem aflevert.
 - **Geen spoor bij onzin:** een verzoek zonder geldige vorm, handtekening of geldigheid wordt geweigerd en nergens
@@ -331,6 +350,17 @@ Deze ronde bouwt de vijf werkpakketten:
   is dan verbruikt.
 - **Herhalen:** dezelfde `Idempotency-Key` geeft hetzelfde antwoord; hetzelfde verzoek met een nieuwe sleutel is
   `409 nonce_al_gebruikt`. Een onderbroken herstel wordt nooit blind herhaald: eerst teruglezen.
+- **Tekst die niet op te slaan is (S-P2-320):** een NUL-teken of een losse surrogaat in `propose` of `apply` (ook in
+  een sleutel, op elke diepte) is `422 validation_error`, vóór er iets gebeurt: geen voorstel, geen nonce, geen
+  bewaard antwoord. De controle zit centraal in `idempotency.run_idempotent` (vóór de verzoek-hash), en geldt daarmee
+  ook voor de andere wijzigingen, voor het deel van het verzoek dat zij daar laten vastleggen. Een losse surrogaat
+  kan de Hub niet ondertekenen (canonieke JSON in UTF-8); een ondertekend verzoek met een NUL wordt zo ook geweigerd.
+- **Het slot op het flowregister** (`snapshots.lock_register`; synchronisatie, blokkeren bij mislukken en herstel
+  schrijven het register onder één slot): wie erop wacht, wacht hooguit 30 seconden
+  (`lock_timeout`, alleen rond het nemen van dat slot; de rijsloten in dezelfde transactie houden hun gewone
+  wachttijd). Daarna `409 flowregister_bezig` met `Retry-After: 30`; er is niets gewijzigd. Een herstel dat zo
+  stopt, heeft zijn nonce nog niet verbruikt; de worker probeert het in de volgende ronde opnieuw. Wacht een herstel
+  na het schrijven te lang, dan geldt punt 4 hierboven.
 - **Terugdraaien:** `POST /connector/v1/rollback` blijft `501`. Een herstel draai je terug met een nieuw voorstel
   naar de momentopname van vóór het herstel.
 - **Andere `credentialSecret`:** Node-RED weigert het blok dan zelf (gemeten: `400`); er verandert niets en de dienst
@@ -347,6 +377,9 @@ Deze ronde bouwt de vijf werkpakketten:
 | Node-RED onbereikbaar | `503 node_red_unavailable` met `Retry-After: 30` |
 | Node-RED antwoordt met een fout | `502 node_red_fout` |
 | Weigering door beleid | `403 forbidden` met `details.reason` |
+| NUL-teken of losse surrogaat in een wijziging | `422 validation_error` (er gebeurt niets) |
+| Slot op het flowregister na 30 s nog bezet | `409 flowregister_bezig` met `Retry-After: 30` (er is niets gewijzigd) |
+| Herstel vastgelopen na het schrijven | `500 herstel_niet_vastgelegd` (alle flows geblokkeerd) |
 | Te veel verzoeken van een flow | `429 rate_limited` |
 | Hub niet gekoppeld bij een actieverzoek | `503 hub_unavailable` |
 
@@ -388,10 +421,13 @@ Waar het contract niets zegt of zichzelf tegenspreekt, is de veiligste lezing ge
 4. **`automation.flows.restore` staat niet in de actietabel van §8.** Een echte Hub kan er nu geen geldig
    ExecutionRequest voor uitgeven; herstel werkt dus alleen tegen de simulator.
 5. **De `policy_hash`** in een ExecutionRequest kan een eigenaar-connector niet tegen een policybestand controleren;
-   alleen de vorm en de samenhang worden gecontroleerd.
+   alleen de vorm en de samenhang worden gecontroleerd. De stap "policy-hash gelijk aan het eigen beleid"
+   (`policy_hash_verschilt`, 409) uit `ai-server-manager/docs/EXECUTION_REQUEST.md` ontbreekt daarom hier.
+   Geaccepteerd als contractmelding (keuze B2 van de regisseur in S-P2-320); geen contractwijziging in die stap.
 6. **Het formaat van het ExecutionRequest** staat alleen in `ai-server-manager` (`apps/policy`,
    `docs/EXECUTION_REQUEST.md`), niet in het contract. De `403`-codes daar wijken af van de foutcatalogus in §5;
-   hier is §5 gevolgd (`403 forbidden` met `details.reason`).
+   hier is §5 gevolgd (`403 forbidden` met `details.reason`). Geaccepteerd als contractmelding (keuze B2 van de
+   regisseur in S-P2-320).
 7. **`preview_hash` en `resource_etag`:** de SSO-voorstellen gebruiken kale hex, het Hub-formaat `sha256:<hex>`.
    Herstelvoorstellen volgen het Hub-formaat; `expected_version` neemt beide aan.
 8. **Geen eventdomeinen voor MSO en my_house** in §7, terwijl B11-002 ze noemt. Hun events vallen nu buiten de
