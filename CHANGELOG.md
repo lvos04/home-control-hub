@@ -22,11 +22,15 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   beheerder ze hervat. Blokkeren bij mislukken (besluit van de gebruiker): loopt de synchronisatie vast nadat
   Node-RED antwoordde (bij het lezen, in de scan, het flowregister of de opslag), dan worden in een aparte transactie
   alle flows geblokkeerd met reden `synchronisatie_mislukt` en is de check `automatisering` degraded; nooit de oude
-  stand. Dat geldt ook als Node-RED wel antwoordde maar het antwoord onbruikbaar is: groter dan 16 MiB, geen geldige
-  JSON of niet de verwachte vorm, of een onverwachte status (`antwoord_te_groot`, `antwoord_ongeldig`,
-  `onverwacht_antwoord`; de meting van de bron noemt de oorzaak). Antwoordt Node-RED niet (onbereikbaar, time-out)
-  of met een serverfout (5xx), dan blijft de stand van de flows staan en zegt alleen de synchronisatie eerlijk
-  `ok: false`. Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
+  stand. Dat geldt ook als Node-RED wel antwoordde maar de dienst het antwoord niet kan gebruiken: groter dan
+  16 MiB, geen geldige JSON of niet de verwachte vorm, een onverwachte status, een Node-RED zonder aanmelding, een
+  geweigerde aanmelding (401), ontbrekende rechten (403), een onbekend pad (404) of een doorverwijzing (3xx)
+  (`antwoord_te_groot`, `antwoord_ongeldig`, `onverwacht_antwoord`, `niet_beveiligd`, `aanmelding_geweigerd`,
+  `geen_rechten`, `niet_gevonden`, `redirect`; de meting van de bron noemt de oorzaak). Eerst bleef bij een Node-RED
+  zonder aanmelding of een geweigerde aanmelding de stand staan, zodat een flow met een exec-node die de dienst niet
+  kon lezen, actief bleef. Antwoordt Node-RED niet (onbereikbaar, time-out) of met een serverfout (5xx), dan blijft
+  de stand van de flows staan en zegt alleen de synchronisatie eerlijk `ok: false`. Zie ADR-0016 kop 2. Een
+  Node-RED zonder aanmelding wordt geweigerd.
 - **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
   afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
 - **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst
@@ -51,10 +55,17 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   blokkeren bij mislukken en herstel schrijven het flowregister onder één slot: een herstel dat tegelijk met de
   worker loopt, legt de flows niet meer stil. Op dat slot wordt hooguit 30 seconden gewacht; daarna
   `409 flowregister_bezig` en is er niets gewijzigd (een herstel houdt dan zijn nonce; de worker probeert het in de
-  volgende ronde opnieuw). Loopt een herstel vast nádat het naar Node-RED schreef, dan worden alle flows geblokkeerd
-  (blokkeren bij mislukken) en is het antwoord `500 herstel_niet_vastgelegd`. Het credentials-bestand telt alleen
-  als de datamap van Node-RED **alleen-lezen** is gekoppeld (gemeten met `fstatvfs`); een beschrijfbare koppeling is
-  `niet_gekoppeld`.
+  volgende ronde opnieuw). Het blokkeren bij mislukken wacht wél tot het slot vrij is en geeft nooit op; eerst kon
+  het na 30 seconden opgeven met `409 flowregister_bezig` ("er is niets gewijzigd") terwijl de flows open bleven.
+  Loopt een herstel vast nádat het naar Node-RED schreef (ook bij het sluiten van de verbinding of een databasefout
+  bij het vastleggen), of geeft Node-RED dan op het schrijven of het teruglezen een antwoord dat de dienst niet kan
+  gebruiken, dan worden alle flows geblokkeerd (blokkeren bij mislukken) en is het antwoord
+  `500 herstel_niet_vastgelegd`. Het bewaren van het antwoord bij de Idempotency-Key en de commit vallen daarbuiten
+  (ADR-0016 kop 6, punt 4). Het credentials-bestand telt alleen als de datamap van Node-RED **alleen-lezen** is
+  gekoppeld (gemeten met `fstatvfs`); een beschrijfbare koppeling is `niet_gekoppeld`, met de reden
+  `niet_alleen_lezen` in de synchronisatie. Een herstel zet het credentials-bestand alleen terug als ook de huidige
+  inloggegevens vast te leggen zijn; anders gaan alleen de flows terug en zeggen voorstel en antwoord dat (eerst
+  werden de huidige inloggegevens dan vervangen zonder dat terugdraaien ze kon terugzetten).
 - Connector-health: check `automatisering` (alleen als Node-RED is ingesteld).
 - `deploy/truenas/NODE_RED_CUSTOM_APP.md`: verwijst naar het manifest van `jelly-leon-platform`
   (`install/manifests/node-red.manifest.yaml`, 568:568) als installatieweg en beschrijft alleen wat in deze app
@@ -83,10 +94,12 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   die tekens), dan blijft het de vastgelegde weigering (`403`, rij, audit, `flow.action.rejected`), zonder doel,
   parameters en reden. Een cursor met zo'n teken is `400 invalid_cursor`. Zie ADR-0016 kop 4.
 - `POST /connector/v1/propose` en `POST /connector/v1/apply`: een NUL-teken of een losse surrogaat in het verzoek
-  (ook in een sleutel) is `422 validation_error` vóór er iets gebeurt; eerst gaf dat een serverfout (`500`) of werd
-  het aangenomen. Bij `apply` wordt dan geen nonce verbruikt en niets bewaard. De controle zit centraal in
-  `idempotency.run_idempotent` en geldt dus ook voor de andere wijzigingen, voor het deel van het verzoek dat zij
-  daar laten vastleggen. Zie ADR-0016 kop 6.
+  (ook in een sleutel, ook in een sleutel die met `_sa` begint) is `422 validation_error` vóór er iets gebeurt; eerst
+  gaf dat een serverfout (`500`) of werd het aangenomen. Bij `apply` wordt dan geen nonce verbruikt en niets bewaard.
+  Een verzoek dat dieper genest is dan 64 niveaus is ook `422 validation_error` (eerst vanaf ongeveer 990 niveaus een
+  serverfout). Beide controles zitten centraal in `idempotency.run_idempotent` en gelden dus ook voor de andere
+  wijzigingen, voor het deel van het verzoek dat zij daar laten vastleggen; de verzoek-hash van de Idempotency-Key
+  ziet nu ook sleutels die met `_sa` beginnen. Zie ADR-0016 kop 6.
 - Rechten op de beheer-API vastgelegd in ADR-0016 kop 2 en getest per route: beleid en toegang (profiel, eigenaar,
   triggers, grenzen, flow-tokens) alleen voor de beheerder, bediening (pauzeren, isolatie meten, momentopname,
   opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`, de

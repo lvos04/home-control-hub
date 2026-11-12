@@ -145,19 +145,28 @@ Deze ronde bouwt de vijf werkpakketten:
   automatisch heropenen). De vormen hierboven (lange id, NUL, losse surrogaat) zijn een gewone bevinding
   `vorm_ongeldig`, geen vastgelopen synchronisatie: tabblad-id, label en bevindingen bevatten zo'n teken nooit, en de
   momentopname bewaart de configuratie zelf ongewijzigd (versleuteld).
-  **Onbruikbaar antwoord (uitwerking van hetzelfde besluit, keuze B1 (b) in S-P2-320):** antwoordde Node-RED wel,
-  maar is het antwoord onbruikbaar — groter dan 16 MiB (`antwoord_te_groot`), geen geldige JSON of niet de verwachte
-  vorm (`antwoord_ongeldig`), of een status die de dienst niet verwacht, zoals 400 of 429 na de herhalingen
-  (`onverwacht_antwoord`) — dan geldt hetzelfde: elke flow geblokkeerd met `synchronisatie_mislukt`; de
-  synchronisatie noemt de oorzaak in `fout.oorzaak` en de meting van de bron is `degraded` met die reden.
+  **Antwoord dat de dienst niet kan gebruiken (uitwerking van hetzelfde besluit, keuze B1 (b) in S-P2-320; door de
+  regisseur aangescherpt als keuze R-VEILIG-1 (b), uit "grof blokkeren" en C-11):** antwoordde Node-RED wel, maar kan
+  de dienst het antwoord niet gebruiken en dus de flows niet lezen en scannen, dan geldt hetzelfde: elke flow
+  geblokkeerd met `synchronisatie_mislukt`; de synchronisatie noemt de oorzaak in `fout.oorzaak` en de meting van de
+  bron is `degraded` met die reden. Dat zijn (`snapshots.UNUSABLE_ANSWER_REASONS`): groter dan 16 MiB
+  (`antwoord_te_groot`), geen geldige JSON of niet de verwachte vorm (`antwoord_ongeldig`), een status die de dienst
+  niet verwacht, zoals 400 of 429 na de herhalingen (`onverwacht_antwoord`), een Node-RED die geen aanmelding vraagt
+  (`niet_beveiligd`, C-11 geschonden), een geweigerde aanmelding van het dienstaccount (`aanmelding_geweigerd`, 401),
+  ontbrekende rechten (`geen_rechten`, 403), een onbekend pad (`niet_gevonden`, 404) en een doorverwijzing
+  (`redirect`, 3xx). Zonder die blokkade bleef bijvoorbeeld een flow actief waarin iemand, terwijl Node-RED zonder
+  aanmelding draaide, een exec-node zette: de dienst las niets, scande dus niets, en het token van die flow werkte
+  (gemeten in de review van S-P2-320). Gevolg: na een wachtwoordwissel van het dienstaccount, een rechtenwijziging of
+  een ander admin-pad staan alle flows geblokkeerd tot een synchronisatie weer slaagt en een beheerder ze hervat.
   **Geen blokkade** als Node-RED niet antwoordde (`onbereikbaar`, `timeout`) of met een serverfout (`http_5xx`), en
-  ook niet bij een fout in de instelling, de aanmelding of de rechten (zoals `niet_geconfigureerd`,
-  `aanmelding_geweigerd`, `geen_rechten`, `niet_gevonden`, `redirect`, `niet_beveiligd`): dan blijft de stand van de
-  flows staan tot de volgende geslaagde synchronisatie en zegt alleen de synchronisatie eerlijk `ok: false` (de
-  meting van de bron `down` of `degraded`, de check `automatisering` `degraded`). Na een storing of herstart van
-  Node-RED hoeft een beheerder dus niet elke flow opnieuw te hervatten.
-  **Ook na een herstel (S-P2-320):** loopt een herstel vast nádat het naar Node-RED schreef (zie kop 6), dan worden
-  op dezelfde manier alle flows geblokkeerd.
+  ook niet bij een fout in de eigen instelling van de bron waarbij er niets aan Node-RED is gevraagd
+  (`niet_geconfigureerd`, `uitgeschakeld`, `ongeldig_adres`, `geen_aanmelding`, `aanmelding_ongeldig`): dan blijft de
+  stand van de flows staan tot de volgende geslaagde synchronisatie en zegt alleen de synchronisatie eerlijk
+  `ok: false` (bij `onbereikbaar`, `timeout` en `http_5xx` de meting van de bron `down`, de check `automatisering`
+  `degraded`). Na een storing of herstart van Node-RED hoeft een beheerder dus niet elke flow opnieuw te hervatten.
+  **Ook na een herstel (S-P2-320):** loopt een herstel vast nádat het naar Node-RED schreef, of geeft Node-RED dan
+  op het schrijven of het teruglezen een antwoord dat de dienst niet kan gebruiken (zie kop 6), dan worden op
+  dezelfde manier alle flows geblokkeerd.
 - **Grens van de blokkade:** de blokkade geldt voor wat deze dienst doet (events afleveren, actieverzoeken
   doorsturen, tokens uitgeven); Node-RED zelf blijft de flows draaien. Omdat bij elke bevinding alle flows van de
   bron geblokkeerd zijn, maakt het voor de blokkade niet uit langs welke weg tabbladen tijdens het draaien berichten
@@ -315,7 +324,8 @@ Deze ronde bouwt de vijf werkpakketten:
   Node-RED **alleen-lezen** aan deze app is gekoppeld (`HCH_NODE_RED_DATA_DIR`), en dan alleen als het door Node-RED
   zelf versleutelde blok uit `flows_cred.json`. Of de koppeling alleen-lezen is, meet de dienst zelf op de geopende
   map (`fstatvfs`, vlag `ST_RDONLY`; S-P2-320): een beschrijfbare koppeling telt als `niet_gekoppeld` en het bestand
-  wordt dan niet geopend. Een echte alleen-lezen-koppeling is in de tests niet te maken (dat vraagt root); daar is
+  wordt dan niet geopend; de synchronisatie noemt dan de reden `credentials_reden: niet_alleen_lezen` (zonder
+  ingestelde map is er geen reden). Een echte alleen-lezen-koppeling is in de tests niet te maken (dat vraagt root); daar is
   alleen die meting vervangen, en een beschrijfbare map is echt getest. Een onversleuteld bestand wordt nooit meegenomen. Node-RED schrijft
   zelf in die map: het bestand wordt daarom nooit via een symbolische koppeling gelezen, moet een gewoon bestand
   zijn (geen FIFO, map of apparaat) en wordt begrensd gelezen (hooguit 4 MiB); anders is de stand `onleesbaar`.
@@ -335,14 +345,29 @@ Deze ronde bouwt de vijf werkpakketten:
      is de ondergrens), goedkeuring door een mens gebonden aan precies deze diff, en de precondities (Node-RED
      ongewijzigd sinds het voorstel).
   3. Vóór het schrijven wordt de huidige stand als momentopname vastgelegd; na het schrijven leest de dienst terug
-     en vergelijkt de checksum.
+     en vergelijkt de checksum. Het credentials-bestand uit de momentopname gaat alleen mee als ook de huidige
+     inloggegevens vast te leggen zijn (stand `meegenomen`), bij het voorstel én vlak voor het schrijven
+     (R-VEILIG-5 van S-P2-320): anders zou de momentopname `voor_herstel` ze missen en kon terugdraaien ze nooit
+     terugzetten. Dan gaan alleen de flows terug; het voorstel zegt dat (`credentials.terugzetten: false`, reden
+     `huidige_credentials_niet_vastgelegd` en een waarschuwing) en het antwoord ook (`credentials_teruggezet: false`
+     en `credentials_niet_teruggezet`). De goedkeuring is aan die keuze gebonden (`preview_hash`): zei het voorstel
+     "niet terugzetten", dan gaan ze ook niet mee als het bij het toepassen wel zou kunnen.
   4. **Blokkeren bij mislukken na het schrijven (S-P2-320):** loopt het herstel vast nádat het naar Node-RED
-     schreef — een andere fout dan een gemeten fout van Node-RED, bij het schrijven, het teruglezen of het
-     vastleggen van de momentopname `na_herstel` — dan klopt het flowregister niet meer met Node-RED. Dan blokkeert
-     een eigen transactie elke flow met `synchronisatie_mislukt` (zoals in kop 2) en is het antwoord
-     `500 herstel_niet_vastgelegd` (met `flows_geblokkeerd`, het voorstel en de momentopname `voor_herstel`). Het
-     voorstel blijft op `toepassen_gestart`; de worker sluit het na de geldigheid af als onderbroken (uitkomst
-     onbekend). De nonce en de goedkeuring zijn al opgemaakt: het verzoek wordt nooit blind herhaald.
+     schreef — een andere fout dan een gemeten weigering of storing van Node-RED, bij het schrijven, het teruglezen,
+     het sluiten van de client (het token intrekken) of het vastleggen van de momentopname `na_herstel` tot en met
+     het wegschrijven naar de database (`flush`) — of geeft Node-RED op het schrijven of het teruglezen een antwoord
+     dat de dienst niet kan gebruiken (dezelfde redenen als in kop 2; keuze R-VEILIG-4 (a)), dan klopt het
+     flowregister niet meer zeker met Node-RED. Dan blokkeert een eigen transactie elke flow met
+     `synchronisatie_mislukt` (zoals in kop 2) en is het antwoord `500 herstel_niet_vastgelegd` (met
+     `flows_geblokkeerd`, het voorstel, de momentopname `voor_herstel` en bij een antwoord van Node-RED de
+     `oorzaak`). Het voorstel blijft op `toepassen_gestart`; de worker sluit het na de geldigheid af als onderbroken
+     (uitkomst onbekend). De nonce en de goedkeuring zijn al opgemaakt: het verzoek wordt nooit blind herhaald.
+     **Grens (R-TECH-2):** het bewaren van het antwoord bij de `Idempotency-Key` en de commit gebeuren daarna, in
+     `idempotency.run_idempotent`, buiten deze blokkade. Mislukt dat (bijvoorbeeld de database valt weg), dan is
+     het een serverfout en is alles van na het schrijven teruggedraaid: de flows houden in het flowregister hun stand
+     (de inhoud van het herstel is vóór het schrijven gescand) tot de volgende synchronisatie de stand van Node-RED
+     vastlegt; voorstel, nonce en goedkeuring zoals hierboven. Test:
+     `test_a_failing_commit_after_writing_is_outside_the_blockade_and_never_repeated_blindly`.
 - **Wie mag `apply` aanroepen:** een beheerder of de Hub-dienst. De bescherming zit in de ondertekende opdracht, niet
   in wie hem aflevert.
 - **Geen spoor bij onzin:** een verzoek zonder geldige vorm, handtekening of geldigheid wordt geweigerd en nergens
@@ -355,12 +380,23 @@ Deze ronde bouwt de vijf werkpakketten:
   bewaard antwoord. De controle zit centraal in `idempotency.run_idempotent` (vóór de verzoek-hash), en geldt daarmee
   ook voor de andere wijzigingen, voor het deel van het verzoek dat zij daar laten vastleggen. Een losse surrogaat
   kan de Hub niet ondertekenen (canonieke JSON in UTF-8); een ondertekend verzoek met een NUL wordt zo ook geweigerd.
+  Dat geldt ook voor een sleutel die met `_sa` begint: `jsonable_encoder` laat die standaard stil weg, daarom draait
+  de controle (en de verzoek-hash) met `sqlalchemy_safe=False` (R-VEILIG-2); een ander verzoek dat alleen in zo'n
+  sleutel verschilt, is met dezelfde `Idempotency-Key` dus `422 idempotency_key_reused`.
+- **Te diep genest (S-P2-320, R-VEILIG-2):** een verzoek dat dieper genest is dan 64 niveaus
+  (`idempotency.MAX_DEPTH`; objecten en lijsten, het verzoek zelf is niveau 1) is `422 validation_error`, vóór er
+  iets gebeurt. Die controle zit ook in `run_idempotent`, vóór `jsonable_encoder` (die werkt recursief en gaf bij
+  ongeveer 990 niveaus een serverfout), en geldt dus voor elke wijziging die daar langs gaat. De grens ligt ruim
+  boven de 32 niveaus van doel, parameters en ondertekende gegevens, die hun eigen weigering houden.
 - **Het slot op het flowregister** (`snapshots.lock_register`; synchronisatie, blokkeren bij mislukken en herstel
   schrijven het register onder één slot): wie erop wacht, wacht hooguit 30 seconden
   (`lock_timeout`, alleen rond het nemen van dat slot; de rijsloten in dezelfde transactie houden hun gewone
   wachttijd). Daarna `409 flowregister_bezig` met `Retry-After: 30`; er is niets gewijzigd. Een herstel dat zo
   stopt, heeft zijn nonce nog niet verbruikt; de worker probeert het in de volgende ronde opnieuw. Wacht een herstel
-  na het schrijven te lang, dan geldt punt 4 hierboven.
+  na het schrijven te lang, dan geldt punt 4 hierboven. **Uitzondering: het blokkeren bij mislukken** wacht
+  onbegrensd en geeft dus nooit op omdat een ander het slot houdt (R-TECH-1 van S-P2-320): anders bleven de flows
+  open terwijl de synchronisatie of het herstel vastliep, met de melding "er is niets gewijzigd". Dat geeft geen
+  deadlock: het blokkeren heeft na zijn rollback zelf niets meer vast.
 - **Terugdraaien:** `POST /connector/v1/rollback` blijft `501`. Een herstel draai je terug met een nieuw voorstel
   naar de momentopname van vóór het herstel.
 - **Andere `credentialSecret`:** Node-RED weigert het blok dan zelf (gemeten: `400`); er verandert niets en de dienst
@@ -377,9 +413,10 @@ Deze ronde bouwt de vijf werkpakketten:
 | Node-RED onbereikbaar | `503 node_red_unavailable` met `Retry-After: 30` |
 | Node-RED antwoordt met een fout | `502 node_red_fout` |
 | Weigering door beleid | `403 forbidden` met `details.reason` |
-| NUL-teken of losse surrogaat in een wijziging | `422 validation_error` (er gebeurt niets) |
-| Slot op het flowregister na 30 s nog bezet | `409 flowregister_bezig` met `Retry-After: 30` (er is niets gewijzigd) |
-| Herstel vastgelopen na het schrijven | `500 herstel_niet_vastgelegd` (alle flows geblokkeerd) |
+| NUL-teken of losse surrogaat in een wijziging (ook in een sleutel die met `_sa` begint) | `422 validation_error` (er gebeurt niets) |
+| Wijziging dieper genest dan 64 niveaus | `422 validation_error` (er gebeurt niets) |
+| Slot op het flowregister na 30 s nog bezet | `409 flowregister_bezig` met `Retry-After: 30` (er is niets gewijzigd); het blokkeren bij mislukken wacht wel tot het slot vrij is en geeft nooit `409` |
+| Herstel vastgelopen na het schrijven, of een onbruikbaar antwoord van Node-RED daarna | `500 herstel_niet_vastgelegd` (alle flows geblokkeerd) |
 | Te veel verzoeken van een flow | `429 rate_limited` |
 | Hub niet gekoppeld bij een actieverzoek | `503 hub_unavailable` |
 

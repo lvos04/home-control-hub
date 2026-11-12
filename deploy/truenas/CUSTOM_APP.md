@@ -129,7 +129,7 @@ vastgesteld (NIET GEVALIDEERD).
 | `HCH_PUBLIC_URL` | adres waarop de Hub deze app bereikt, alleen ter informatie bij het koppelen |
 | `HCH_AUTHENTIK_SYNC_INTERVAL_S` | hoe vaak (seconden) logins en rechten uit Authentik gelezen worden; standaard `300`, `0` = uit |
 | `HCH_NODE_RED_SYNC_INTERVAL_S` | hoe vaak (seconden) de flows uit Node-RED gelezen en gecontroleerd worden; standaard `60`, `0` = uit |
-| `HCH_NODE_RED_DATA_DIR` | pad in de container waar de datamap van Node-RED **alleen-lezen** is gekoppeld; leeg = versies van flows zonder credentials. **Laat leeg** bij een Node-RED volgens het manifest van `jelly-leon-platform` (zie "Node-RED koppelen") |
+| `HCH_NODE_RED_DATA_DIR` | pad in de container waar de datamap van Node-RED **alleen-lezen** is gekoppeld; leeg = versies van flows zonder credentials. Een beschrijfbare koppeling telt niet: de status blijft `niet_gekoppeld` (de synchronisatie noemt dan de reden `niet_alleen_lezen`). **Laat leeg** bij een Node-RED volgens het manifest van `jelly-leon-platform` (zie "Node-RED koppelen") |
 | `HCH_NODE_RED_ALLOWED_MODULES` | extra toegestane Node-RED-modules, gescheiden door komma's; leeg = alleen de kern `node-red` |
 
 De oude naam `ENROLLMENT_TOKEN` wordt in deze release nog gelezen (met een waarschuwing in de app-log) en vervalt
