@@ -368,6 +368,40 @@ def test_too_large_parameters_are_refused(linked: Any, flow: Any) -> None:
     assert r.status_code == 422 and r.json()["code"] == "parameters_te_groot"
 
 
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        ("target", '{"type":"user","id":"user-1\\ud800"}'),
+        ("target", '{"type":"user","\\udfff":"user-1"}'),
+        ("parameters", '{"tekst":"x\\ud800"}'),
+        ("parameters", '{"lijst":[{"diep":"\\udc00"}]}'),
+    ],
+)
+def test_lone_surrogate_in_target_or_parameters_is_a_422(
+    linked: Any, auth: Any, flow: Any, field: str, raw: str
+) -> None:
+    """Vervolgpunt R-VEILIG-5 (S-P2-295): een losse surrogaat (geldige JSON-escape, maar geen tekst die in UTF-8 kan)
+    in het doel of de parameters gaf bij de groottecontrole een serverfout (500). Nu is het een invoerfout (422
+    ``validation_error`` met het veld); er wordt niets vastgelegd en niets naar de Hub gestuurd."""
+    _, token = flow
+    body = {"target": '{"type":"user","id":"user-1"}', "parameters": '{"tekst":"x"}'}
+    body[field] = raw
+    target, parameters = body["target"], body["parameters"]
+    content = f'{{"action_id":"notification.send","target":{target},"parameters":{parameters},"reason":"test"}}'
+    r = linked.post(
+        f"{FLOW_API}/actions",
+        content=content,
+        headers={**idem(b11.bearer(token)), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
+    assert [f["veld"] for f in r.json()["details"]["fouten"]] == [field], r.text
+    assert _requests(linked, auth) == []
+    assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
+    ok = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY)
+    assert ok.status_code == 202, ok.text
+
+
 def test_reason_is_required(linked: Any, flow: Any) -> None:
     _, token = flow
     r = linked.post(

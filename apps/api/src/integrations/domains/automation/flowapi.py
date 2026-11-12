@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -150,6 +150,18 @@ class ActionIn(BaseModel):
     risk_claim: Literal["R0", "R1", "R2", "R3"] | None = None
     #: de aflevering waar dit verzoek een gevolg van is: daarmee wordt ontdubbeld (EX46) en de keten bewaakt
     trigger_delivery_id: uuid.UUID | None = None
+
+    @field_validator("target", "parameters")
+    @classmethod
+    def _utf8_text(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die in UTF-8 kan), ook in
+        een sleutel of diep genest, is een invoerfout (422 ``validation_error``), geen serverfout bij de
+        groottecontrole (vervolgpunt R-VEILIG-5 van S-P2-295)."""
+        try:
+            json.dumps(value, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("bevat een losse surrogaat; alleen tekst die in UTF-8 kan is toegestaan") from exc
+        return value
 
 
 def _flow(session: Session, identity: FlowIdentity, *, lock: bool = False) -> AutomationFlow:
