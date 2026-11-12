@@ -480,6 +480,211 @@ def test_a_restore_and_the_worker_at_the_same_time_block_nothing(
     assert len(b11.outbox(linked, "flow.action.requested")) == 1
 
 
+def _lock_waits(linked: Any) -> list[str]:
+    """Het soort slot waarop databaseverbindingen van deze test nu wachten (pg_stat_activity; alleen lezen)."""
+    with linked.app.state.db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT wait_event FROM pg_stat_activity "
+                "WHERE datname = current_database() AND wait_event_type = 'Lock' ORDER BY wait_event"
+            )
+        ).all()
+    return [str(row[0]) for row in rows]
+
+
+def _wait_for_lock_waits(linked: Any, count: int, seconds: float = 15.0) -> list[str]:
+    deadline = time.monotonic() + seconds
+    while len(_lock_waits(linked)) < count and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _lock_waits(linked)
+
+
+def _deadlocks(linked: Any, *workers: Worker) -> int:
+    """Het aantal deadlocks in deze database. Eerst gaan de verbindingen dicht, zodat hun tellingen bij de server
+    staan; een deadlock zou ook als fout in een van de uitkomsten van de test zelf zichtbaar zijn."""
+    for engine in (linked.app.state.db.engine, *(w.db.engine for w in workers)):
+        engine.dispose()
+    time.sleep(1.0)
+    with linked.app.state.db.engine.connect() as conn:
+        conn.execute(text("SELECT pg_stat_clear_snapshot()"))
+        found = conn.execute(
+            text("SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()")
+        ).scalar_one()
+    return int(found)
+
+
+def _in_thread(target: Any, out: dict[str, Any], name: str) -> threading.Thread:
+    def body() -> None:
+        try:
+            out[name] = target()
+        except Exception as exc:  # de test zelf beoordeelt de uitkomst
+            out[name] = exc
+
+    thread = threading.Thread(target=body, name=name)
+    thread.start()
+    return thread
+
+
+def test_while_a_restore_holds_the_register_lock_the_worker_and_a_snapshot_wait(
+    scene: Scene,
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-TECH-2 en R-VEILIG-1 (S-P2-300): het slot op het flowregister in ``restore.apply`` (vóór de goedkeuring, de
+    readback en de momentopname ``voor_herstel``). Terwijl het herstel daar stilstaat, wachten de synchronisatie van
+    de worker en ``POST …/snapshots`` op dat slot ('advisory'): ze lezen Node-RED pas na de commit van het herstel uit.
+    De flow-API (actieverzoek, claim) en ``PUT …/state`` gebruiken het slot niet en lopen door. Daarna is alles
+    geslaagd, zonder deadlock en zonder geblokkeerde flow. Zonder het slot in ``apply`` wacht niets: dan faalt deze
+    test."""
+    worker = Worker(
+        make_settings(node_red_sync_interval_s=60, node_red_data_dir=node_red_fake.data_dir),
+        transport=fake_hub.transport,
+    )
+    worker.automation_step(100.0)
+    flow, token = b11.ready_flow(linked, auth, TAB, "notification.send")
+    request = scene.sign(scene.propose())
+    before = _deadlocks(linked, worker)
+
+    holding, go = threading.Event(), threading.Event()
+    find_proposal = restore._find_proposal
+
+    def hold_then_find(*args: Any, **kwargs: Any) -> Any:
+        # hier heeft apply het slot op het flowregister al genomen (snapshots.lock_register, vlak hiervoor)
+        holding.set()
+        go.wait(30)
+        return find_proposal(*args, **kwargs)
+
+    monkeypatch.setattr(restore, "_find_proposal", hold_then_find)
+    out: dict[str, Any] = {}
+    restoring = _in_thread(lambda: scene.apply(request), out, "herstel")
+    assert holding.wait(20), "het herstel kwam niet bij de goedkeuring"
+    worker.state.next_node_red_sync = 0
+    syncing = _in_thread(lambda: worker.automation_step(200.0), out, "worker")
+    snapping = _in_thread(lambda: linked.post(f"{A}/snapshots", headers=idem(auth("admin"))), out, "momentopname")
+    waits = _wait_for_lock_waits(linked, 2)
+    others: list[threading.Thread] = []
+    for name, call in (
+        (
+            "actie",
+            lambda: b11.request_action(
+                linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+            ),
+        ),
+        ("claim", lambda: b11.claim(linked, token)),
+        ("pauze", lambda: b11.put_flow(linked, auth, flow["id"], "state", {"status": "gepauzeerd", "reden": "proef"})),
+    ):
+        thread = _in_thread(call, out, name)
+        thread.join(15)  # één voor één, terwijl het herstel het slot nog vasthoudt
+        others.append(thread)
+    through_while_held = {t.name: not t.is_alive() for t in others}
+    still_waiting = {"worker": syncing.is_alive(), "momentopname": snapping.is_alive()}
+    go.set()
+    for thread in (restoring, syncing, snapping, *others):
+        thread.join(40)
+    monkeypatch.undo()
+
+    assert waits == ["advisory", "advisory"], waits
+    assert still_waiting == {"worker": True, "momentopname": True}, still_waiting
+    assert through_while_held == {"actie": True, "claim": True, "pauze": True}, through_while_held
+    assert out["herstel"].status_code == 200 and out["herstel"].json()["status"] == "uitgevoerd", out["herstel"]
+    assert out["worker"] is None, out["worker"]
+    assert worker.state.stats["node_red_sync_failed"] == 0 and worker.state.stats["node_red_syncs"] == 2
+    assert out["momentopname"].status_code == 201, out["momentopname"].text
+    assert out["actie"].status_code == 202, out["actie"].text
+    assert out["claim"]["flow_status"] == "actief"
+    assert out["pauze"].status_code == 200, out["pauze"].text
+    states = {f["source_flow_id"]: (f["status"], f["blocked_reason"]) for f in b11.flows(linked, auth)}
+    assert states == {TAB: ("gepauzeerd", None)}, states
+    assert b11.outbox(linked, "flow.policy.blocked") == []
+    assert _deadlocks(linked, worker) == before
+
+
+def test_blocking_after_a_failed_sync_waits_for_a_restore_that_holds_the_register_lock(
+    scene: Scene,
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-TECH-2 en R-VEILIG-1 (S-P2-300): het slot in ``snapshots._block_after_failure``. Een vastgelopen
+    synchronisatie draait eerst terug (dat geeft het slot vrij) en blokkeert daarna in een aparte transactie alle
+    flows. In dat venster kan een herstel het slot nemen. Hier staat het herstel stil na zijn momentopname
+    ``na_herstel``: het heeft de flow (geblokkeerd met ``synchronisatie_mislukt``, de configuratie is nu schoon) op
+    gepauzeerd gezet, nog niet gecommit. Het blokkeren (hier rechtstreeks aangeroepen, zoals na de rollback van de
+    synchronisatie) wacht op het slot ('advisory') en leest daarna de nieuwe stand: de flow eindigt geblokkeerd. Zonder
+    het slot las het blokkeren de oude stand (al geblokkeerd, dus niets te doen) en eindigde de flow na de commit van
+    het herstel als gepauzeerd: open terwijl de synchronisatie vastliep."""
+    worker = Worker(
+        make_settings(node_red_sync_interval_s=60, node_red_data_dir=node_red_fake.data_dir),
+        transport=fake_hub.transport,
+    )
+    worker.automation_step(100.0)
+    flow, token = b11.ready_flow(linked, auth, TAB, "notification.send")
+
+    def scan_fails(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("ingespoten fout")
+
+    monkeypatch.setattr(snapshots, "apply_scan", scan_fails)
+    worker.state.next_node_red_sync = 0
+    worker.automation_step(200.0)
+    monkeypatch.undo()
+    assert worker.state.stats["node_red_sync_failed"] == 1
+    blocked = b11.flow_detail(linked, auth, flow["id"])
+    assert (blocked["status"], blocked["blocked_reason"]) == ("geblokkeerd", "synchronisatie_mislukt")
+    request = scene.sign(scene.propose())
+    before = _deadlocks(linked, worker)
+
+    recorded, go = threading.Event(), threading.Event()
+    record_state = snapshots.record_state
+
+    def record_then_wait(*args: Any, **kwargs: Any) -> Any:
+        result = record_state(*args, **kwargs)
+        if kwargs.get("reason") == "na_herstel":
+            recorded.set()
+            go.wait(30)
+        return result
+
+    monkeypatch.setattr(snapshots, "record_state", record_then_wait)
+    out: dict[str, Any] = {}
+    restoring = _in_thread(lambda: scene.apply(request), out, "herstel")
+    assert recorded.wait(20), "het herstel kwam niet tot de momentopname na_herstel"
+
+    def block_like_a_failed_sync() -> Any:
+        with linked.app.state.db.sessions() as session:
+            return snapshots._block_after_failure(
+                session, RuntimeError("ingespoten fout"), trace_id=str(uuid.uuid4()), now=utcnow()
+            )
+
+    blocking = _in_thread(block_like_a_failed_sync, out, "blokkeren")
+    waits = _wait_for_lock_waits(linked, 1)
+    still_waiting = blocking.is_alive()
+    go.set()
+    restoring.join(40)
+    blocking.join(40)
+    monkeypatch.undo()
+
+    assert waits == ["advisory"], waits
+    assert still_waiting, "het blokkeren moet op het slot van het herstel wachten"
+    assert out["herstel"].status_code == 200 and out["herstel"].json()["status"] == "uitgevoerd", out["herstel"]
+    assert isinstance(out["blokkeren"], snapshots.SyncResult) and out["blokkeren"].ok is False, out["blokkeren"]
+    after = b11.flow_detail(linked, auth, flow["id"])
+    assert (after["status"], after["blocked_reason"]) == ("geblokkeerd", "synchronisatie_mislukt"), after
+    sync = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert sync["ok"] is False and sync["fout"]["reason"] == "synchronisatie_mislukt", sync
+    act = b11.request_action(
+        linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+    )
+    assert act.status_code == 403 and act.json()["details"]["reason"] == "flow_geblokkeerd", act.text
+    assert b11.outbox(linked, "flow.action.requested") == []
+    assert _deadlocks(linked, worker) == before
+
+
 # ------------------------------------------------------------- weigeringen vóórdat er iets is vastgelegd (vorm, sleutel, tijd)
 def _unsigned(request: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in request.items() if k != "signature"}
