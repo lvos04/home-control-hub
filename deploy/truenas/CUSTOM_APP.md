@@ -154,8 +154,9 @@ Node-RED is een **eigen standaard Custom App**. De installatieweg is het manifes
 (`install/manifests/node-red.manifest.yaml`, gebruiker `568:568`); deze app beschrijft geen eigen formuliervelden
 voor Node-RED. Wat je hier instelt staat in `deploy/truenas/NODE_RED_CUSTOM_APP.md`. In het kort:
 
-1. Installeer Node-RED volgens dat manifest. Er is geen anonieme toegang tot de editor (besluit C-11); het manifest
-   volgt dat pas na stap S-P2-410. Zodra er een dienstaccount is en het manifest nog "anoniem alleen lezen" heeft,
+1. Installeer Node-RED volgens dat manifest. Er is geen anonieme toegang tot de editor (besluit C-11). Het manifest
+   volgt dit sinds stap S-P2-410: `adminAuth` in `FLOWS` zonder anonieme rechten, dus ook geen anoniem lezen. Zodra
+   er een dienstaccount is, meet deze app dat: geeft een Node-RED anoniem toch flows, nodes of instellingen terug, dan
    geeft de controle `anoniem_geweigerd` een afwijking.
 2. Een beheerder en het dienstaccount voor deze app komen er via een voorziening zonder geheim in het formulier
    (besluit C-12; ontwerp in `appstore-en-fork`, bouw na fase P2). Het beveiligingsprofiel van deze app is **geen**
