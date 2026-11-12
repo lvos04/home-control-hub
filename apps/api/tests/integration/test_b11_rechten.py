@@ -5,9 +5,11 @@ toegang (beveiligingsprofiel, eigenaar, triggers, grenzen, flow-tokens; ook het 
 beheerder; bediening (pauzeren en hervatten, isolatie meten, momentopname, opnieuw aanbieden, proefrun) voor de
 beheerder en de operator; events aanbieden en de uitkomst van een actieverzoek melden alleen voor de Hub (dienst-JWT).
 Een viewer of een kind krijgt op elke schrijvende route ``403``; een operator op elke route die alleen voor de
-beheerder is. Een geweigerde aanvraag legt niets vast (geen auditregel, geen event, de flow blijft gelijk); dezelfde
-aanvraag van de beheerder lukt en legt de auditregel vast die de route belooft. De lijst met routes komt uit de app
-zelf: een nieuwe schrijvende route zonder plaats in deze indeling laat de eerste test falen.
+beheerder is; de Hub (dienst-JWT, rol ``service``, contract §4.3: "service is nooit admin") op elke route van de
+beheerder en van de operator. Een geweigerde aanvraag legt niets vast (geen auditregel, geen event, de flow blijft
+gelijk); dezelfde aanvraag van de beheerder lukt en legt de auditregel vast die de route belooft. De lijst met routes
+komt uit de app zelf (de OpenAPI-beschrijving én de routers): een nieuwe schrijvende route zonder plaats in deze
+indeling, ook een die niet in de OpenAPI-beschrijving staat, laat de eerste test falen.
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ import uuid
 from typing import Any
 
 import pytest
+from fastapi.routing import APIRoute
 
+from integrations.domains.automation import flowapi
+from integrations.domains.automation import router as automation_api
 from tests import b11
 from tests.b11 import FLOW_API, A
 from tests.conftest import idem, setup_node_red
@@ -108,7 +113,8 @@ def _assert_forbidden(r: Any, route: tuple[str, str], role: str) -> None:
 
 def test_every_writing_route_of_the_automation_api_has_a_place_in_the_role_table(linked: Any) -> None:
     """De indeling hieronder dekt precies de schrijvende routes van de app (gelezen uit de OpenAPI-beschrijving die de
-    app zelf maakt; de flow-API heeft een eigen aanmelding en staat in ``test_b11_003_veilige_acties.py``)."""
+    app zelf maakt en uit de router van de beheer-API; de flow-API heeft een eigen aanmelding en staat in
+    ``test_b11_003_veilige_acties.py``)."""
     paths = linked.app.openapi()["paths"]
     found = {
         (method.upper(), path)
@@ -120,6 +126,24 @@ def test_every_writing_route_of_the_automation_api_has_a_place_in_the_role_table
     assert len(found) >= 13, "de lijst met routes is niet leeg of half gelezen"
     table = set(ADMIN_ONLY) | set(ADMIN_OR_OPERATOR) | set(HUB_ONLY)
     assert found == table, {"niet_in_de_indeling": sorted(found - table), "bestaat_niet": sorted(table - found)}
+    # een route met include_in_schema=False staat niet in de OpenAPI-beschrijving; daarom ook uit de routers zelf
+    # (R-TECH-1 van S-P2-310): geen route van de beheer-API of de flow-API is verborgen, en de router van de
+    # beheer-API heeft precies dezelfde schrijvende routes
+    routes = [r for r in [*automation_api.router.routes, *flowapi.router.routes] if isinstance(r, APIRoute)]
+    assert len(routes) >= 20, "de routers zijn niet leeg of half gelezen"
+    hidden = sorted((sorted(r.methods), r.path) for r in routes if not r.include_in_schema)
+    assert hidden == [], {"verborgen_routes": hidden}
+    in_router = {
+        (method, r.path)
+        for r in automation_api.router.routes
+        if isinstance(r, APIRoute)
+        for method in r.methods
+        if method in WRITING
+    }
+    assert in_router == table, {
+        "niet_in_de_indeling": sorted(in_router - table),
+        "bestaat_niet": sorted(table - in_router),
+    }
     assert not set(ADMIN_ONLY) & set(ADMIN_OR_OPERATOR) and not set(HUB_ONLY) & (
         set(ADMIN_ONLY) | set(ADMIN_OR_OPERATOR)
     )
@@ -151,6 +175,20 @@ def test_operator_gets_403_on_every_admin_only_route_and_only_the_admin_gets_the
     assert ok.status_code in (200, 201), (route, ok.status_code, ok.text)
     actions = [a["action"] for a in b11.audit_rows(linked)]
     assert actions[: len(before[0])] == before[0] and actions[len(before[0]) :] == [ADMIN_ONLY[route]], actions
+
+
+@pytest.mark.parametrize("route", [*ADMIN_ONLY, *ADMIN_OR_OPERATOR], ids=lambda r: f"{r[0]} {r[1]}")
+def test_the_hub_gets_403_on_every_admin_and_operator_route_and_nothing_is_recorded(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any, route: tuple[str, str]
+) -> None:
+    """R-VEILIG-1 van S-P2-310: de Hub meldt zich met een dienst-JWT (rol ``service``) en die rol is nooit ``admin``
+    (contract §4.3). Op elke route van de beheerder en van de operator krijgt de Hub ``403`` en wordt er niets
+    vastgelegd; alleen events aanbieden en een uitkomst melden zijn voor de Hub (zie de test hierna)."""
+    detail, _ = flow
+    before = _recorded(linked, auth, detail["id"])
+    r = _request(linked, auth, detail["id"], route, fake_hub.service_auth())
+    _assert_forbidden(r, route, "service")
+    assert _recorded(linked, auth, detail["id"]) == before, route
 
 
 @pytest.mark.parametrize("route", list(ADMIN_OR_OPERATOR), ids=lambda r: f"{r[0]} {r[1]}")
