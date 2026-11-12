@@ -19,8 +19,16 @@
   teruggedraaid (ook de nonce, het verzoek mag opnieuw); na het schrijven valt het onder het volgende punt.
 - **Blokkeren bij mislukken ná het schrijven** (S-P2-320; besluit van de gebruiker 2026-11-12): loopt het herstel
   vast nádat het naar Node-RED schreef (een andere uitzondering dan een ``NodeRedError``, bij het schrijven, het
-  teruglezen of het vastleggen van ``na_herstel``), dan blokkeert een eigen transactie elke flow met
-  ``synchronisatie_mislukt`` (``_blocked_after_writing``) en is het antwoord ``500 herstel_niet_vastgelegd``.
+  teruglezen, het sluiten van de client of het vastleggen van ``na_herstel`` tot en met de ``flush``), of geeft
+  Node-RED op het schrijven of het teruglezen een antwoord dat de dienst niet kan gebruiken
+  (``snapshots.UNUSABLE_ANSWER_REASONS``, keuze R-VEILIG-4 (a)), dan blokkeert een eigen transactie elke flow met
+  ``synchronisatie_mislukt`` (``_blocked_after_writing``) en is het antwoord ``500 herstel_niet_vastgelegd``. Wat
+  daarna nog in ``idempotency.run_idempotent`` gebeurt (het antwoord bewaren bij de Idempotency-Key en de commit),
+  valt buiten die blokkade: zie ``_finish_apply``.
+- **Credentials** (R-VEILIG-5 van S-P2-320): het credentials-bestand uit de momentopname wordt alleen teruggezet als
+  ook de huidige inloggegevens vast te leggen zijn (stand ``meegenomen``), zowel bij het voorstel als vlak voor het
+  schrijven; anders kan terugdraaien ze niet terugzetten. Dan gaan alleen de flows terug en zeggen het voorstel en
+  het antwoord dat uitdrukkelijk (``terugzetten: false`` en ``credentials_niet_teruggezet``).
 - **Nooit**: een herstel zonder ondertekend verzoek, een tweede uitvoering met dezelfde nonce of goedkeuring, een
   herstel naar flows die het flowbeleid nu zou blokkeren, of een geheim in log, event, audit of antwoord. De
   credentials gaan als het door Node-RED zelf versleutelde bestand heen en terug; deze dienst kan ze niet lezen.
@@ -71,6 +79,19 @@ APPLY_STATUS_NL = (
     "Toepassen kan alleen met een door de Hub ondertekend uitvoeringsverzoek met een menselijke goedkeuring (R2)."
 )
 UPSTREAM_UNKNOWN = ("onbereikbaar", "timeout", "http_5xx")
+#: reden waarom het credentials-bestand uit de momentopname niet wordt teruggezet (R-VEILIG-5 van S-P2-320)
+CREDENTIALS_NOT_RECORDED = "huidige_credentials_niet_vastgelegd"
+CREDENTIALS_NOT_RECORDED_NL = (
+    "Het credentials-bestand uit de momentopname wordt niet teruggezet: de huidige inloggegevens van de nodes zijn "
+    "niet vast te leggen (de datamap van Node-RED is niet alleen-lezen gekoppeld, of het bestand ontbreekt of is "
+    "onleesbaar), dus terugdraaien zou ze niet kunnen terugzetten. Alleen de flows gaan terug; bestaande nodes houden "
+    "hun huidige inloggegevens en nodes die terugkomen hebben er geen."
+)
+CREDENTIALS_NOT_RESTORED_NL = (
+    "Het credentials-bestand uit de momentopname is niet teruggezet: de huidige inloggegevens van de nodes waren bij "
+    "het voorstel of vlak voor het schrijven niet vast te leggen, dus terugdraaien zou ze niet kunnen terugzetten. "
+    "Alleen de flows zijn teruggezet; bestaande nodes hebben hun inloggegevens gehouden."
+)
 Result = tuple[int, Any, dict[str, str]]
 
 log = logging.getLogger("integrations.automation")
@@ -134,7 +155,8 @@ def _policy_problems(scan: policy.ScanResult) -> list[dict[str, Any]]:
     return problems[:20]
 
 
-def _preview_hash(snapshot: AutomationSnapshot, base_checksum: str) -> str:
+def _preview_hash(snapshot: AutomationSnapshot, base_checksum: str, restore_credentials: bool) -> str:
+    """Bindt de goedkeuring aan precies deze wijziging, ook aan of het credentials-bestand meegaat (R-VEILIG-5)."""
     return _bare(
         execreq.canonical_sha256(
             {
@@ -144,9 +166,21 @@ def _preview_hash(snapshot: AutomationSnapshot, base_checksum: str) -> str:
                 "base_checksum": base_checksum,
                 "target_checksum": snapshot.checksum_sha256,
                 "target_credentials_sha256": snapshot.credentials_sha256,
+                "credentials_terugzetten": restore_credentials,
             }
         )
     )
+
+
+def _credentials_restorable(has_credentials: bool, live: snapshots.CredentialsBlob) -> tuple[bool, str | None]:
+    """Gaat het credentials-bestand uit de momentopname mee, en zo nee, waarom niet (R-VEILIG-5 van S-P2-320)? Alleen
+    als de huidige inloggegevens zelf vast te leggen zijn (stand ``meegenomen``): anders zou de momentopname
+    ``voor_herstel`` ze missen en kan terugdraaien ze niet terugzetten."""
+    if not has_credentials:
+        return False, None
+    if live.status != "meegenomen":
+        return False, CREDENTIALS_NOT_RECORDED
+    return True, None
 
 
 # ----------------------------------------------------------------------------------------------------------- voorstel
@@ -198,9 +232,8 @@ def propose(
         )
     base_checksum = policy.flows_checksum(current.flows)
     live = snapshots.read_credentials(settings.node_red_data_dir)
-    credentials_differ = (
-        snapshot.has_credentials and live.sha256 is not None and live.sha256 != snapshot.credentials_sha256
-    )
+    restore_credentials, not_restored = _credentials_restorable(snapshot.has_credentials, live)
+    credentials_differ = restore_credentials and live.sha256 is not None and live.sha256 != snapshot.credentials_sha256
     if base_checksum == snapshot.checksum_sha256 and not credentials_differ:
         raise ApiError(
             409,
@@ -215,6 +248,8 @@ def propose(
             "gekoppeld). Nodes die door het herstel terugkomen, hebben daarna geen inloggegevens; bestaande nodes "
             "houden de hunne."
         )
+    elif not restore_credentials:
+        warnings.append(CREDENTIALS_NOT_RECORDED_NL)
     else:
         warnings.append(
             "Het credentials-bestand uit de momentopname vervangt alle huidige inloggegevens van nodes. Het is "
@@ -234,6 +269,9 @@ def propose(
             "credentials_present": snapshot.has_credentials,
             "status": (snapshot.policy_summary or {}).get("credentials_status"),
             "wijzigt": bool(credentials_differ) if live.sha256 is not None else None,
+            # gaat het credentials-bestand mee, en zo nee waarom niet (R-VEILIG-5); de goedkeuring is hieraan gebonden
+            "terugzetten": restore_credentials,
+            "reden": not_restored,
         },
         "rollback_recipe": {
             "soort": "momentopname",
@@ -254,7 +292,7 @@ def propose(
         base_rev=current.rev,
         base_checksum=base_checksum,
         target_checksum=snapshot.checksum_sha256,
-        preview_hash=_preview_hash(snapshot, base_checksum),
+        preview_hash=_preview_hash(snapshot, base_checksum, restore_credentials),
         plan=plan,
         status="voorgesteld",
         requested_by=principal.audit_id[:200],
@@ -538,74 +576,100 @@ def apply(
         client = client_from_source(session, settings, vault, transport)
     except NodeRedError as exc:
         raise nodered.api_error(exc) from exc
-    with client:
-        try:
-            current = client.get_flows()
-            node_sets = client.get_nodes()
-            nr_settings = client.get_settings()
-        except NodeRedError as exc:
-            raise nodered.api_error(exc) from exc
-        before_checksum = policy.flows_checksum(current.flows)
-        if before_checksum != row.base_checksum:
-            _fail(session, row, reason="doel_gewijzigd", trace_id=trace_id, now=now)
-            return refused(
-                _refuse(
-                    409,
-                    "doel_gewijzigd",
-                    "De flows in Node-RED zijn gewijzigd sinds de preview; er is niets uitgevoerd. Maak een nieuw "
-                    "voorstel.",
-                    trace_id,
-                    {"resource_etag": _prefixed(before_checksum), "verwacht": _prefixed(row.base_checksum)},
-                )
-            )
-        modules = policy.type_modules(node_sets)
-        problems = _policy_problems(policy.scan(target_flows, modules, settings.node_red_allowed_modules))
-        if problems:
-            _fail(session, row, reason="momentopname_niet_toegestaan", trace_id=trace_id, now=now)
-            return refused(
-                _refuse(
-                    409,
-                    "momentopname_niet_toegestaan",
-                    "De momentopname bevat flows die het flowbeleid nu blokkeert; er is niets uitgevoerd.",
-                    trace_id,
-                    {"bevindingen": problems},
-                )
-            )
-        # momentopname vóór de wijziging; samen met de nonce en de goedkeuring definitief vastgelegd vóór het schrijven
-        version = str(nr_settings.get("version"))[:40] if nr_settings.get("version") else None
-        pre = snapshots.create_snapshot(
-            session,
-            vault,
-            flows=current.flows,
-            rev=current.rev,
-            credentials=snapshots.read_credentials(settings.node_red_data_dir),
-            reason="voor_herstel",
-            created_by=principal.audit_id,
-            trace_id=trace_id,
-            scan=policy.scan(current.flows, modules, settings.node_red_allowed_modules),
-            node_red_version=version,
-        )
-        row.pre_snapshot_id = pre.id
-        row.result = {"fase": "toepassen_gestart", "at": iso(now)}
-        _set_outcome(session, request_nonce, "gestart")
-        session.commit()
-        written = {"proposal_id": str(row.id), "pre_snapshot_id": str(pre.id)}
-
-        # 10: schrijven en teruglezen. Een NodeRedError is een gemeten uitkomst (zie _finish_apply); elke andere
-        #     uitzondering vanaf hier kan ná het schrijven vallen: dan blokkeren bij mislukken (_blocked_after_writing)
-        write_error: NodeRedError | None = None
-        after: nodered.FlowsDoc | None = None
-        try:
+    #: gezet zodra er naar Node-RED geschreven kan zijn; vanaf dan is elke uitzondering (ook bij het sluiten van de
+    #: client) blokkeren bij mislukken (R-VEILIG-3 van S-P2-320)
+    written: dict[str, str] | None = None
+    try:
+        with client:
             try:
-                client.post_flows(current.rev, target_flows, credentials)
+                current = client.get_flows()
+                node_sets = client.get_nodes()
+                nr_settings = client.get_settings()
+            except NodeRedError as exc:
+                raise nodered.api_error(exc) from exc
+            before_checksum = policy.flows_checksum(current.flows)
+            if before_checksum != row.base_checksum:
+                _fail(session, row, reason="doel_gewijzigd", trace_id=trace_id, now=now)
+                return refused(
+                    _refuse(
+                        409,
+                        "doel_gewijzigd",
+                        "De flows in Node-RED zijn gewijzigd sinds de preview; er is niets uitgevoerd. Maak een nieuw "
+                        "voorstel.",
+                        trace_id,
+                        {"resource_etag": _prefixed(before_checksum), "verwacht": _prefixed(row.base_checksum)},
+                    )
+                )
+            modules = policy.type_modules(node_sets)
+            problems = _policy_problems(policy.scan(target_flows, modules, settings.node_red_allowed_modules))
+            if problems:
+                _fail(session, row, reason="momentopname_niet_toegestaan", trace_id=trace_id, now=now)
+                return refused(
+                    _refuse(
+                        409,
+                        "momentopname_niet_toegestaan",
+                        "De momentopname bevat flows die het flowbeleid nu blokkeert; er is niets uitgevoerd.",
+                        trace_id,
+                        {"bevindingen": problems},
+                    )
+                )
+            # het credentials-bestand gaat alleen mee als het voorstel dat zei én de huidige inloggegevens nu vast te
+            # leggen zijn (R-VEILIG-5): nooit meer dan goedgekeurd, en terugdraaien kan ze altijd terugzetten
+            live = snapshots.read_credentials(settings.node_red_data_dir)
+            planned = bool(((row.plan or {}).get("credentials") or {}).get("terugzetten"))
+            restorable, _reason = _credentials_restorable(credentials is not None, live)
+            send_credentials = credentials if planned and restorable else None
+            credentials_note = (
+                {
+                    "reden": CREDENTIALS_NOT_RECORDED,
+                    "huidige_status": live.status,
+                    "uitleg_nl": CREDENTIALS_NOT_RESTORED_NL,
+                }
+                if credentials is not None and send_credentials is None
+                else None
+            )
+            # momentopname vóór de wijziging; met de nonce en de goedkeuring definitief vastgelegd vóór het schrijven
+            version = str(nr_settings.get("version"))[:40] if nr_settings.get("version") else None
+            pre = snapshots.create_snapshot(
+                session,
+                vault,
+                flows=current.flows,
+                rev=current.rev,
+                credentials=live,
+                reason="voor_herstel",
+                created_by=principal.audit_id,
+                trace_id=trace_id,
+                scan=policy.scan(current.flows, modules, settings.node_red_allowed_modules),
+                node_red_version=version,
+            )
+            row.pre_snapshot_id = pre.id
+            row.result = {"fase": "toepassen_gestart", "at": iso(now)}
+            _set_outcome(session, request_nonce, "gestart")
+            session.commit()
+            written = {"proposal_id": str(row.id), "pre_snapshot_id": str(pre.id)}
+
+            # 10: schrijven en teruglezen. Een gemeten weigering of storing van Node-RED is een uitkomst (zie
+            #     _finish_apply). Een antwoord dat de dienst niet kan gebruiken (op het schrijven of het teruglezen;
+            #     R-VEILIG-4 (a)) en elke andere uitzondering vanaf hier, tot en met het sluiten van de client, kan ná
+            #     het schrijven vallen: dan blokkeren bij mislukken (_blocked_after_writing, hieronder)
+            write_error: NodeRedError | None = None
+            read_error: NodeRedError | None = None
+            after: nodered.FlowsDoc | None = None
+            try:
+                client.post_flows(current.rev, target_flows, send_credentials)
             except NodeRedError as exc:
                 write_error = exc
             try:
                 after = client.get_flows()
-            except NodeRedError:
-                after = None
-        except Exception as exc:
-            raise _blocked_after_writing(session, exc, written=written, trace_id=trace_id, now=now) from exc
+            except NodeRedError as exc:
+                read_error = exc
+            for answer in (write_error, read_error):
+                if answer is not None and answer.reason in snapshots.UNUSABLE_ANSWER_REASONS:
+                    raise answer
+    except Exception as exc:
+        if written is None:
+            raise  # vóór het schrijven: er is niets gewijzigd (zie 9)
+        raise _blocked_after_writing(session, exc, written=written, trace_id=trace_id, now=now) from exc
     return _finish_apply(
         session,
         settings,
@@ -620,7 +684,8 @@ def apply(
         write_error=write_error,
         node_sets=node_sets,
         nr_settings=nr_settings,
-        credentials_sent=credentials is not None,
+        credentials_sent=send_credentials is not None,
+        credentials_note=credentials_note,
         trace_id=trace_id,
         now=now,
     )
@@ -636,8 +701,10 @@ def _blocked_after_writing(
     synchronisatie weer slaagt en een beheerder ze hervat. Het voorstel blijft op ``toepassen_gestart`` (de worker sluit
     het na de geldigheid af als onderbroken, uitkomst onbekend); de nonce en de goedkeuring zijn al opgemaakt, dus het
     verzoek wordt nooit blind herhaald. Lukt ook het blokkeren niet, dan zegt het antwoord dat. Alleen de soort
-    uitzondering wordt genoemd, nooit de tekst."""
+    uitzondering wordt genoemd (bij een antwoord van Node-RED dat de dienst niet kan gebruiken ook de vaste reden ervan,
+    als ``oorzaak``), nooit de tekst."""
     kind = type(exc).__name__[:80]
+    cause = {"oorzaak": exc.reason} if isinstance(exc, NodeRedError) else {}
     try:
         snapshots._block_after_failure(session, exc, trace_id=trace_id, now=now)
         blocked = True
@@ -656,7 +723,7 @@ def _blocked_after_writing(
         "Het herstel is naar Node-RED gestuurd, maar de uitkomst is niet vastgelegd. "
         + gevolg
         + " Controleer de flows in Node-RED; de toestand van vóór het herstel staat in de momentopname 'voor_herstel'.",
-        {**written, "flows_geblokkeerd": blocked, "reden": snapshots.SYNC_FAILED, "uitzondering": kind},
+        {**written, "flows_geblokkeerd": blocked, "reden": snapshots.SYNC_FAILED, "uitzondering": kind, **cause},
     )
 
 
@@ -676,12 +743,22 @@ def _finish_apply(
     node_sets: list[dict[str, Any]],
     nr_settings: dict[str, Any],
     credentials_sent: bool,
+    credentials_note: dict[str, Any] | None,
     trace_id: str,
     now: datetime,
 ) -> Result:
     """Legt de uitkomst van het schrijven vast (:func:`_record_outcome`). Loopt dat vast (een uitzondering bij de
-    momentopname ``na_herstel``, het flowregister, de audit of het slot), dan blokkeren bij mislukken
-    (:func:`_blocked_after_writing`): na het schrijven blijft de oude stand nooit staan."""
+    momentopname ``na_herstel``, het flowregister, de audit of het slot, of een databasefout bij de ``flush`` aan het
+    eind van :func:`_record_outcome`), dan blokkeren bij mislukken (:func:`_blocked_after_writing`): binnen deze
+    functie blijft na het schrijven de oude stand nooit staan.
+
+    **Grens** (R-TECH-2 van S-P2-320): wat daarna nog in ``idempotency.run_idempotent`` gebeurt, het antwoord bewaren
+    bij de ``Idempotency-Key`` en de commit, valt buiten deze blokkade. Mislukt dat (bijvoorbeeld de database valt weg),
+    dan is het antwoord een serverfout en is alles van na het schrijven teruggedraaid: de flows houden in het
+    flowregister hun stand (de inhoud van het herstel is vóór het schrijven gescand) tot de volgende synchronisatie de
+    stand van Node-RED vastlegt, het voorstel blijft op ``toepassen_gestart`` (de worker sluit het na de geldigheid af
+    als onderbroken, uitkomst onbekend) en de nonce en de goedkeuring zijn al opgemaakt (nooit blind herhaald). Test:
+    ``test_a_failing_commit_after_writing_is_outside_the_blockade_and_never_repeated_blindly``."""
     written = {"proposal_id": str(row.id), "pre_snapshot_id": str(row.pre_snapshot_id)}
     try:
         return _record_outcome(
@@ -699,6 +776,7 @@ def _finish_apply(
             node_sets=node_sets,
             nr_settings=nr_settings,
             credentials_sent=credentials_sent,
+            credentials_note=credentials_note,
             trace_id=trace_id,
             now=now,
         )
@@ -722,6 +800,7 @@ def _record_outcome(
     node_sets: list[dict[str, Any]],
     nr_settings: dict[str, Any],
     credentials_sent: bool,
+    credentials_note: dict[str, Any] | None,
     trace_id: str,
     now: datetime,
 ) -> Result:
@@ -766,6 +845,7 @@ def _record_outcome(
             **hashes,
             "readback": readback,
             "credentials_teruggezet": credentials_sent,
+            **({"credentials_niet_teruggezet": credentials_note} if credentials_note else {}),
             "bevestigd_via": "readback" if write_error is not None else "antwoord_en_readback",
             "goedgekeurd_door": str(approval.get("approved_by"))[:200],
             "at": iso(now),
@@ -814,10 +894,14 @@ def _record_outcome(
             "pre_snapshot_id": str(row.pre_snapshot_id),
             "post_snapshot_id": str(row.post_snapshot_id),
             "credentials_teruggezet": credentials_sent,
+            **({"credentials_niet_teruggezet": credentials_note} if credentials_note else {}),
             "rollback_recipe": {"action_id": ACTION_ID, "parameters": {"snapshot_id": str(row.pre_snapshot_id)}},
             "validatie": "Echte Node-RED op de NAS: NIET GEVALIDEERD (echte NAS).",
             "trace_id": trace_id,
         }
+        # een databasefout bij het vastleggen valt hier, binnen de blokkade van _finish_apply (R-TECH-2), en niet pas
+        # bij de commit in run_idempotent (de sessies hebben autoflush=False)
+        session.flush()
         return 200, body, {}
 
     # niet (aantoonbaar) geslaagd: eerlijk melden wat er gemeten is
@@ -837,6 +921,7 @@ def _record_outcome(
         message_nl="Herstel van de flows in Node-RED is niet gelukt.",
         details={"reden": reason, "snapshot_id": str(snapshot.id), **extra},
     )
+    session.flush()  # zie hierboven: binnen de blokkade van _finish_apply (R-TECH-2)
     details = {"proposal_id": str(row.id), "readback": readback, **hashes, "pre_snapshot_id": str(row.pre_snapshot_id)}
     if write_error is not None and write_error.reason == "versie_conflict":
         return _refuse(

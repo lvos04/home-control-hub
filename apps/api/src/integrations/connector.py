@@ -9,7 +9,8 @@
   ``501 capability_unavailable``. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
 - ``rollback`` geeft ``501 capability_unavailable``: terugdraaien van een herstel is een nieuw voorstel naar de
   momentopname ``voor_herstel`` (met een nieuwe goedkeuring), geen aparte route.
-- Een NUL-teken of een losse surrogaat in ``propose`` of ``apply`` is ``422 validation_error`` vóór er iets gebeurt
+- Een NUL-teken of een losse surrogaat in ``propose`` of ``apply`` (ook in een sleutel die met ``_sa`` begint), en een
+  verzoek dat dieper genest is dan ``idempotency.MAX_DEPTH``, is ``422 validation_error`` vóór er iets gebeurt
   (centraal in ``idempotency.run_idempotent``, S-P2-320); bij ``apply`` wordt dan geen nonce verbruikt.
 - Nieuw in contract 1.2 (§6, §3.8): ``GET /connector/v1/hub-link`` (koppelstatus: witte lijst van §3.5 + gepinde
   ``kid``'s en ``rotation_sequence``; dienst-JWT of gebruiker ``viewer``+) en ``POST /connector/v1/hub-link/unlink``

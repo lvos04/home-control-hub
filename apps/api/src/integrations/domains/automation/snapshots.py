@@ -14,17 +14,20 @@
   nadat Node-RED antwoordde (een uitzondering bij het lezen, in de scan, het flowregister of de opslag), dan zet een
   aparte transactie elke flow van de bron op ``geblokkeerd`` met reden ``synchronisatie_mislukt`` en de stand op
   ``ok: false``. Nooit de oude stand; na een geslaagde synchronisatie blijven die flows gepauzeerd tot een beheerder
-  of operator ze hervat. Dat geldt ook als Node-RED wel antwoordde maar het antwoord onbruikbaar is (te groot, geen
-  geldige JSON of de verwachte vorm, een onverwachte status: :data:`UNUSABLE_ANSWER_REASONS`; keuze B1 (b) in S-P2-320,
-  uitwerking van hetzelfde besluit) en als een herstel vastloopt nádat het naar Node-RED schreef (``restore.py``).
-  Antwoordde Node-RED niet (onbereikbaar, time-out) of met een serverfout (5xx), dan blijft de stand van de flows
-  staan en is alleen de synchronisatie eerlijk ``ok: false``.
+  of operator ze hervat. Dat geldt ook als Node-RED wel antwoordde maar de dienst het antwoord niet kan gebruiken (te
+  groot, geen geldige JSON of de verwachte vorm, een onverwachte status, maar ook een Node-RED zonder aanmelding, een
+  geweigerde aanmelding, ontbrekende rechten, een onbekend pad of een doorverwijzing: :data:`UNUSABLE_ANSWER_REASONS`;
+  keuze B1 (b) in S-P2-320, aangescherpt door de regisseur op grond van "grof blokkeren" en C-11) en als een herstel
+  vastloopt nádat het naar Node-RED schreef (``restore.py``). Antwoordde Node-RED niet (onbereikbaar, time-out) of
+  met een serverfout (5xx), dan blijft de stand van de flows staan en is alleen de synchronisatie eerlijk
+  ``ok: false``.
 - **Eén slot op het flowregister** (R-VEILIG-9): de synchronisatie, het blokkeren bij mislukken en het herstel in
   ``restore.py`` nemen eerst :func:`lock_register`, vóór ze :func:`latest_snapshot` en het flowregister lezen. Zo
   schrijven een herstel en de worker nooit tegelijk dezelfde flowversie (zonder slot gaf dat een uniekheidsfout en
   legde het blokkeren bij mislukken alle flows stil), en blokkeert het blokkeren bij mislukken altijd de nieuwste
   stand. Wat het slot per plek doet staat bij :func:`lock_register`. Op het slot wordt hooguit
-  :data:`REGISTER_LOCK_TIMEOUT_MS` gewacht (``409 flowregister_bezig``, S-P2-320).
+  :data:`REGISTER_LOCK_TIMEOUT_MS` gewacht (``409 flowregister_bezig``, S-P2-320); het blokkeren bij mislukken wacht
+  onbegrensd en geeft dus nooit op.
 - **Proefrun bij blokkeren:** raakt een flow geblokkeerd (flowbeleid in :func:`apply_scan`, of blokkeren bij
   mislukken in :func:`block_every_flow`), dan wordt zijn lopende proefrun direct afgesloten
   (``simulate.close_for_block``).
@@ -94,9 +97,23 @@ REGISTER_LOCK_KEY = int.from_bytes(
 REGISTER_LOCK_TIMEOUT_MS = 30_000
 #: SQLSTATE ``lock_not_available``: PostgreSQL gaf het wachten op ``lock_timeout`` op
 _LOCK_NOT_AVAILABLE = "55P03"
-#: antwoorden van Node-RED die er wel waren maar onbruikbaar zijn: die blokkeren alle flows (keuze B1 (b) in S-P2-320,
-#: uitwerking van het besluit "blokkeren bij mislukken"). Onbereikbaar, time-out en 5xx niet: dan blijft de stand staan.
-UNUSABLE_ANSWER_REASONS = ("antwoord_te_groot", "antwoord_ongeldig", "onverwacht_antwoord")
+#: antwoorden van Node-RED die er wel waren maar die de dienst niet kan gebruiken: die blokkeren alle flows (keuze
+#: B1 (b) in S-P2-320, uitwerking van het besluit "blokkeren bij mislukken"; aangescherpt door de regisseur op grond
+#: van "grof blokkeren" en C-11: ook een Node-RED zonder aanmelding, een geweigerde aanmelding (401), ontbrekende
+#: rechten (403), een onbekend pad (404) en een doorverwijzing (3xx), want dan kan de dienst de flows niet scannen).
+#: Onbereikbaar, time-out en 5xx niet: dan blijft de stand staan.
+UNUSABLE_ANSWER_REASONS = (
+    "antwoord_te_groot",
+    "antwoord_ongeldig",
+    "onverwacht_antwoord",
+    "niet_beveiligd",
+    "aanmelding_geweigerd",
+    "geen_rechten",
+    "niet_gevonden",
+    "redirect",
+)
+#: de reden bij ``niet_gekoppeld`` als de datamap wel is ingesteld, maar niet alleen-lezen is gekoppeld (S-P2-320)
+NOT_READ_ONLY = "niet_alleen_lezen"
 
 log = logging.getLogger("integrations.automation")
 
@@ -112,7 +129,7 @@ def register_busy() -> ApiError:
     )
 
 
-def lock_register(session: Session) -> None:
+def lock_register(session: Session, *, begrensd: bool = True) -> None:
     """Neemt het slot op het flowregister voor de rest van de transactie (R-VEILIG-9).
 
     Wie het neemt en waarom (de tests staan in ``tests/integration/test_b11_005_herstel.py``):
@@ -138,12 +155,19 @@ def lock_register(session: Session) -> None:
     ``test_waiting_for_the_register_lock_is_bounded_and_changes_nothing`` en
     ``test_the_lock_timeout_only_applies_to_taking_the_register_lock``.
 
+    Met ``begrensd=False`` (alleen :func:`_block_after_failure`, R-TECH-1 van S-P2-320) wordt er onbegrensd gewacht
+    (``lock_timeout`` 0 rond het slot): het blokkeren bij mislukken geeft nooit op omdat een ander het slot houdt, want
+    dan bleven de flows open terwijl de synchronisatie of het herstel vastliep. Dat geeft geen deadlock: de blokkeerder
+    heeft na zijn rollback zelf niets meer vast. Test:
+    ``test_blocking_after_a_failure_never_gives_up_on_a_busy_register_lock``.
+
     Na het slot leest de houder altijd de nieuwe stand: eerst gaat wat nog openstaat naar de database (``flush``),
     daarna vervalt wat de sessie nog in het geheugen had (``expire_all``; de sessies hebben ``expire_on_commit=False``).
     Het slot vervalt vanzelf bij commit of rollback."""
     session.flush()
     previous = session.execute(select(func.current_setting("lock_timeout"))).scalar_one()
-    session.execute(select(func.set_config("lock_timeout", f"{REGISTER_LOCK_TIMEOUT_MS}ms", True)))
+    timeout = f"{REGISTER_LOCK_TIMEOUT_MS}ms" if begrensd else "0"
+    session.execute(select(func.set_config("lock_timeout", timeout, True)))
     try:
         session.execute(select(func.pg_advisory_xact_lock(REGISTER_LOCK_KEY)))
     except OperationalError as exc:
@@ -182,6 +206,9 @@ class CredentialsBlob:
     #: niet_gekoppeld (geen map ingesteld, of de map is niet alleen-lezen gekoppeld) | afwezig | meegenomen | onleesbaar
     status: str
     blob: dict[str, Any] | None = None
+    #: bij ``niet_gekoppeld``: :data:`NOT_READ_ONLY` als de map wel is ingesteld maar beschrijfbaar is gekoppeld;
+    #: anders ``None`` (R-TECH-3 van S-P2-320)
+    reason: str | None = None
 
     @property
     def sha256(self) -> str | None:
@@ -198,9 +225,9 @@ def read_credentials(data_dir: Path | None) -> CredentialsBlob:
     """Leest het door Node-RED versleutelde ``flows_cred.json`` uit de alleen-lezen gekoppelde datamap.
 
     Alleen een datamap die **alleen-lezen** is gekoppeld telt (S-P2-320, bouwpunt 1): is het bestandssysteem van de
-    map beschrijfbaar (geen ``ST_RDONLY``), dan is de stand eerlijk ``niet_gekoppeld`` en wordt het bestand niet
-    geopend. Zo telt credentials-herstel nooit als beschikbaar met een koppeling waarin deze dienst zou kunnen
-    schrijven.
+    map beschrijfbaar (geen ``ST_RDONLY``), dan is de stand eerlijk ``niet_gekoppeld`` met de reden
+    :data:`NOT_READ_ONLY` en wordt het bestand niet geopend. Zo telt credentials-herstel nooit als beschikbaar met een
+    koppeling waarin deze dienst zou kunnen schrijven.
 
     Alleen de versleutelde vorm ``{"$": "<iv><base64>"}`` wordt aangenomen; een onversleuteld bestand (Node-RED zonder
     ``credentialSecret``) wordt bewust niet meegenomen: dat is een afwijking van het beveiligingsprofiel.
@@ -216,7 +243,7 @@ def read_credentials(data_dir: Path | None) -> CredentialsBlob:
         try:
             dir_fd = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
             if not _mounted_read_only(dir_fd):
-                return CredentialsBlob("niet_gekoppeld")
+                return CredentialsBlob("niet_gekoppeld", reason=NOT_READ_ONLY)
             fd = os.open(CRED_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
         except FileNotFoundError:
             return CredentialsBlob("afwezig")
@@ -592,12 +619,14 @@ def sync(
 ) -> SyncResult:
     """Leest Node-RED uit, legt een momentopname vast als er iets veranderd is en werkt het flowregister bij.
 
-    Schrijft nooit naar Node-RED. Antwoordde Node-RED niet (onbereikbaar, time-out), met een serverfout of met een fout
-    in de instelling, aanmelding of rechten, dan wordt die :class:`NodeRedError` vastgelegd in de synchronisatietoestand
-    en teruggegeven (de stand van de flows blijft staan); de aanroeper committeert. Was het antwoord er wel maar
-    onbruikbaar (:data:`UNUSABLE_ANSWER_REASONS`), of is er een andere uitzondering (bij het lezen, bijvoorbeeld een
-    RecursionError uit ``json.loads``, of in de scan, het flowregister of de opslag), dan wordt het half gedane werk
-    teruggedraaid en blokkeert een aparte, hier gecommitte transactie alle flows (:func:`_block_after_failure`).
+    Schrijft nooit naar Node-RED. Antwoordde Node-RED niet (onbereikbaar, time-out) of met een serverfout, of is de bron
+    niet volledig ingesteld (:data:`CONFIG_REASONS`: er is dan niets aan Node-RED gevraagd), dan wordt die
+    :class:`NodeRedError` vastgelegd in de synchronisatietoestand en teruggegeven (de stand van de flows blijft staan);
+    de aanroeper committeert. Was het antwoord er wel maar kan de dienst het niet gebruiken
+    (:data:`UNUSABLE_ANSWER_REASONS`, ook een Node-RED zonder aanmelding, 401, 403, 404 of een doorverwijzing), of is er
+    een andere uitzondering (bij het lezen, bijvoorbeeld een RecursionError uit ``json.loads``, of in de scan, het
+    flowregister of de opslag), dan wordt het half gedane werk teruggedraaid en blokkeert een aparte, hier gecommitte
+    transactie alle flows (:func:`_block_after_failure`).
 
     Neemt eerst het slot op het flowregister (:func:`lock_register`, R-VEILIG-9), vóór het uitlezen van Node-RED: een
     herstel dat tegelijk loopt, wacht of wordt afgewacht."""
@@ -611,7 +640,8 @@ def sync(
             nr_settings = client.get_settings()
     except NodeRedError as exc:
         if exc.reason in UNUSABLE_ANSWER_REASONS:
-            # Node-RED antwoordde, maar het antwoord is onbruikbaar: dicht, nooit de oude stand (keuze B1 (b))
+            # Node-RED antwoordde, maar de dienst kan het antwoord niet gebruiken (dus de flows niet scannen): dicht,
+            # nooit de oude stand (keuze B1 (b), aangescherpt: ook niet_beveiligd, 401, 403, 404 en 3xx)
             return _block_after_failure(session, exc, trace_id=tid, now=now)
         previous = state_get(session, SYNC_KEY) or {}
         state_put(
@@ -661,7 +691,8 @@ def _block_after_failure(session: Session, exc: Exception, *, trace_id: str, now
     ook dat niet, dan gaat de uitzondering door (de worker meldt de stap dan als mislukt). De rollback geeft ook het slot
     op het flowregister vrij; de aparte transactie neemt het opnieuw (R-VEILIG-9). Heeft een herstel het slot in dat
     venster genomen, dan wacht het blokkeren op diens commit en blokkeert het de stand van daarna (zie
-    :func:`lock_register`).
+    :func:`lock_register`). Dat wachten is **onbegrensd** (``begrensd=False``, R-TECH-1 van S-P2-320): het blokkeren
+    geeft nooit op met ``409 flowregister_bezig``, want dan bleven de flows open.
 
     Bij een onbruikbaar antwoord van Node-RED (:class:`NodeRedError`, keuze B1 (b)) staat de vaste reden ervan in
     ``fout.oorzaak`` en is het ook de reden van de meting van de bron (zoals bij elke andere ``NodeRedError``). Het
@@ -675,7 +706,7 @@ def _block_after_failure(session: Session, exc: Exception, *, trace_id: str, now
         error.update(http_status=exc.http_status, path=exc.path, oorzaak=exc.reason)
         probe_reason, probe_detail = exc.reason, {"http_status": exc.http_status, "path": exc.path}
     try:
-        lock_register(session)
+        lock_register(session, begrensd=False)
         blocked = block_every_flow(session, trace_id=trace_id, now=now)
         previous = state_get(session, SYNC_KEY) or {}
         state_put(
@@ -754,6 +785,7 @@ def record_state(
             "flows": len(result.tabs),
             "geblokkeerd": len(blocked),
             "credentials_status": credentials.status,
+            "credentials_reden": credentials.reason,
             "fout": None,
         },
     )

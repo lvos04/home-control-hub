@@ -1039,7 +1039,8 @@ def test_credentials_only_count_from_a_read_only_mounted_data_dir(
 ) -> None:
     """S-P2-320, bouwpunt 1: het credentials-bestand telt alleen als de datamap alleen-lezen is gekoppeld. Gemeten met
     ``fstatvfs`` op de geopende map (vlag ``ST_RDONLY`` van het bestandssysteem). Een beschrijfbare map is eerlijk
-    ``niet_gekoppeld``, ook met een geldig versleuteld bestand erin: het bestand wordt dan niet geopend."""
+    ``niet_gekoppeld``, ook met een geldig versleuteld bestand erin: het bestand wordt dan niet geopend. De reden
+    ``niet_alleen_lezen`` onderscheidt dat van "geen map ingesteld" (R-TECH-3 van S-P2-320)."""
     import json
     import os
     from types import SimpleNamespace
@@ -1047,7 +1048,7 @@ def test_credentials_only_count_from_a_read_only_mounted_data_dir(
     (tmp_path / snapshots.CRED_FILE).write_text(json.dumps(BLOB), encoding="utf-8")
     assert not os.statvfs(tmp_path).f_flag & os.ST_RDONLY, "deze proef vraagt een beschrijfbare map"
     got = snapshots.read_credentials(tmp_path)
-    assert (got.status, got.blob) == ("niet_gekoppeld", None)
+    assert (got.status, got.blob, got.reason) == ("niet_gekoppeld", None, "niet_alleen_lezen")
     # dezelfde map, maar het bestandssysteem meldt alleen-lezen: dan wordt het bestand gelezen
     real_fstatvfs = os.fstatvfs
     measured: list[int] = []
@@ -1058,11 +1059,12 @@ def test_credentials_only_count_from_a_read_only_mounted_data_dir(
 
     monkeypatch.setattr(snapshots.os, "fstatvfs", read_only)
     got = snapshots.read_credentials(tmp_path)
-    assert (got.status, got.blob) == ("meegenomen", BLOB)
+    assert (got.status, got.blob, got.reason) == ("meegenomen", BLOB, None)
     assert len(measured) == 1, "gemeten op de geopende map, één keer"
-    # een niet-bestaande map blijft afwezig; zonder koppeling blijft het niet_gekoppeld
+    # een niet-bestaande map blijft afwezig; zonder koppeling blijft het niet_gekoppeld, zonder reden
     assert snapshots.read_credentials(tmp_path / "bestaat-niet").status == "afwezig"
-    assert snapshots.read_credentials(None).status == "niet_gekoppeld"
+    unset = snapshots.read_credentials(None)
+    assert (unset.status, unset.reason) == ("niet_gekoppeld", None)
 
 
 def test_credentials_file_is_read_when_it_is_a_plain_file(tmp_path: Any, read_only_mount: None) -> None:

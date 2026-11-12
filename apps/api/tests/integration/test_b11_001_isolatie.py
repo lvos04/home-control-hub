@@ -576,8 +576,17 @@ def test_a_manual_snapshot_that_fails_blocks_every_flow_too(
     assert [s["id"] for s in listed] == [first["snapshot_id"]], listed
 
 
+#: de statussen waarmee ``GET /flows`` antwoordt bij een geweigerde aanmelding, ontbrekende rechten, een onbekend pad
+#: en een doorverwijzing (R-VEILIG-1 van S-P2-320)
+REFUSED_ANSWERS = {"aanmelding_geweigerd": 401, "geen_rechten": 403, "niet_gevonden": 404, "redirect": 302}
+#: een exec-node in de flow met het token (iemand zet hem erin terwijl Node-RED zonder aanmelding draait)
+EXEC_IN_T = node("tab00000exec0001", "exec", T, [[], [], []], command="id")
+
+
 def _flows_answer(node_red_fake: Any, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    """``GET /flows`` antwoordt zoals in ``case``: onbruikbaar (Node-RED antwoordde wel) of helemaal niet."""
+    """``GET /flows`` antwoordt zoals in ``case``: onbruikbaar of niet te lezen (Node-RED antwoordde wel) of helemaal
+    niet. Bij ``niet_beveiligd`` draait Node-RED opnieuw zonder aanmelding (``adminAuth`` weg, C-11 geschonden) en zet
+    iemand een exec-node in de flow met het token; zonder aanmelding leest de dienst niets, dus scant hij die ook niet."""
     import httpx
 
     original = node_red_fake.handle
@@ -604,6 +613,12 @@ def _flows_answer(node_red_fake: Any, monkeypatch: pytest.MonkeyPatch, case: str
         monkeypatch.setattr(node_red_fake, "handle", answer(200, b"{}", {"content-length": str(17 * 1024 * 1024)}))
     elif case == "onverwacht_antwoord":
         monkeypatch.setattr(node_red_fake, "handle", answer(418, b'{"fout": "theepot"}'))
+    elif case in REFUSED_ANSWERS:
+        location = {"location": "/elders"} if case == "redirect" else {}
+        monkeypatch.setattr(node_red_fake, "handle", answer(REFUSED_ANSWERS[case], b"{}", location))
+    elif case == "niet_beveiligd":
+        monkeypatch.setattr(node_red_fake, "admin_auth", None)
+        node_red_fake.deploy([*simple_flow(), *simple_flow(tab_id="tabander00000002", label="Ander"), EXEC_IN_T])
     elif case == "http_5xx":
         monkeypatch.setattr(node_red_fake, "handle", answer(500, b'{"fout": "intern"}'))
     elif case == "timeout":
@@ -612,7 +627,7 @@ def _flows_answer(node_red_fake: Any, monkeypatch: pytest.MonkeyPatch, case: str
         node_red_fake.up = False
 
 
-UNUSABLE_ANSWERS = ["antwoord_ongeldig", "antwoord_te_groot", "onverwacht_antwoord"]
+UNUSABLE_ANSWERS = ["antwoord_ongeldig", "antwoord_te_groot", "onverwacht_antwoord", "niet_beveiligd", *REFUSED_ANSWERS]
 
 
 @pytest.mark.parametrize("case", [*UNUSABLE_ANSWERS, "onbereikbaar", "timeout", "http_5xx"])
@@ -625,11 +640,16 @@ def test_an_unusable_answer_from_node_red_blocks_every_flow_but_no_answer_does_n
     monkeypatch: pytest.MonkeyPatch,
     case: str,
 ) -> None:
-    """S-P2-320, keuze B1 (b) (uitwerking van het besluit van de gebruiker "blokkeren bij mislukken", ADR-0016 kop 2):
-    antwoordde Node-RED wel, maar is het antwoord onbruikbaar (``antwoord_ongeldig``, ``antwoord_te_groot`` of
-    ``onverwacht_antwoord``), dan blokkeert de synchronisatie elke flow met ``synchronisatie_mislukt``; de meting van de
-    bron noemt de oorzaak. Antwoordde Node-RED niet (``onbereikbaar``, ``timeout``) of met een serverfout
-    (``http_5xx``), dan blijft de stand van de flows staan en zegt alleen de synchronisatie eerlijk ``ok: false``."""
+    """S-P2-320, keuze B1 (b) (uitwerking van het besluit van de gebruiker "blokkeren bij mislukken", ADR-0016 kop 2),
+    aangescherpt door de regisseur (R-VEILIG-1 = (b), uit "grof blokkeren" en C-11): antwoordde Node-RED wel, maar kan
+    de dienst het antwoord niet gebruiken (``antwoord_ongeldig``, ``antwoord_te_groot``, ``onverwacht_antwoord``, een
+    Node-RED zonder aanmelding ``niet_beveiligd``, ``aanmelding_geweigerd`` (401), ``geen_rechten`` (403),
+    ``niet_gevonden`` (404) of ``redirect`` (3xx)), dan blokkeert de synchronisatie elke flow met
+    ``synchronisatie_mislukt``; de meting van de bron noemt de oorzaak. Bij ``niet_beveiligd`` staat er ook een
+    exec-node in de flow met het token: die flow is dicht, zijn token geeft 403 en er gaat geen actieverzoek naar de
+    Hub (vóór S-P2-320 bleef hij actief: 202). Antwoordde Node-RED niet (``onbereikbaar``, ``timeout``) of met een
+    serverfout (``http_5xx``), dan blijft de stand van de flows staan en zegt alleen de synchronisatie eerlijk
+    ``ok: false``."""
     flows = [*simple_flow(), *simple_flow(tab_id="tabander00000002", label="Ander")]
     setup_node_red(linked, fake_hub, auth, flows=flows)
     worker = Worker(make_settings(node_red_sync_interval_s=60, http_max_attempts=1), transport=fake_hub.transport)
@@ -663,6 +683,8 @@ def test_an_unusable_answer_from_node_red_blocks_every_flow_but_no_answer_does_n
 
     monkeypatch.undo()
     node_red_fake.up = True
+    if case == "niet_beveiligd":
+        node_red_fake.deploy(flows)  # Node-RED weer met aanmelding; de beheerder haalt de exec-node weg
     worker.state.next_node_red_sync = 0
     worker.automation_step(300.0)
     assert worker.state.stats["node_red_syncs"] == 2

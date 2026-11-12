@@ -16,7 +16,12 @@
   geen tekst die in UTF-8 kan), dan is het ``422 validation_error``, vóór er iets gebeurt: geen actie, geen nonce,
   geen bewaard antwoord. Zonder deze controle gaf zo'n teken een serverfout (UTF-8 bij de verzoek-hash, of PostgreSQL
   bij het bewaren) of werd het aangenomen. Een route die zulke tekens zelf wil vastleggen (de weigering van een
-  actieverzoek van een flow), geeft een opgeschoonde vingerafdruk mee (``flowapi.request_action``).
+  actieverzoek van een flow), geeft een opgeschoonde vingerafdruk mee (``flowapi.request_action``). De controle en de
+  verzoek-hash zien ook sleutels die met ``_sa`` beginnen (``jsonable_encoder(..., sqlalchemy_safe=False)``; met de
+  standaardinstelling liet FastAPI die stil weg, R-VEILIG-2 van S-P2-320).
+- Te diep genest (R-VEILIG-2 van S-P2-320): is het verzoek dieper genest dan :data:`MAX_DEPTH` niveaus (objecten en
+  lijsten), dan is het ``422 validation_error``, vóór ``jsonable_encoder`` (die werkt recursief en gaf bij ongeveer
+  990 niveaus een RecursionError, dus een serverfout). Dat geldt voor elke route die ``run_idempotent`` gebruikt.
 """
 
 from __future__ import annotations
@@ -61,6 +66,12 @@ def _replay(record: IdempotencyRecord) -> JSONResponse:
 
 #: melding bij invoer met tekst die niet op te slaan is (zelfde tekst als bij de veldcontroles van de flow-API)
 UNSTORABLE_NL = "bevat een NUL-teken of een losse surrogaat; alleen tekst die als UTF-8 op te slaan is, is toegestaan"
+#: zo diep mag een verzoek hooguit genest zijn (objecten en lijsten; het verzoek zelf is niveau 1). Ruim boven de
+#: grens van 32 niveaus voor doel, parameters en ondertekende gegevens (``actions.MAX_NESTING``,
+#: ``security.execreq.MAX_DEPTH``, die hun eigen weigering houden) plus de omhullende niveaus van de routes, en ver
+#: onder de diepte waarop ``jsonable_encoder`` een RecursionError geeft
+MAX_DEPTH = 64
+TOO_DEEP_NL = f"is dieper genest dan {MAX_DEPTH} niveaus"
 
 
 def storable(value: Any) -> bool:
@@ -82,6 +93,47 @@ def storable(value: Any) -> bool:
         elif isinstance(item, list | tuple):
             todo.extend(item)
     return True
+
+
+def _too_deep(value: Any) -> bool:
+    """Dieper genest dan :data:`MAX_DEPTH` (objecten, lijsten en tuples; de waarde zelf is niveau 1)? Zonder recursie,
+    zodat ook een heel diep geneste waarde hier geen RecursionError geeft."""
+    todo: list[tuple[Any, int]] = [(value, 1)]
+    while todo:
+        item, depth = todo.pop()
+        if isinstance(item, dict):
+            children: Any = item.values()
+        elif isinstance(item, list | tuple):
+            children = item
+        else:
+            continue
+        if depth > MAX_DEPTH:
+            return True
+        todo.extend((child, depth + 1) for child in children)
+    return False
+
+
+def too_deep(payload: Any) -> ApiError | None:
+    """``422 validation_error`` als het verzoek dieper genest is dan :data:`MAX_DEPTH`, anders ``None``. Per veld op het
+    eerste niveau één fout; een veldnaam die niet op te slaan is heet ``""``, net als de body zelf."""
+    if not _too_deep(payload):
+        return None
+    if isinstance(payload, dict):
+        names = sorted(
+            {
+                key if isinstance(key, str) and storable(key) else ""
+                for key, value in payload.items()
+                if _too_deep([value])
+            }
+        )
+    else:
+        names = [""]
+    return ApiError(
+        422,
+        "validation_error",
+        "De invoer is ongeldig.",
+        {"fouten": [{"veld": name, "probleem": TOO_DEEP_NL, "type": "value_error"} for name in names]},
+    )
 
 
 def unstorable_text(payload: Any) -> ApiError | None:
@@ -118,7 +170,12 @@ def run_idempotent(
     *,
     stored: Callable[[Any], Any] | None = None,
 ) -> JSONResponse:
-    encoded = jsonable_encoder(payload)
+    deep = too_deep(payload)
+    if deep is not None:  # vóór jsonable_encoder (recursief): er gebeurt niets (R-VEILIG-2 van S-P2-320)
+        raise deep
+    # sqlalchemy_safe=False: anders laat jsonable_encoder sleutels die met "_sa" beginnen stil weg, en zagen de controle
+    # en de verzoek-hash ze niet (R-VEILIG-2 van S-P2-320)
+    encoded = jsonable_encoder(payload, sqlalchemy_safe=False)
     refusal = unstorable_text(encoded)
     if refusal is not None:  # vóór de verzoek-hash, de opzoeking en de actie: er gebeurt niets (S-P2-320)
         raise refusal
