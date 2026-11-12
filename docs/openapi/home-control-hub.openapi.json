@@ -1300,10 +1300,13 @@
             "description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"
           },
           "409": {
-            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd of voorstel_verlopen"
+            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd, voorstel_verlopen of flowregister_bezig (Retry-After; er is niets gewijzigd)"
           },
           "422": {
-            "description": "ongeldig_verzoek of parameters_ongeldig"
+            "description": "ongeldig_verzoek, parameters_ongeldig of validation_error (NUL-teken of losse surrogaat; er wordt geen nonce verbruikt)"
+          },
+          "500": {
+            "description": "herstel_niet_vastgelegd — na het schrijven vastgelopen; alle flows zijn geblokkeerd"
           },
           "501": {
             "description": "capability_unavailable — deze actie is (nog) niet toepasbaar"
@@ -1687,7 +1690,7 @@
             "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
           },
           "422": {
-            "description": "onbekende_actie, validation_error, voorstel_geblokkeerd, parameters_ongeldig of momentopname_niet_toegestaan"
+            "description": "onbekende_actie, validation_error (ook bij een NUL-teken of losse surrogaat), voorstel_geblokkeerd, parameters_ongeldig of momentopname_niet_toegestaan"
           },
           "502": {
             "description": "De bron weigerde de aanmelding, mist rechten of gaf een ongeldig antwoord"
@@ -3950,6 +3953,9 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "description": "node_red_niet_ingesteld, of flowregister_bezig (Retry-After; er is niets gewijzigd)"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3959,6 +3965,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "node_red_fout — o.a. synchronisatie_mislukt (alle flows geblokkeerd)"
+          },
+          "503": {
+            "description": "node_red_unavailable — de stand van de flows blijft staan"
           }
         },
         "summary": "Node-RED nu uitlezen en een momentopname vastleggen (alleen lezen)",

@@ -14,7 +14,13 @@
   slot laat een synchronisatie en een handmatige momentopname die tegelijk lopen, wachten tot die commit, zodat ze
   Node-RED pas daarna uitlezen. Bij het vastleggen van ``na_herstel`` (``_finish_apply``) neemt het herstel het slot
   opnieuw; samen met het slot in de synchronisatie schrijven herstel en worker zo nooit dezelfde flowversie dubbel.
-  Wat het slot per plek doet, en de test erbij, staat bij ``snapshots.lock_register``.
+  Wat het slot per plek doet, en de test erbij, staat bij ``snapshots.lock_register``. Op het slot wordt hooguit
+  ``snapshots.REGISTER_LOCK_TIMEOUT_MS`` gewacht: vóór het schrijven is dat ``409 flowregister_bezig`` en is alles
+  teruggedraaid (ook de nonce, het verzoek mag opnieuw); na het schrijven valt het onder het volgende punt.
+- **Blokkeren bij mislukken ná het schrijven** (S-P2-320; besluit van de gebruiker 2026-11-12): loopt het herstel
+  vast nádat het naar Node-RED schreef (een andere uitzondering dan een ``NodeRedError``, bij het schrijven, het
+  teruglezen of het vastleggen van ``na_herstel``), dan blokkeert een eigen transactie elke flow met
+  ``synchronisatie_mislukt`` (``_blocked_after_writing``) en is het antwoord ``500 herstel_niet_vastgelegd``.
 - **Nooit**: een herstel zonder ondertekend verzoek, een tweede uitvoering met dezelfde nonce of goedkeuring, een
   herstel naar flows die het flowbeleid nu zou blokkeren, of een geheim in log, event, audit of antwoord. De
   credentials gaan als het door Node-RED zelf versleutelde bestand heen en terug; deze dienst kan ze niet lezen.
@@ -29,6 +35,7 @@ lokale container (``docs/b11/node-red-verificatie.json``) en getest met de in-re
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -65,6 +72,8 @@ APPLY_STATUS_NL = (
 )
 UPSTREAM_UNKNOWN = ("onbereikbaar", "timeout", "http_5xx")
 Result = tuple[int, Any, dict[str, str]]
+
+log = logging.getLogger("integrations.automation")
 
 
 def _bare(value: str) -> str:
@@ -202,8 +211,9 @@ def propose(
     warnings: list[str] = []
     if not snapshot.has_credentials:
         warnings.append(
-            "Deze momentopname bevat geen credentials-bestand (de datamap van Node-RED was niet gekoppeld). Nodes die "
-            "door het herstel terugkomen, hebben daarna geen inloggegevens; bestaande nodes houden de hunne."
+            "Deze momentopname bevat geen credentials-bestand (de datamap van Node-RED was niet alleen-lezen "
+            "gekoppeld). Nodes die door het herstel terugkomen, hebben daarna geen inloggegevens; bestaande nodes "
+            "houden de hunne."
         )
     else:
         warnings.append(
@@ -579,18 +589,23 @@ def apply(
         row.result = {"fase": "toepassen_gestart", "at": iso(now)}
         _set_outcome(session, request_nonce, "gestart")
         session.commit()
+        written = {"proposal_id": str(row.id), "pre_snapshot_id": str(pre.id)}
 
-        # 10: schrijven en teruglezen
+        # 10: schrijven en teruglezen. Een NodeRedError is een gemeten uitkomst (zie _finish_apply); elke andere
+        #     uitzondering vanaf hier kan ná het schrijven vallen: dan blokkeren bij mislukken (_blocked_after_writing)
         write_error: NodeRedError | None = None
-        try:
-            client.post_flows(current.rev, target_flows, credentials)
-        except NodeRedError as exc:
-            write_error = exc
         after: nodered.FlowsDoc | None = None
         try:
-            after = client.get_flows()
-        except NodeRedError:
-            after = None
+            try:
+                client.post_flows(current.rev, target_flows, credentials)
+            except NodeRedError as exc:
+                write_error = exc
+            try:
+                after = client.get_flows()
+            except NodeRedError:
+                after = None
+        except Exception as exc:
+            raise _blocked_after_writing(session, exc, written=written, trace_id=trace_id, now=now) from exc
     return _finish_apply(
         session,
         settings,
@@ -611,7 +626,87 @@ def apply(
     )
 
 
+def _blocked_after_writing(
+    session: Session, exc: Exception, *, written: dict[str, str], trace_id: str, now: datetime
+) -> ApiError:
+    """Blokkeren bij mislukken ná het schrijven (S-P2-320, vervolgpunt (1) van S-P2-300; besluit van de gebruiker
+    "blokkeren bij mislukken", 2026-11-12). Het herstel kan naar Node-RED geschreven hebben, maar de uitkomst is niet
+    vastgelegd: het flowregister klopt dan niet meer met Node-RED. Het half gedane werk wordt teruggedraaid en een eigen
+    transactie blokkeert elke flow met ``synchronisatie_mislukt`` (:func:`snapshots._block_after_failure`), tot een
+    synchronisatie weer slaagt en een beheerder ze hervat. Het voorstel blijft op ``toepassen_gestart`` (de worker sluit
+    het na de geldigheid af als onderbroken, uitkomst onbekend); de nonce en de goedkeuring zijn al opgemaakt, dus het
+    verzoek wordt nooit blind herhaald. Lukt ook het blokkeren niet, dan zegt het antwoord dat. Alleen de soort
+    uitzondering wordt genoemd, nooit de tekst."""
+    kind = type(exc).__name__[:80]
+    try:
+        snapshots._block_after_failure(session, exc, trace_id=trace_id, now=now)
+        blocked = True
+    except Exception as block_exc:  # de oorspronkelijke fout blijft de oorzaak; het antwoord zegt eerlijk wat er is
+        session.rollback()
+        log.warning("blokkeren na een vastgelopen herstel is ook mislukt (%s)", type(block_exc).__name__[:80])
+        blocked = False
+    gevolg = (
+        "Alle flows van Node-RED zijn daarom geblokkeerd tot een synchronisatie weer slaagt en een beheerder ze hervat."
+        if blocked
+        else "Ook het blokkeren van de flows is mislukt."
+    )
+    return ApiError(
+        500,
+        "herstel_niet_vastgelegd",
+        "Het herstel is naar Node-RED gestuurd, maar de uitkomst is niet vastgelegd. "
+        + gevolg
+        + " Controleer de flows in Node-RED; de toestand van vóór het herstel staat in de momentopname 'voor_herstel'.",
+        {**written, "flows_geblokkeerd": blocked, "reden": snapshots.SYNC_FAILED, "uitzondering": kind},
+    )
+
+
 def _finish_apply(
+    session: Session,
+    settings: Settings,
+    vault: Vault,
+    *,
+    row: AutomationRestore,
+    snapshot: AutomationSnapshot,
+    request_nonce: uuid.UUID,
+    approval: dict[str, Any],
+    principal: Principal,
+    before_checksum: str,
+    after: nodered.FlowsDoc | None,
+    write_error: NodeRedError | None,
+    node_sets: list[dict[str, Any]],
+    nr_settings: dict[str, Any],
+    credentials_sent: bool,
+    trace_id: str,
+    now: datetime,
+) -> Result:
+    """Legt de uitkomst van het schrijven vast (:func:`_record_outcome`). Loopt dat vast (een uitzondering bij de
+    momentopname ``na_herstel``, het flowregister, de audit of het slot), dan blokkeren bij mislukken
+    (:func:`_blocked_after_writing`): na het schrijven blijft de oude stand nooit staan."""
+    written = {"proposal_id": str(row.id), "pre_snapshot_id": str(row.pre_snapshot_id)}
+    try:
+        return _record_outcome(
+            session,
+            settings,
+            vault,
+            row=row,
+            snapshot=snapshot,
+            request_nonce=request_nonce,
+            approval=approval,
+            principal=principal,
+            before_checksum=before_checksum,
+            after=after,
+            write_error=write_error,
+            node_sets=node_sets,
+            nr_settings=nr_settings,
+            credentials_sent=credentials_sent,
+            trace_id=trace_id,
+            now=now,
+        )
+    except Exception as exc:
+        raise _blocked_after_writing(session, exc, written=written, trace_id=trace_id, now=now) from exc
+
+
+def _record_outcome(
     session: Session,
     settings: Settings,
     vault: Vault,

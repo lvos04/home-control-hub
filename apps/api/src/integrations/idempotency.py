@@ -11,6 +11,12 @@
 - Eenmalige geheimen (een flow-token, het eerste wachtwoord van een profiel) staan nooit in de opgeslagen kopie:
   de route geeft met ``stored`` een functie mee die het antwoord maskeert vóór het bewaren. Een herhaling van zo'n
   verzoek krijgt dus het gemaskeerde antwoord; het geheim wordt precies één keer getoond.
+- Tekst die niet op te slaan is (S-P2-320): staat er in het verzoek (de ``payload`` die de route meegeeft; sleutels
+  en tekst, op elke diepte) een NUL-teken of een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar
+  geen tekst die in UTF-8 kan), dan is het ``422 validation_error``, vóór er iets gebeurt: geen actie, geen nonce,
+  geen bewaard antwoord. Zonder deze controle gaf zo'n teken een serverfout (UTF-8 bij de verzoek-hash, of PostgreSQL
+  bij het bewaren) of werd het aangenomen. Een route die zulke tekens zelf wil vastleggen (de weigering van een
+  actieverzoek van een flow), geeft een opgeschoonde vingerafdruk mee (``flowapi.request_action``).
 """
 
 from __future__ import annotations
@@ -53,6 +59,55 @@ def _replay(record: IdempotencyRecord) -> JSONResponse:
     return JSONResponse(record.response_body, status_code=record.status_code, headers=headers)
 
 
+#: melding bij invoer met tekst die niet op te slaan is (zelfde tekst als bij de veldcontroles van de flow-API)
+UNSTORABLE_NL = "bevat een NUL-teken of een losse surrogaat; alleen tekst die als UTF-8 op te slaan is, is toegestaan"
+
+
+def storable(value: Any) -> bool:
+    """Geen NUL-teken en geen losse surrogaat, in tekst en sleutels, op elke diepte. Zonder recursie, zodat ook een diep
+    geneste waarde geen RecursionError geeft (dezelfde regel als ``pagination._storable`` en de flowscan)."""
+    todo = [value]
+    while todo:
+        item = todo.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return False
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return False
+        elif isinstance(item, dict):
+            todo.extend(item.keys())
+            todo.extend(item.values())
+        elif isinstance(item, list | tuple):
+            todo.extend(item)
+    return True
+
+
+def unstorable_text(payload: Any) -> ApiError | None:
+    """``422 validation_error`` als er ergens in het verzoek tekst staat die niet op te slaan is, anders ``None``. Per
+    veld op het eerste niveau één fout met de vaste melding; nooit de invoer zelf (een veldnaam met zo'n teken heet
+    ``""``, zoals de body zelf)."""
+    if storable(payload):
+        return None
+    if isinstance(payload, dict):
+        names = sorted(
+            {
+                key if isinstance(key, str) and storable(key) else ""
+                for key, value in payload.items()
+                if not storable(key) or not storable(value)
+            }
+        )
+    else:
+        names = [""]
+    return ApiError(
+        422,
+        "validation_error",
+        "De invoer is ongeldig.",
+        {"fouten": [{"veld": name, "probleem": UNSTORABLE_NL, "type": "value_error"} for name in names]},
+    )
+
+
 def run_idempotent(
     request: Request,
     session: Session,
@@ -63,9 +118,13 @@ def run_idempotent(
     *,
     stored: Callable[[Any], Any] | None = None,
 ) -> JSONResponse:
+    encoded = jsonable_encoder(payload)
+    refusal = unstorable_text(encoded)
+    if refusal is not None:  # vóór de verzoek-hash, de opzoeking en de actie: er gebeurt niets (S-P2-320)
+        raise refusal
     vault = request.app.state.vault
     canonical = json.dumps(
-        {"m": request.method, "p": request.url.path, "b": jsonable_encoder(payload)},
+        {"m": request.method, "p": request.url.path, "b": encoded},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

@@ -1026,7 +1026,46 @@ def test_scan_outcome_does_not_depend_on_the_hash_seed() -> None:
 BLOB = {"$": "0123456789abcdef0123456789abcdefZ2VoZWlt"}
 
 
-def test_credentials_file_is_read_when_it_is_a_plain_file(tmp_path: Any) -> None:
+@pytest.fixture
+def read_only_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Doet alsof de datamap alleen-lezen is gekoppeld (een echte alleen-lezen-koppeling vraagt root). De tests met deze
+    fixture gaan over het lezen van het bestand zelf; dat een beschrijfbare map nooit telt, staat in
+    ``test_credentials_only_count_from_a_read_only_mounted_data_dir``."""
+    monkeypatch.setattr(snapshots, "_mounted_read_only", lambda _dir_fd: True)
+
+
+def test_credentials_only_count_from_a_read_only_mounted_data_dir(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S-P2-320, bouwpunt 1: het credentials-bestand telt alleen als de datamap alleen-lezen is gekoppeld. Gemeten met
+    ``fstatvfs`` op de geopende map (vlag ``ST_RDONLY`` van het bestandssysteem). Een beschrijfbare map is eerlijk
+    ``niet_gekoppeld``, ook met een geldig versleuteld bestand erin: het bestand wordt dan niet geopend."""
+    import json
+    import os
+    from types import SimpleNamespace
+
+    (tmp_path / snapshots.CRED_FILE).write_text(json.dumps(BLOB), encoding="utf-8")
+    assert not os.statvfs(tmp_path).f_flag & os.ST_RDONLY, "deze proef vraagt een beschrijfbare map"
+    got = snapshots.read_credentials(tmp_path)
+    assert (got.status, got.blob) == ("niet_gekoppeld", None)
+    # dezelfde map, maar het bestandssysteem meldt alleen-lezen: dan wordt het bestand gelezen
+    real_fstatvfs = os.fstatvfs
+    measured: list[int] = []
+
+    def read_only(fd: int) -> Any:
+        measured.append(fd)
+        return SimpleNamespace(f_flag=real_fstatvfs(fd).f_flag | os.ST_RDONLY)
+
+    monkeypatch.setattr(snapshots.os, "fstatvfs", read_only)
+    got = snapshots.read_credentials(tmp_path)
+    assert (got.status, got.blob) == ("meegenomen", BLOB)
+    assert len(measured) == 1, "gemeten op de geopende map, één keer"
+    # een niet-bestaande map blijft afwezig; zonder koppeling blijft het niet_gekoppeld
+    assert snapshots.read_credentials(tmp_path / "bestaat-niet").status == "afwezig"
+    assert snapshots.read_credentials(None).status == "niet_gekoppeld"
+
+
+def test_credentials_file_is_read_when_it_is_a_plain_file(tmp_path: Any, read_only_mount: None) -> None:
     import json
 
     assert snapshots.read_credentials(None).status == "niet_gekoppeld"
@@ -1037,7 +1076,7 @@ def test_credentials_file_is_read_when_it_is_a_plain_file(tmp_path: Any) -> None
     assert got.status == "meegenomen" and got.blob == BLOB
 
 
-def test_credentials_file_never_follows_a_symlink(tmp_path: Any) -> None:
+def test_credentials_file_never_follows_a_symlink(tmp_path: Any, read_only_mount: None) -> None:
     """Node-RED schrijft zelf in de datamap: een koppeling naar een bestand erbuiten wordt nooit gelezen."""
     import json
     import os
@@ -1056,7 +1095,9 @@ def test_credentials_file_never_follows_a_symlink(tmp_path: Any) -> None:
         assert (got.status, got.blob) == ("onleesbaar", None), points_to
 
 
-def test_credentials_file_that_is_no_plain_file_is_unreadable_and_never_blocks(tmp_path: Any) -> None:
+def test_credentials_file_that_is_no_plain_file_is_unreadable_and_never_blocks(
+    tmp_path: Any, read_only_mount: None
+) -> None:
     import os
     import threading
 
@@ -1072,7 +1113,9 @@ def test_credentials_file_that_is_no_plain_file_is_unreadable_and_never_blocks(t
     assert snapshots.read_credentials(tmp_path).status == "onleesbaar"
 
 
-def test_credentials_file_is_read_with_a_hard_limit(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_credentials_file_is_read_with_a_hard_limit(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, read_only_mount: None
+) -> None:
     import json
     import os
 

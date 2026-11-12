@@ -9,6 +9,8 @@
   ``501 capability_unavailable``. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
 - ``rollback`` geeft ``501 capability_unavailable``: terugdraaien van een herstel is een nieuw voorstel naar de
   momentopname ``voor_herstel`` (met een nieuwe goedkeuring), geen aparte route.
+- Een NUL-teken of een losse surrogaat in ``propose`` of ``apply`` is ``422 validation_error`` vóór er iets gebeurt
+  (centraal in ``idempotency.run_idempotent``, S-P2-320); bij ``apply`` wordt dan geen nonce verbruikt.
 - Nieuw in contract 1.2 (§6, §3.8): ``GET /connector/v1/hub-link`` (koppelstatus: witte lijst van §3.5 + gepinde
   ``kid``'s en ``rotation_sequence``; dienst-JWT of gebruiker ``viewer``+) en ``POST /connector/v1/hub-link/unlink``
   (ontkoppelen door de Hub met een dienst-JWT of door een beheerder; ``Idempotency-Key``).
@@ -284,8 +286,8 @@ def items(
             "node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
         },
         422: {
-            "description": "onbekende_actie, validation_error, voorstel_geblokkeerd, parameters_ongeldig of "
-            "momentopname_niet_toegestaan"
+            "description": "onbekende_actie, validation_error (ook bij een NUL-teken of losse surrogaat), "
+            "voorstel_geblokkeerd, parameters_ongeldig of momentopname_niet_toegestaan"
         },
         502: {"description": "De bron weigerde de aanmelding, mist rechten of gaf een ongeldig antwoord"},
         503: {"description": "De bron (Authentik of Node-RED) is onbereikbaar"},
@@ -314,7 +316,14 @@ def propose(
             )
         return 201, view, {"ETag": f'"{view["preview_hash"]}"'}
 
-    return run_idempotent(request, session, principal, key, body.model_dump(mode="json"), action)
+    return run_idempotent(request, session, principal, key, _fingerprint(body), action)
+
+
+def _fingerprint(body: ProposeIn) -> dict[str, Any]:
+    """Het verzoek zoals het binnenkwam, voor de Idempotency-Key en de centrale controle op tekst die niet op te slaan
+    is (S-P2-320). Bewust niet ``mode="json"``: die zet een losse surrogaat in een sleutel stil om in een ander teken,
+    zodat de controle hem niet meer zou zien."""
+    return body.model_dump()
 
 
 def _propose_restore(
@@ -350,7 +359,7 @@ def _propose_restore(
             )
         return 201, view, {"ETag": f'"{view["preview_hash"]}"'}
 
-    return run_idempotent(request, session, principal, key, body.model_dump(mode="json"), action)
+    return run_idempotent(request, session, principal, key, _fingerprint(body), action)
 
 
 def _policy_keys(request: Request) -> list[Any]:
@@ -373,8 +382,15 @@ def _policy_keys(request: Request) -> list[Any]:
     responses={
         200: {"description": "Uitgevoerd en met readback bevestigd"},
         403: {"description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"},
-        409: {"description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd of voorstel_verlopen"},
-        422: {"description": "ongeldig_verzoek of parameters_ongeldig"},
+        409: {
+            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd, voorstel_verlopen of "
+            "flowregister_bezig (Retry-After; er is niets gewijzigd)"
+        },
+        422: {
+            "description": "ongeldig_verzoek, parameters_ongeldig of validation_error (NUL-teken of losse surrogaat; "
+            "er wordt geen nonce verbruikt)"
+        },
+        500: {"description": "herstel_niet_vastgelegd — na het schrijven vastgelopen; alle flows zijn geblokkeerd"},
         501: {"description": "capability_unavailable — deze actie is (nog) niet toepasbaar"},
         502: {"description": "node_red_fout — Node-RED weigerde of het resultaat is niet bevestigd"},
         503: {"description": "node_red_unavailable — er is niets gewijzigd"},

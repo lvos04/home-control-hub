@@ -15,14 +15,17 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest import mock
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
-from integrations.domains.automation import restore, snapshots
-from integrations.domains.automation.models import AutomationRestore, AutomationSnapshot
+from integrations.domains.automation import nodered, restore, snapshots
+from integrations.domains.automation.models import AutomationExecutionNonce, AutomationRestore, AutomationSnapshot
+from integrations.models import AuditEvent, IdempotencyRecord, OutboxEvent
 from integrations.timeutil import utcnow
 from integrations.worker import Worker
 from tests import b11
@@ -59,7 +62,17 @@ CREDS_V2 = {BROKER: {"user": "nas", "password": PW2}}
 
 
 @pytest.fixture
-def client(app_factory: Any, node_red_fake: Any) -> Any:
+def read_only_mount() -> Iterator[None]:
+    """Doet alsof de datamap van Node-RED alleen-lezen is gekoppeld. Een echte alleen-lezen-koppeling kan een test
+    zonder root niet maken; daarom wordt alleen de meting daarvan (``snapshots._mounted_read_only``) vervangen, buiten
+    ``monkeypatch`` om (een ``monkeypatch.undo()`` in een test haalt dit dus niet weg). Dat een beschrijfbare map nooit
+    telt: ``test_a_writable_data_dir_never_counts_as_linked``."""
+    with mock.patch.object(snapshots, "_mounted_read_only", lambda _dir_fd: True):
+        yield
+
+
+@pytest.fixture
+def client(app_factory: Any, node_red_fake: Any, read_only_mount: None) -> Any:
     """De dienst met de datamap van Node-RED alleen-lezen gekoppeld (zoals in het formulier van de Custom App)."""
     return app_factory(node_red_data_dir=node_red_fake.data_dir)
 
@@ -228,6 +241,36 @@ def test_snapshot_without_linked_data_dir_says_so(
     assert r.json()["credentials_teruggezet"] is False
     assert node_red_fake.flows == flows_v1()
     assert node_red_fake.credentials == CREDS_V2, "bestaande nodes houden hun (huidige) inloggegevens"
+    assert node_red_fake.writes[-1]["met_credentials"] is False
+
+
+def test_a_writable_data_dir_never_counts_as_linked(
+    app_factory: Any, fake_hub: Any, auth: Any, node_red_fake: Any
+) -> None:
+    """S-P2-320, bouwpunt 1: credentials-herstel telt alleen als de datamap van Node-RED **alleen-lezen** is gekoppeld
+    (``ST_RDONLY``, gemeten met ``fstatvfs`` op de geopende map). Een beschrijfbare koppeling (hier de tijdelijke map
+    van de nep-Node-RED, met een geldig versleuteld bestand erin) is eerlijk ``niet_gekoppeld``: het bestand wordt niet
+    gelezen, de momentopname heeft geen credentials en een herstel zet er geen terug."""
+    import os
+
+    data_dir = node_red_fake.data_dir
+    assert not os.statvfs(data_dir).f_flag & os.ST_RDONLY, "deze proef vraagt een beschrijfbare map"
+    writable = app_factory(node_red_data_dir=data_dir)
+    assert pair(writable, fake_hub).ok
+    setup_node_red(writable, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1)
+    assert (data_dir / "flows_cred.json").is_file(), "het bestand staat er wel"
+    first = b11.snapshot(writable, auth)["snapshot"]
+    assert first["credentials_present"] is False and first["credentials_status"] == "niet_gekoppeld"
+    sync = writable.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert sync["credentials_status"] == "niet_gekoppeld", sync
+    node_red_fake.deploy(flows_v2(), CREDS_V2)
+    b11.snapshot(writable, auth)
+    view = b11.propose_restore(writable, auth, first["id"]).json()
+    assert view["credentials"] == {"credentials_present": False, "status": "niet_gekoppeld", "wijzigt": None}
+    r = b11.apply(writable, fake_hub, b11.signed_restore(fake_hub, view))
+    assert r.status_code == 200, r.text
+    assert r.json()["credentials_teruggezet"] is False
+    assert node_red_fake.flows == flows_v1() and node_red_fake.credentials == CREDS_V2
     assert node_red_fake.writes[-1]["met_credentials"] is False
 
 
@@ -1019,3 +1062,249 @@ def test_restore_never_reactivates_a_flow_that_became_forbidden(
     assert r.status_code == 422 and r.json()["code"] == "momentopname_niet_toegestaan", r.text
     assert r.json()["details"]["bevindingen"][0]["code"] == "module_niet_toegestaan"
     assert node_red_fake.writes == []
+
+
+# ------------------------------------------------------- S-P2-320: tekst die niet op te slaan is (NUL, losse surrogaat)
+#: zo staan ze in de ruwe JSON (een geldige JSON-escape): json.loads maakt er een losse surrogaat en een NUL-teken van
+UNSTORABLE = {"surrogaat": "\\ud800", "nul": "\\u0000"}
+MARK = "@@teken@@"
+
+
+def _raw(body: dict[str, Any], escape: str) -> bytes:
+    raw = json.dumps(body)
+    assert MARK in raw
+    return raw.replace(MARK, escape).encode("ascii")
+
+
+def _stored(linked: Any) -> tuple[int, ...]:
+    """Wat een geweigerde invoer niet mag achterlaten: voorstellen, nonces, bewaarde antwoorden, audit en events."""
+    with linked.app.state.db.sessions() as s:
+        return tuple(
+            int(s.scalar(select(func.count()).select_from(model)) or 0)
+            for model in (AutomationRestore, AutomationExecutionNonce, IdempotencyRecord, AuditEvent, OutboxEvent)
+        )
+
+
+def _invalid_input(r: Any) -> None:
+    """Een invoerfout (422 ``validation_error``) zonder het teken in het antwoord; nooit een serverfout."""
+    assert r.status_code == 422, (r.status_code, r.text)
+    assert r.json()["code"] == "validation_error", r.text
+    assert "\ud800" not in r.text and "\x00" not in r.text and "\\u0000" not in r.text and "\\ud800" not in r.text
+
+
+@pytest.mark.parametrize("bad", list(UNSTORABLE))
+@pytest.mark.parametrize("where", ["parameter", "parameternaam", "actor"])
+def test_unstorable_text_in_a_restore_proposal_is_a_422_and_stores_nothing(
+    scene: Scene, linked: Any, auth: Any, bad: str, where: str
+) -> None:
+    """Vervolgpunt van S-P2-310: een losse surrogaat of een NUL-teken in ``POST /connector/v1/propose`` gaf een
+    serverfout (de Idempotency-Key wordt als UTF-8 vastgelegd) of werd aangenomen. Nu weigert
+    ``idempotency.run_idempotent`` zulke invoer centraal vóór er iets gebeurt: ``422 validation_error``, geen voorstel,
+    geen audit, geen event en geen bewaard antwoord. Dezelfde Idempotency-Key met gewone tekst werkt daarna gewoon."""
+    body: dict[str, Any] = {
+        "action_id": RESTORE,
+        "target": b11.NODE_RED_TARGET,
+        "parameters": {"snapshot_id": scene.snap1["id"]},
+    }
+    marked = copy.deepcopy(body)
+    if where == "parameter":
+        marked["parameters"]["snapshot_id"] += MARK
+    elif where == "parameternaam":
+        marked["parameters"]["x" + MARK] = 1
+    else:
+        marked["actor"] = {"type": "user", "id": "beheerder" + MARK}
+    before = _stored(linked)
+    key = str(uuid.uuid4())
+    headers = {**idem(auth("admin"), key=key), "Content-Type": "application/json"}
+    r = linked.post(f"{CONNECTOR}/propose", content=_raw(marked, UNSTORABLE[bad]), headers=headers)
+    _invalid_input(r)
+    assert _stored(linked) == before
+    assert scene.nr.writes == [] and scene.nr.flows == flows_v2()
+    ok = linked.post(f"{CONNECTOR}/propose", json=body, headers=idem(auth("admin"), key=key))
+    assert ok.status_code == 201, ok.text
+
+
+APPLY_CASES = [
+    ("surrogaat", "reden"),
+    ("surrogaat", "parameter"),
+    ("surrogaat", "veldnaam"),
+    ("nul", "reden"),
+    ("nul", "parameter"),
+    ("nul", "veldnaam"),
+    ("nul", "ondertekend"),
+]
+
+
+@pytest.mark.parametrize(("bad", "where"), APPLY_CASES)
+def test_unstorable_text_in_an_execution_request_is_a_422_and_uses_no_nonce(
+    scene: Scene, linked: Any, fake_hub: Any, bad: str, where: str
+) -> None:
+    """Vervolgpunt van S-P2-310: een losse surrogaat in ``POST /connector/v1/apply`` gaf een serverfout vóór de
+    handtekeningcontrole, en een NUL-teken in een door de Hub ondertekend verzoek (hier in de ``action_id``: de
+    weigering zou het teken bewaren) gaf een databasefout. Nu is het centraal ``422 validation_error``: er wordt geen
+    nonce verbruikt, niets bewaard en niets naar Node-RED geschreven. Het ondertekende verzoek zelf, met dezelfde nonce
+    en dezelfde Idempotency-Key, wordt daarna gewoon uitgevoerd. Een losse surrogaat kan de Hub niet ondertekenen
+    (canonieke JSON in UTF-8); daarom staat ``ondertekend`` alleen bij de NUL."""
+    view = scene.propose()
+    request = scene.sign(view)
+    if where == "ondertekend":
+        bad_request = scene.sign(
+            view, proposal_overrides={"action_id": RESTORE + "\x00"}, overrides={"nonce": request["nonce"]}
+        )
+        raw = json.dumps(bad_request).encode("ascii")
+    else:
+        marked = copy.deepcopy(request)
+        if where == "reden":
+            marked["proposal"]["reason"] += MARK
+        elif where == "parameter":
+            marked["proposal"]["parameters"]["snapshot_id"] += MARK
+        else:
+            marked["x" + MARK] = 1
+        raw = _raw(marked, UNSTORABLE[bad])
+    before = _stored(linked)
+    key = str(uuid.uuid4())
+    headers = {**idem(fake_hub.service_auth(), key=key), "Content-Type": "application/json"}
+    r = linked.post(f"{CONNECTOR}/apply", content=raw, headers=headers)
+    _invalid_input(r)
+    assert _stored(linked) == before, "geen nonce, geen bewaard antwoord, geen audit of event"
+    assert scene.nr.writes == [] and scene.restore_row(view["proposal_id"])["status"] == "voorgesteld"
+    ok = scene.apply(request, key=key)
+    assert ok.status_code == 200, ok.text
+    assert scene.nr.flows == flows_v1() and len(scene.nr.writes) == 1
+
+
+# --------------------------------------------- S-P2-320: blokkeren bij mislukken ná het schrijven (vervolgpunt S-P2-300)
+@pytest.mark.parametrize("where", ["na_herstel", "na_het_schrijven"])
+def test_a_failure_after_writing_blocks_every_flow(
+    scene: Scene, linked: Any, auth: Any, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """Vervolgpunt (1) van S-P2-300: loopt een herstel vast nádat het naar Node-RED schreef (bij het vastleggen van de
+    momentopname ``na_herstel``, of direct na het schrijven), dan klopt het flowregister niet meer met Node-RED. Dan
+    blokkeert ``snapshots._block_after_failure`` in een eigen transactie elke flow met ``synchronisatie_mislukt``
+    (blokkeren bij mislukken, besluit van de gebruiker 2026-11-12), in plaats van dat de oude stand blijft staan. Het
+    antwoord is eerlijk ``500 herstel_niet_vastgelegd``; het verzoek wordt niet blind herhaald (de nonce is op) en
+    pas na een geslaagde synchronisatie én een beheerder gaat de flow weer open."""
+    flow, token = b11.ready_flow(linked, auth, TAB, "notification.send")
+    assert flow["status"] == "actief"
+    view = scene.propose()
+    request = scene.sign(view)
+    blocked_before = len(b11.outbox(linked, "flow.policy.blocked"))
+    if where == "na_herstel":
+        record_state = snapshots.record_state
+
+        def fails_after_writing(*args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("reason") == "na_herstel":
+                raise RuntimeError("ingespoten fout")
+            return record_state(*args, **kwargs)
+
+        monkeypatch.setattr(snapshots, "record_state", fails_after_writing)
+    else:
+        post_flows = nodered.NodeRedClient.post_flows
+
+        def writes_then_fails(self: Any, *args: Any, **kwargs: Any) -> Any:
+            post_flows(self, *args, **kwargs)
+            raise RecursionError("ingespoten fout")
+
+        monkeypatch.setattr(nodered.NodeRedClient, "post_flows", writes_then_fails)
+    r = scene.apply(request)
+    monkeypatch.undo()
+
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert body["code"] == "herstel_niet_vastgelegd", body
+    assert body["details"]["flows_geblokkeerd"] is True and body["details"]["proposal_id"] == view["proposal_id"]
+    assert body["details"]["pre_snapshot_id"], body
+    assert len(scene.nr.writes) == 1 and scene.nr.flows == flows_v1(), "er is geschreven"
+    detail = b11.flow_detail(linked, auth, flow["id"])
+    assert (detail["status"], detail["blocked_reason"]) == ("geblokkeerd", "synchronisatie_mislukt"), detail
+    assert len(b11.outbox(linked, "flow.policy.blocked")) == blocked_before + 1
+    sync = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert sync["ok"] is False and sync["fout"]["reason"] == "synchronisatie_mislukt", sync
+    act = b11.request_action(
+        linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+    )
+    assert act.status_code == 403 and act.json()["details"]["reason"] == "flow_geblokkeerd", act.text
+    # niets van een geslaagd herstel vastgelegd, en niet blind te herhalen
+    assert b11.outbox(linked, "automation.restore.applied") == []
+    assert [s.reason for s in snapshot_rows(linked)] == ["handmatig", "handmatig", "voor_herstel"]
+    row = scene.restore_row(view["proposal_id"])
+    assert row["status"] == "voorgesteld" and row["result"]["fase"] == "toepassen_gestart", row
+    assert scene.apply(request).json()["code"] == "nonce_al_gebruikt"
+    assert len(scene.nr.writes) == 1
+    # een synchronisatie die weer slaagt, legt de stand van Node-RED vast; de flow blijft dicht tot een beheerder hem
+    # hervat (geen automatisch heropenen)
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, flow["id"])["status"] == "gepauzeerd"
+
+
+# ----------------------------------------------------- S-P2-320: wachten op het slot op het flowregister is begrensd
+def test_waiting_for_the_register_lock_is_bounded_and_changes_nothing(
+    scene: Scene,
+    linked: Any,
+    auth: Any,
+    fake_hub: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vervolgpunt (2) van S-P2-300: wie het slot op het flowregister houdt, praat soms met Node-RED (lezen, met
+    herhalingen). Wie erop wacht, wacht nu hooguit ``snapshots.REGISTER_LOCK_TIMEOUT_MS`` (hier 300 ms; anders 30 s)
+    en krijgt dan ``409 flowregister_bezig``: ``POST …/snapshots``, een herstel (de nonce blijft ongebruikt) en de
+    worker. Er is dan niets gewijzigd. Na het vrijgeven werkt alles weer, ook hetzelfde ondertekende verzoek. Zonder
+    lock_timeout blijven ze wachten tot het slot vrij is: dan faalt deze test."""
+    monkeypatch.setattr(snapshots, "REGISTER_LOCK_TIMEOUT_MS", 300)
+    worker = Worker(
+        make_settings(node_red_sync_interval_s=60, node_red_data_dir=node_red_fake.data_dir),
+        transport=fake_hub.transport,
+    )
+    worker.automation_step(100.0)
+    view = scene.propose()
+    request = scene.sign(view)
+    before = _stored(linked)
+    snapshots_before = len(snapshot_rows(linked))
+    worker.state.next_node_red_sync = 0
+    out: dict[str, Any] = {}
+    with linked.app.state.db.engine.connect() as holder:
+        holder.execute(select(func.pg_advisory_xact_lock(snapshots.REGISTER_LOCK_KEY)))  # houdt het slot vast
+        started = time.monotonic()
+        threads = [
+            _in_thread(lambda: linked.post(f"{A}/snapshots", headers=idem(auth("admin"))), out, "momentopname"),
+            _in_thread(lambda: scene.apply(request), out, "herstel"),
+            _in_thread(lambda: worker.automation_step(200.0), out, "worker"),
+        ]
+        for thread in threads:
+            thread.join(10)
+        done_while_held = {t.name: not t.is_alive() for t in threads}
+        waited = time.monotonic() - started
+        holder.rollback()  # geeft het slot vrij
+    for thread in threads:
+        thread.join(30)
+
+    assert done_while_held == {"momentopname": True, "herstel": True, "worker": True}, done_while_held
+    assert waited < 10, waited
+    for name in ("momentopname", "herstel"):
+        r = out[name]
+        assert r.status_code == 409 and r.json()["code"] == "flowregister_bezig", (name, r.text)
+        assert r.headers["Retry-After"] == "30"
+    assert getattr(out["worker"], "code", None) == "flowregister_bezig", out["worker"]
+    assert _stored(linked) == before, "geen nonce, geen bewaard antwoord, geen audit of event"
+    assert len(snapshot_rows(linked)) == snapshots_before and scene.nr.writes == []
+    assert scene.restore_row(view["proposal_id"])["status"] == "voorgesteld"
+    # na het vrijgeven: hetzelfde verzoek (dezelfde nonce) wordt gewoon uitgevoerd
+    r = scene.apply(request)
+    assert r.status_code == 200, r.text
+    assert scene.nr.flows == flows_v1()
+
+
+def test_the_lock_timeout_only_applies_to_taking_the_register_lock(linked: Any) -> None:
+    """De grens geldt alleen voor het wachten op het slot op het flowregister (``pg_advisory_xact_lock``), niet voor
+    de rest van de transactie: daarna staat ``lock_timeout`` weer op de waarde van vóór het slot. Zo raakt hij de
+    rijsloten in dezelfde transactie niet (bijvoorbeeld ``simulate.close_for_block``)."""
+    with linked.app.state.db.sessions() as session:
+        before = session.execute(text("SHOW lock_timeout")).scalar_one()
+        snapshots.lock_register(session)
+        assert session.execute(text("SHOW lock_timeout")).scalar_one() == before
+        session.execute(text("SET LOCAL lock_timeout = '7s'"))
+        snapshots.lock_register(session)  # tweede keer in dezelfde transactie: de eigen waarde blijft staan
+        assert session.execute(text("SHOW lock_timeout")).scalar_one() == "7s"
+        session.rollback()

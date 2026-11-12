@@ -212,7 +212,8 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         "HCH_HUB_KEY_POLL_S": "1",
         "HCH_AUTHENTIK_SYNC_INTERVAL_S": "2",
         "HCH_NODE_RED_SYNC_INTERVAL_S": "2",
-        # zoals in het formulier van de Custom App: de datamap van Node-RED alleen-lezen gekoppeld
+        # de datamap van Node-RED: hier een gewone, beschrijfbare map (een alleen-lezen-koppeling vraagt root); de dienst
+        # telt hem daarom als niet_gekoppeld (S-P2-320) en neemt het credentials-bestand niet mee
         "HCH_NODE_RED_DATA_DIR": str(nr_data),
         # proxy-omgevingsvariabelen worden genegeerd (§3.2/§5): een kapotte proxy mag het koppelen niet raken
         "HTTP_PROXY": "http://127.0.0.1:9",

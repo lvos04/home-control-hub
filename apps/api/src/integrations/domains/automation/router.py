@@ -1020,7 +1020,15 @@ def revoke_flow_token(
 
 
 # ------------------------------------------------------------------------------------------ momentopnamen (B11-005)
-@router.post("/snapshots", summary="Node-RED nu uitlezen en een momentopname vastleggen (alleen lezen)")
+@router.post(
+    "/snapshots",
+    summary="Node-RED nu uitlezen en een momentopname vastleggen (alleen lezen)",
+    responses={
+        409: {"description": "node_red_niet_ingesteld, of flowregister_bezig (Retry-After; er is niets gewijzigd)"},
+        502: {"description": "node_red_fout — o.a. synchronisatie_mislukt (alle flows geblokkeerd)"},
+        503: {"description": "node_red_unavailable — de stand van de flows blijft staan"},
+    },
+)
 def post_snapshot(
     request: Request,
     session: Session = Depends(get_session),

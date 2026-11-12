@@ -11,6 +11,9 @@ een wijziging loopt via de Hub, en tijdens een proefrun komt er over die weg nie
   niet op de vaste lijst van contract §8 staat (een stekker schakelen) nooit;
 - B11-004: een proefrun wijzigt geen apparaat;
 - B11-005: herstel naar een eerdere momentopname met een door de Hub ondertekend verzoek, zonder geheimen in de logs.
+  De datamap van Node-RED is hier een gewone, beschrijfbare map (een alleen-lezen-koppeling vraagt root): de dienst
+  neemt het credentials-bestand dan eerlijk niet mee (``niet_gekoppeld``). Credentials heen en terug staan in
+  ``apps/api/tests/integration/test_b11_005_herstel.py``.
 
 Echte Node-RED, echte Hub en echte apparaten: NIET GEVALIDEERD (echte NAS). Volgorde van de tests is bewust
 (module-scope stack)."""
@@ -238,7 +241,9 @@ def test_01_editor_alleen_beheerder_en_exec_flow_geblokkeerd(stack: Stack) -> No
     # de beheerder haalt de exec-flow weer weg in de editor
     httpx.post(f"{stack.node_red}/sim/deploy", json={"flows": _flows_v1(), "credentials": creds})
     STATE["snap1"] = _snapshot(stack)
-    assert STATE["snap1"]["credentials_status"] == "meegenomen"
+    # de datamap is in deze proef beschrijfbaar: geen alleen-lezen-koppeling, dus geen credentials (S-P2-320)
+    assert STATE["snap1"]["credentials_status"] == "niet_gekoppeld"
+    assert STATE["snap1"]["credentials_present"] is False
     # het beleid is weer in orde: de schone flow staat gepauzeerd tot een beheerder hem bewust hervat
     assert _flow(stack, TAB)["status"] == "gepauzeerd"
     r = httpx.put(
@@ -398,7 +403,9 @@ def test_04_proefrun_wijzigt_geen_apparaat(stack: Stack) -> None:
 
 
 def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
-    """B11-005: undo naar de eerdere momentopname, mét credentials, alleen met een ondertekend verzoek van de Hub."""
+    """B11-005: undo naar de eerdere momentopname, alleen met een ondertekend verzoek van de Hub. De datamap van
+    Node-RED is hier beschrijfbaar en telt dus niet als gekoppeld: de flows gaan terug, de credentials niet (de nodes
+    houden hun huidige inloggegevens)."""
     admin = stack.token("admin")
     snap1 = STATE["snap1"]
     # iemand past de flow en het broker-wachtwoord aan in de editor
@@ -453,13 +460,13 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     r = httpx.post(f"{stack.hch}/connector/v1/apply", json=signed, headers=_idem(stack.service(), key=key))
     assert r.status_code == 200, r.text
     result = r.json()
-    assert result["status"] == "uitgevoerd" and result["credentials_teruggezet"] is True
+    assert result["status"] == "uitgevoerd" and result["credentials_teruggezet"] is False
     assert result["readback"]["gelijk_aan_momentopname"] is True
     assert "NIET GEVALIDEERD (echte NAS)" in result["validatie"]
     state = _nr_state(stack)
     assert state["flows"] == _flows_v1()
-    assert state["credentials"] == {BROKER: {"user": "nas", "password": PW1}}
-    assert len(state["writes"]) == 1 and state["writes"][0]["met_credentials"] is True
+    assert state["credentials"] == {BROKER: {"user": "nas", "password": PW2}}
+    assert len(state["writes"]) == 1 and state["writes"][0]["met_credentials"] is False
     # hetzelfde verzoek nog eens: zelfde antwoord, geen tweede schrijfactie; met een nieuwe sleutel: geweigerd
     again = httpx.post(f"{stack.hch}/connector/v1/apply", json=signed, headers=_idem(stack.service(), key=key))
     assert again.status_code == 200 and again.json() == result

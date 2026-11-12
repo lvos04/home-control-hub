@@ -576,6 +576,117 @@ def test_a_manual_snapshot_that_fails_blocks_every_flow_too(
     assert [s["id"] for s in listed] == [first["snapshot_id"]], listed
 
 
+def _flows_answer(node_red_fake: Any, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    """``GET /flows`` antwoordt zoals in ``case``: onbruikbaar (Node-RED antwoordde wel) of helemaal niet."""
+    import httpx
+
+    original = node_red_fake.handle
+
+    def answer(status: int, body: bytes, headers: dict[str, str] | None = None) -> Any:
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and request.url.path == "/flows":
+                return httpx.Response(
+                    status, content=body, headers={"content-type": "application/json", **(headers or {})}
+                )
+            return original(request)
+
+        return handle
+
+    def times_out(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/flows":
+            raise httpx.ReadTimeout("nep-time-out", request=request)
+        return original(request)
+
+    if case == "antwoord_ongeldig":
+        monkeypatch.setattr(node_red_fake, "handle", answer(200, b"geen json"))
+    elif case == "antwoord_te_groot":
+        # meer dan 16 MiB aangekondigd: de client leest het antwoord dan niet eens
+        monkeypatch.setattr(node_red_fake, "handle", answer(200, b"{}", {"content-length": str(17 * 1024 * 1024)}))
+    elif case == "onverwacht_antwoord":
+        monkeypatch.setattr(node_red_fake, "handle", answer(418, b'{"fout": "theepot"}'))
+    elif case == "http_5xx":
+        monkeypatch.setattr(node_red_fake, "handle", answer(500, b'{"fout": "intern"}'))
+    elif case == "timeout":
+        monkeypatch.setattr(node_red_fake, "handle", times_out)
+    else:
+        node_red_fake.up = False
+
+
+UNUSABLE_ANSWERS = ["antwoord_ongeldig", "antwoord_te_groot", "onverwacht_antwoord"]
+
+
+@pytest.mark.parametrize("case", [*UNUSABLE_ANSWERS, "onbereikbaar", "timeout", "http_5xx"])
+def test_an_unusable_answer_from_node_red_blocks_every_flow_but_no_answer_does_not(
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    """S-P2-320, keuze B1 (b) (uitwerking van het besluit van de gebruiker "blokkeren bij mislukken", ADR-0016 kop 2):
+    antwoordde Node-RED wel, maar is het antwoord onbruikbaar (``antwoord_ongeldig``, ``antwoord_te_groot`` of
+    ``onverwacht_antwoord``), dan blokkeert de synchronisatie elke flow met ``synchronisatie_mislukt``; de meting van de
+    bron noemt de oorzaak. Antwoordde Node-RED niet (``onbereikbaar``, ``timeout``) of met een serverfout
+    (``http_5xx``), dan blijft de stand van de flows staan en zegt alleen de synchronisatie eerlijk ``ok: false``."""
+    flows = [*simple_flow(), *simple_flow(tab_id="tabander00000002", label="Ander")]
+    setup_node_red(linked, fake_hub, auth, flows=flows)
+    worker = Worker(make_settings(node_red_sync_interval_s=60, http_max_attempts=1), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    flow, token = b11.ready_flow(linked, auth, T, "notification.send")
+    assert flow["status"] == "actief"
+    before = len(b11.outbox(linked, "flow.policy.blocked"))
+
+    _flows_answer(node_red_fake, monkeypatch, case)
+    worker.state.next_node_red_sync = 0
+    worker.automation_step(200.0)
+    assert worker.state.stats["node_red_sync_failed"] == 1
+    state = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    health = linked.get("/integrations/v1/sources/node_red", headers=auth("viewer")).json()["runtime"]["health"]
+    assert state["ok"] is False and health["reason_code"] == case, (state, health)
+    if case in UNUSABLE_ANSWERS:
+        _nothing_gets_through(linked, auth, flow["id"], token, "synchronisatie_mislukt")
+        blocked = b11.outbox(linked, "flow.policy.blocked")[before:]
+        assert sorted(e["payload"]["reden"] for e in blocked) == ["synchronisatie_mislukt"] * 2, blocked
+        assert state["fout"]["reason"] == "synchronisatie_mislukt" and state["fout"]["oorzaak"] == case, state
+        assert health["status"] == "degraded", health
+    else:
+        assert b11.flow_detail(linked, auth, flow["id"])["status"] == "actief"
+        assert b11.outbox(linked, "flow.policy.blocked")[before:] == []
+        assert state["fout"]["reason"] == case, state
+        assert health["status"] == "down", health
+        r = b11.request_action(
+            linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+        )
+        assert r.status_code == 202, r.text
+
+    monkeypatch.undo()
+    node_red_fake.up = True
+    worker.state.next_node_red_sync = 0
+    worker.automation_step(300.0)
+    assert worker.state.stats["node_red_syncs"] == 2
+    expected = "gepauzeerd" if case in UNUSABLE_ANSWERS else "actief"
+    assert b11.flow_detail(linked, auth, flow["id"])["status"] == expected, "nooit vanzelf weer actief"
+
+
+def test_a_manual_snapshot_with_an_unusable_answer_blocks_every_flow_too(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dezelfde keuze B1 (b) via ``POST …/snapshots``: ``502 node_red_fout`` met reden ``synchronisatie_mislukt`` en
+    de oorzaak in de meting van de bron; geen momentopname; de blokkade blijft staan (aparte transactie)."""
+    setup_node_red(linked, fake_hub, auth, flows=[*simple_flow(), *simple_flow(tab_id="tabander00000002")])
+    first = b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, T, "notification.send")
+    _flows_answer(node_red_fake, monkeypatch, "antwoord_ongeldig")
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 502 and r.json()["code"] == "node_red_fout", r.text
+    assert r.json()["details"]["reason"] == "synchronisatie_mislukt", r.text
+    _nothing_gets_through(linked, auth, flow["id"], token, "synchronisatie_mislukt")
+    listed = linked.get(f"{A}/snapshots", headers=auth("viewer")).json()["items"]
+    assert [s["id"] for s in listed] == [first["snapshot_id"]], listed
+
+
 def test_a_clean_configuration_with_long_ids_and_any_text_stays_active(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, make_settings: Any
 ) -> None:
