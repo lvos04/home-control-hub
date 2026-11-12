@@ -53,6 +53,10 @@ DEFAULT_MAX_PER_HOUR = 30
 FLOW_MAX_PER_HOUR = 30
 ANY_ACTION = "*"
 MAX_PARAM_BYTES = 8 * 1024
+#: doel en parameters zijn hooguit zo diep genest (objecten en lijsten); dieper is een invoerfout (422), geen
+#: serverfout. Dezelfde grens als voor ondertekende gegevens (``security.execreq.MAX_DEPTH``). Tot deze grens blijft
+#: het gewone pad: te diep voor de controles op geheimen en tekens is een vastgelegde weigering (403).
+MAX_NESTING = 32
 #: zo lang mag de Hub een verzoek van een flow hooguit in behandeling nemen (ActionProposal.expires_in_seconds)
 PROPOSAL_EXPIRES_S = 900
 

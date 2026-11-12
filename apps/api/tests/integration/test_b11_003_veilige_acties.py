@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from integrations.domains.automation import actions
 from tests import b11
 from tests.b11 import FLOW_API, A
 from tests.conftest import idem, setup_node_red
@@ -400,6 +401,57 @@ def test_lone_surrogate_in_target_or_parameters_is_a_422(
     assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
     ok = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY)
     assert ok.status_code == 202, ok.text
+
+
+def _nested(depth: int) -> str:
+    """Een object dat ``depth`` niveaus diep genest is, als ruwe JSON."""
+    return '{"a":' * depth + "1" + "}" * depth
+
+
+@pytest.mark.parametrize("field", ["target", "parameters"])
+@pytest.mark.parametrize("depth", [actions.MAX_NESTING + 1, 260, 400])
+def test_too_deeply_nested_target_or_parameters_is_a_422(
+    linked: Any, auth: Any, flow: Any, field: str, depth: int
+) -> None:
+    """Vervolgpunt R-VEILIG (S-P2-300): doel of parameters die 260 of meer niveaus diep genest waren, gaven een
+    serverfout (500, "Maximum serialization depth exceeded" bij het vastleggen van de Idempotency-Key). Dieper dan
+    ``actions.MAX_NESTING`` is nu een invoerfout (422 ``validation_error`` met het veld); er wordt niets vastgelegd en
+    niets naar de Hub gestuurd."""
+    _, token = flow
+    body = {"target": '{"type":"user","id":"user-1"}', "parameters": '{"tekst":"x"}'}
+    body[field] = _nested(depth)
+    content = (
+        f'{{"action_id":"notification.send","target":{body["target"]},"parameters":{body["parameters"]},'
+        '"reason":"test"}'
+    )
+    r = linked.post(
+        f"{FLOW_API}/actions",
+        content=content,
+        headers={**idem(b11.bearer(token)), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
+    assert [f["veld"] for f in r.json()["details"]["fouten"]] == [field], r.text
+    assert _requests(linked, auth) == []
+    assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
+
+
+def test_nesting_up_to_the_limit_is_still_judged_and_refused(linked: Any, auth: Any, flow: Any) -> None:
+    """Tot en met ``actions.MAX_NESTING`` niveaus blijft het pad zoals het was: het verzoek wordt beoordeeld en (te
+    diep voor de controle op geheimen en tekens) geweigerd en vastgelegd (403), niet als invoerfout afgewezen."""
+    _, token = flow
+    content = (
+        '{"action_id":"notification.send","target":{"type":"user","id":"user-1"},'
+        f'"parameters":{_nested(actions.MAX_NESTING)},"reason":"test"}}'
+    )
+    r = linked.post(
+        f"{FLOW_API}/actions",
+        content=content,
+        headers={**idem(b11.bearer(token)), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "forbidden"
+    assert len(_requests(linked, auth)) == 1 and b11.outbox(linked, "flow.action.requested") == []
 
 
 def test_reason_is_required(linked: Any, flow: Any) -> None:

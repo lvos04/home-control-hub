@@ -32,7 +32,7 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   en onzichtbare of niet-ASCII-tekens in een doel worden altijd geweigerd, ook met een ruim token. Hetzelfde event
   vijf keer geeft één verzoek. Limiet per flow en actie, en per flow over alle acties samen. Een losse surrogaat in
   het doel of de parameters (ook in een sleutel of diep genest) is een invoerfout (`422 validation_error`), geen
-  serverfout.
+  serverfout; hetzelfde geldt voor een doel of parameters die dieper dan 32 niveaus genest zijn.
 - **Proefrun (B11-004).** Vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd. Een flow met nodes die
   zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging. Raakt een flow geblokkeerd terwijl zijn
   proefrun al loopt, dan wordt die proefrun direct afgesloten (`mislukt`, `flow_geblokkeerd`; open voorbeeld-events

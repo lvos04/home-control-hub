@@ -155,6 +155,22 @@ class ActionIn(BaseModel):
 
     @field_validator("target", "parameters")
     @classmethod
+    def _not_too_deep(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Dieper genest dan ``actions.MAX_NESTING`` (objecten en lijsten) is een invoerfout (422
+        ``validation_error``), geen serverfout bij het vastleggen van de Idempotency-Key (vervolgpunt R-VEILIG van
+        S-P2-300: vanaf ongeveer 255 niveaus gaf dat een 500). Zonder recursie geteld, zodat de telling zelf nooit
+        vastloopt."""
+        stack: list[tuple[Any, int]] = [(value, 1)]
+        while stack:
+            item, depth = stack.pop()
+            if depth > actions.MAX_NESTING:
+                raise ValueError(f"is dieper genest dan {actions.MAX_NESTING} niveaus")
+            children = item.values() if isinstance(item, dict) else item if isinstance(item, list) else ()
+            stack.extend((child, depth + 1) for child in children if isinstance(child, dict | list))
+        return value
+
+    @field_validator("target", "parameters")
+    @classmethod
     def _utf8_text(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die in UTF-8 kan), ook in
         een sleutel of diep genest, is een invoerfout (422 ``validation_error``), geen serverfout bij de

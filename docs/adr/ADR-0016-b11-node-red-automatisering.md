@@ -199,7 +199,9 @@ Deze ronde bouwt de vijf werkpakketten:
 - **Grenzen:** standaard 30 verzoeken per uur per flow en actie, en daarnaast 30 per uur per flow over alle acties
   samen; ook geweigerde verzoeken tellen mee (elk verzoek is een event naar de Hub), zodat een ruime scope geen
   onbegrensde stroom verzoeken geeft. Een rij `*` in de grenzen van een flow geldt voor alle acties van die flow
-  samen. Een beheerder kan dit alleen strenger zetten. Een afgeremd verzoek (`429`) wordt niet vastgelegd.
+  samen. Een beheerder kan dit alleen strenger zetten. Een afgeremd verzoek (`429`) wordt niet vastgelegd. Doel en
+  parameters zijn samen hooguit 8 kB (`422 parameters_te_groot`) en elk hooguit 32 niveaus diep genest
+  (`actions.MAX_NESTING`); dieper is een invoerfout (`422 validation_error`) en wordt niet vastgelegd.
 - Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
   ongezien alsnog uitgevoerd zou worden.
 - De Hub meldt de uitkomst terug met `POST …/action-requests/{id}/result` (alleen dienst-JWT). Een eindstand
