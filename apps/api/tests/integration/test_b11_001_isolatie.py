@@ -635,8 +635,8 @@ def test_profile_secrets_are_shown_once_and_stored_nowhere(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    key = "7d0c7f0e-4b1f-4a55-9d53-0c7d5c0f6a01"
-    r = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=key))
+    herhaalsleutel = "7d0c7f0e-4b1f-4a55-9d53-0c7d5c0f6a01"  # vaste Idempotency-Key van deze test (geen geheim)
+    r = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=herhaalsleutel))
     assert r.status_code == 201, r.text
     profile = r.json()
     password = profile["beheerwachtwoord"]
@@ -645,7 +645,7 @@ def test_profile_secrets_are_shown_once_and_stored_nowhere(
     assert len(secrets) >= 3, "wachtwoord, credentialSecret en minstens één wachtwoordhash"
 
     # dezelfde Idempotency-Key: het bewaarde antwoord bevat het wachtwoord en de argumenten niet meer
-    again = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=key))
+    again = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=herhaalsleutel))
     assert again.status_code == 201
     assert again.json()["beheerwachtwoord"] is None
     assert again.json()["arguments"] is None

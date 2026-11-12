@@ -228,8 +228,8 @@ def test_signature_made_with_json_escapes_does_not_verify() -> None:
     request = make(sim, proposal_overrides={"reason": "café"})
     body = {k: v for k, v in request.items() if k != "signature"}
     escaped = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-    key: Ed25519PrivateKey = sim.policy_keys[-1].private
-    forged = {**body, "signature": execreq.b64url(key.sign(escaped))}
+    ondertekenaar: Ed25519PrivateKey = sim.policy_keys[-1].private  # testsleutel van de nep-Hub
+    forged = {**body, "signature": execreq.b64url(ondertekenaar.sign(escaped))}
     assert refusal(forged, sim).details["reason"] == "handtekening_ongeldig"
 
 
