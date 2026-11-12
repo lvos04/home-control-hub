@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, ValidatorFunctionWrapHandler, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -171,18 +171,36 @@ class ActionIn(BaseModel):
 
     @field_validator("target", "parameters")
     @classmethod
-    def _utf8_text(cls, value: dict[str, Any]) -> dict[str, Any]:
+    def _utf8_text(cls, value: dict[str, Any], info: ValidationInfo) -> dict[str, Any]:
         """Een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die in UTF-8 kan), ook in
         een sleutel of diep genest, is een invoerfout (422 ``validation_error``), geen serverfout bij de
         groottecontrole (vervolgpunt R-VEILIG-5 van S-P2-295). Hetzelfde geldt voor een NUL-teken, dat PostgreSQL niet
-        opslaat (S-P2-310)."""
-        return actions.storable(value)
+        opslaat (S-P2-310). Behalve bij een actie op de harde weigerlijst: zie :func:`_refused_anyway`."""
+        return value if _refused_anyway(info) else actions.storable(value)
 
-    @field_validator("reason")
+    @field_validator("reason", mode="wrap")
     @classmethod
-    def _reason_text(cls, value: str) -> str:
-        """Een NUL-teken in de reden is een invoerfout (422), geen serverfout in de database (S-P2-310)."""
-        return actions.storable(value)
+    def _reason_text(cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> str:
+        """Een NUL-teken in de reden is een invoerfout (422), geen serverfout in de database (S-P2-310); een losse
+        surrogaat weigert de tekstcontrole van pydantic zelf al (422). Behalve bij een actie op de harde weigerlijst
+        (zie :func:`_refused_anyway`): dan wordt de reden niet gecontroleerd, want hij wordt niet bewaard."""
+        if isinstance(value, str) and actions.unstorable(value) and _refused_anyway(info):
+            return value
+        return actions.storable(handler(value))
+
+
+def _refused_anyway(info: ValidationInfo) -> bool:
+    """Staat de (geldige) ``action_id`` op de harde weigerlijst (:func:`actions.local_refusal` zonder doel en
+    parameters: boiler, shell, vernietigend, beleid, betaald of buiten de vaste lijst)? Dan is tekst die niet op te
+    slaan is geen reden voor een ``422`` zonder spoor: het verzoek wordt geweigerd en vastgelegd zonder doel,
+    parameters en reden (R-VEILIG-3 van S-P2-310; zie :func:`request_action`)."""
+    action_id = info.data.get("action_id")
+    return isinstance(action_id, str) and actions.local_refusal(action_id, {}, {}) is not None
+
+
+#: de tekstvelden van een actieverzoek die bij een actie op de harde weigerlijst niet worden bewaard als er tekst in
+#: staat die niet op te slaan is
+TEXT_FIELDS = ("target", "parameters", "reason")
 
 
 def _flow(session: Session, identity: FlowIdentity, *, lock: bool = False) -> AutomationFlow:
@@ -379,14 +397,32 @@ def request_action(
     key: uuid.UUID = Depends(idempotency_key),
     tid: str = Depends(trace_id),
 ) -> Any:
-    size = len(json.dumps({"p": body.parameters, "t": body.target}, ensure_ascii=False).encode("utf-8"))
-    if size > actions.MAX_PARAM_BYTES:
-        raise ApiError(
-            422,
-            "parameters_te_groot",
-            f"Doel en parameters samen zijn te groot (maximaal {actions.MAX_PARAM_BYTES // 1024} kB).",
-            {"bytes": size, "max_bytes": actions.MAX_PARAM_BYTES},
-        )
+    target, parameters, reason = body.target, body.parameters, body.reason
+    fingerprint: dict[str, Any]
+    if any(actions.unstorable(getattr(body, name)) for name in TEXT_FIELDS):
+        # Alleen mogelijk bij een actie op de harde weigerlijst (ActionIn geeft anders 422): de weigering wordt gewoon
+        # vastgelegd (rij, audit, flow.action.rejected), maar zonder doel, parameters en reden; de reden is de
+        # weigerreden. De Idempotency-Key herkent het verzoek aan de ingevoerde tekst, als ASCII-escapes.
+        refusal = actions.local_refusal(body.action_id, {}, {})
+        if refusal is None:  # kan niet (zie ActionIn); fail-closed
+            raise ApiError(422, "validation_error", "De invoer is ongeldig.")
+        target, parameters, reason = {}, {}, refusal
+        fingerprint = {
+            **body.model_dump(mode="json", exclude=set(TEXT_FIELDS)),
+            "niet_op_te_slaan": json.dumps(
+                {name: getattr(body, name) for name in TEXT_FIELDS}, ensure_ascii=True, sort_keys=True
+            ),
+        }
+    else:
+        size = len(json.dumps({"p": parameters, "t": target}, ensure_ascii=False).encode("utf-8"))
+        if size > actions.MAX_PARAM_BYTES:
+            raise ApiError(
+                422,
+                "parameters_te_groot",
+                f"Doel en parameters samen zijn te groot (maximaal {actions.MAX_PARAM_BYTES // 1024} kB).",
+                {"bytes": size, "max_bytes": actions.MAX_PARAM_BYTES},
+            )
+        fingerprint = body.model_dump(mode="json")
 
     def action() -> Result:
         now = utcnow()
@@ -416,9 +452,9 @@ def request_action(
                 token=token,
                 key=key,
                 action_id=body.action_id,
-                target=body.target,
-                parameters=body.parameters,
-                reason=body.reason,
+                target=target,
+                parameters=parameters,
+                reason=reason,
                 risk_claim=body.risk_claim,
                 trigger_delivery_id=body.trigger_delivery_id,
                 trace_id=tid,
@@ -437,7 +473,7 @@ def request_action(
             result["trace_id"] = tid  # een weigering wordt vastgelegd en bij dezelfde key identiek teruggegeven
         return outcome.status_code, result, {}
 
-    return run_idempotent(request, session, identity.principal, key, body.model_dump(mode="json"), action)
+    return run_idempotent(request, session, identity.principal, key, fingerprint, action)
 
 
 @router.get("/actions/{request_id}", summary="Stand van een eigen actieverzoek (zoals de Hub die terugmeldde)")

@@ -147,13 +147,19 @@ def _strings(value: Any, depth: int = 0, *, keys_only: bool = False) -> Iterator
 UNSTORABLE_NL = "bevat een NUL-teken of een losse surrogaat; alleen tekst die als UTF-8 op te slaan is, is toegestaan"
 
 
+def unstorable(value: Any) -> bool:
+    """Staat ergens in de waarde (sleutels en tekst, op elke diepte) een NUL-teken of een losse surrogaat? Dezelfde
+    regel als de flowscan (:func:`policy._has_unstorable_text`)."""
+    return policy._has_unstorable_text(value)
+
+
 def storable[T](value: T) -> T:
     """Invoercontrole voor de API (S-P2-310; vervolgpunt 5 van S-P2-300): ergens in de waarde (sleutels en tekst, op
     elke diepte) een NUL-teken of een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die
     in UTF-8 kan) gooit ``ValueError``; in een validator wordt dat ``422 validation_error`` met het veld. Zonder deze
     controle gaf zo'n teken een serverfout: bij het vastleggen van de Idempotency-Key (UTF-8) of in PostgreSQL (geen
-    NUL). Dezelfde regel als de flowscan (:func:`policy._has_unstorable_text`)."""
-    if policy._has_unstorable_text(value):
+    NUL). Zie :func:`unstorable`."""
+    if unstorable(value):
         raise ValueError(UNSTORABLE_NL)
     return value
 

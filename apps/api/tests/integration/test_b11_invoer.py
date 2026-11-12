@@ -8,10 +8,16 @@ niets vastgelegd: geen auditregel, geen event, geen wijziging aan de flow en gee
 gewone tekst werkt gewoon, zodat vaststaat dat de ``422`` door dat ene teken komt. Een losse surrogaat in het doel of de
 parameters van een actieverzoek staat ook in
 ``test_b11_003_veilige_acties.py::test_lone_surrogate_in_target_or_parameters_is_a_422``.
+
+Eén uitzondering (R-VEILIG-3 van S-P2-310, ADR-0016 kop 4): vraagt een flow een actie aan die op de harde weigerlijst
+staat (zoals een dataset verwijderen of de boiler schakelen), dan is het antwoord de vastgelegde weigering (``403``,
+rij, audit, ``flow.action.rejected``), zonder doel, parameters en reden; het teken staat nergens. Een cursor met zo'n
+teken is ``400 invalid_cursor`` (R-VEILIG-2 en R-TECH-2 van S-P2-310).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from typing import Any
@@ -137,6 +143,88 @@ def test_unstorable_text_in_an_action_request_is_a_422_and_records_nothing(
     assert b11.outbox(linked, "flow.action.requested") == [] and b11.outbox(linked, "flow.action.rejected") == []
     ok = _send(linked, "POST", f"{FLOW_API}/actions", raw.replace(s, ""), idem(b11.bearer(token)))
     assert ok.status_code == (202 if field != "veldnaam" else 422), ok.text
+
+
+FORBIDDEN = {
+    "dataset_verwijderen": ("zfs.dataset.delete", '{"type":"dataset","id":"data-x"}', "destructief_verboden"),
+    "boiler": ("energy.boiler.switch", '{"type":"device","id":"boiler"}', "boiler_nooit"),
+}
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+@pytest.mark.parametrize("field", ["reason", "target", "parameters"])
+@pytest.mark.parametrize("case", list(FORBIDDEN))
+def test_forbidden_action_with_unstorable_text_is_refused_and_recorded_without_the_text(
+    linked: Any, auth: Any, flow: Any, case: str, field: str, bad: str
+) -> None:
+    """R-VEILIG-3 van S-P2-310 (EX45, EX27): een flow die een verboden actie aanvraagt en er een NUL of een losse
+    surrogaat bij zet, ontloopt de vastlegging niet. Het antwoord is de weigering (``403`` met de weigerreden), er is
+    één rij ``geweigerd`` zonder doel en parameters en met de weigerreden als reden, één auditregel en één event
+    ``flow.action.rejected``; niets gaat naar de Hub en het teken staat nergens."""
+    _, token = flow
+    s = BAD[bad]
+    action_id, target, reason_code = FORBIDDEN[case]
+    parts = {"target": target, "parameters": '{"stand":"aan"}', "reason": '"test"'}
+    if field == "reason":
+        parts["reason"] = f'"test {s}"'
+    else:
+        parts[field] = parts[field].replace('"}', f'{s}"}}')
+    raw = (
+        f'{{"action_id":"{action_id}","target":{parts["target"]},"parameters":{parts["parameters"]},'
+        f'"reason":{parts["reason"]}}}'
+    )
+    audit_before = len(b11.audit_rows(linked))
+    headers = idem(b11.bearer(token))
+    r = _send(linked, "POST", f"{FLOW_API}/actions", raw, headers)
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "forbidden" and r.json()["details"]["reason"] == reason_code, r.text
+    assert "\ud800" not in r.text and "\x00" not in r.text
+    rows = linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["id"] == r.json()["details"]["action_request_id"]
+    assert (row["action_id"], row["status"], row["rejected_reason"]) == (action_id, "geweigerd", reason_code)
+    assert (row["target"], row["parameters"], row["reason"]) == ({}, {}, reason_code), row
+    new_audit = b11.audit_rows(linked)[audit_before:]
+    assert [a["action"] for a in new_audit] == ["automation.action.rejected"], new_audit
+    rejected = b11.outbox(linked, "flow.action.rejected")
+    assert len(rejected) == 1 and rejected[0]["payload"]["reden"] == reason_code, rejected
+    assert rejected[0]["payload"]["ernst"] == "hoog"
+    assert b11.outbox(linked, "flow.action.requested") == []
+    stored = b11.everything_stored(linked)
+    assert "\x00" not in stored and "\ud800" not in stored
+    # dezelfde Idempotency-Key geeft hetzelfde antwoord en legt niets opnieuw vast
+    again = _send(linked, "POST", f"{FLOW_API}/actions", raw, headers)
+    assert again.status_code == 403 and again.json()["details"] == r.json()["details"], again.text
+    assert len(linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]) == 1
+    assert len(b11.outbox(linked, "flow.action.rejected")) == 1
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+@pytest.mark.parametrize("shape", ["label_en_id", "tijdstip_en_id", "genest"])
+def test_a_cursor_with_unstorable_text_is_a_400_invalid_cursor(
+    linked: Any, auth: Any, flow: Any, shape: str, bad: str
+) -> None:
+    """R-VEILIG-2 en R-TECH-2 van S-P2-310: een zelfgemaakte cursor met een NUL of een losse surrogaat is als viewer
+    op ``GET …/automation/flows`` een ongeldige cursor (``400 invalid_cursor``), geen serverfout. Dezelfde cursor zonder
+    het teken werkt."""
+    s = BAD[bad]
+    fid = str(uuid.uuid4())
+    values = {
+        "label_en_id": f'["a{s}","{fid}"]',
+        "tijdstip_en_id": f'["2026-01-01T00:00:00{s}","{fid}"]',
+        "genest": f'[{{"x":["a{s}"]}},"{fid}"]',
+    }
+
+    def cursor(raw: str) -> str:
+        return base64.urlsafe_b64encode(f'{{"k":{raw}}}'.encode("ascii")).rstrip(b"=").decode("ascii")
+
+    r = linked.get(f"{A}/flows", params={"cursor": cursor(values[shape])}, headers=auth("viewer"))
+    assert r.status_code == 400, (r.status_code, r.text)
+    assert r.json()["code"] == "invalid_cursor", r.text
+    assert "\ud800" not in r.text and "\x00" not in r.text
+    ok = linked.get(f"{A}/flows", params={"cursor": cursor(values[shape].replace(s, ""))}, headers=auth("viewer"))
+    assert ok.status_code == 200, ok.text
 
 
 @pytest.mark.parametrize("bad", list(BAD))
