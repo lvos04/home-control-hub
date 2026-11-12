@@ -225,24 +225,37 @@ Deze ronde bouwt de vijf werkpakketten:
   samen; ook geweigerde verzoeken tellen mee (elk verzoek is een event naar de Hub), zodat een ruime scope geen
   onbegrensde stroom verzoeken geeft. Een rij `*` in de grenzen van een flow geldt voor alle acties van die flow
   samen. Een beheerder kan dit alleen strenger zetten. Een afgeremd verzoek (`429`) wordt niet vastgelegd. Doel en
-  parameters zijn samen hooguit 8 kB (`422 parameters_te_groot`) en elk hooguit 32 niveaus diep genest
-  (`actions.MAX_NESTING`); dieper is een invoerfout (`422 validation_error`) en wordt niet vastgelegd.
+  parameters zijn samen hooguit 8 kB (`422 parameters_te_groot`; uitzondering: een actie die op naam geweigerd wordt,
+  met tekst die niet op te slaan is, zie hieronder) en elk hooguit 32 niveaus diep genest (`actions.MAX_NESTING`);
+  dieper is een invoerfout (`422 validation_error`) en wordt niet vastgelegd.
 - **Tekst die niet op te slaan is (aanvulling 2026-11-12, S-P2-310):** een NUL-teken (dat PostgreSQL niet opslaat) of
   een losse surrogaat (een geldige JSON-escape zoals `\ud800`, maar geen tekst die in UTF-8 kan), in een tekstveld,
   een sleutel of diep genest, is op de flow-API en op de beheer-API een invoerfout: `422 validation_error` met het veld
-  (`actions.storable`), en bij een event van de Hub `422 event_ongeldig`. Nooit een serverfout, en er wordt niets
-  vastgelegd. Twee uitzonderingen (aanvulling 2026-11-12, herstel S-P2-310):
-  - **Een actie op de harde weigerlijst** (de `action_id` is geldig en `actions.local_refusal` weigert hem al zonder
-    doel en parameters: boiler, shell, vernietigend, beleid, betaald, of buiten de vaste lijst) met zo'n teken in het
-    doel, de parameters of de reden: het antwoord is de gewone vastgelegde weigering, `403 forbidden` met de
-    weigerreden in `details.reason` (bijvoorbeeld `destructief_verboden` of `boiler_nooit`), met een rij `geweigerd`,
-    een auditregel en het event `flow.action.rejected` (ernst `hoog`). Doel, parameters en reden worden dan niet
-    bewaard (zoals bij `geheim_in_parameters`); als reden staat de weigerreden. Waarom `403` en geen `422`: de
-    weigering hangt niet van de tekst af (met gewone tekst wordt dezelfde actie net zo geweigerd), `403` is op deze
-    route het antwoord "geweigerd en vastgelegd", en een `422` zonder spoor liet een flow met één onzichtbaar teken
-    elke vastlegging en de melding met ernst `hoog` ontlopen (R-VEILIG-3 van S-P2-310). Een actie die niet op de
-    harde weigerlijst staat, met zo'n teken, blijft `422 validation_error` zonder vastlegging. De Idempotency-Key
-    herkent het verzoek aan de ingevoerde tekst (als ASCII-escapes in de vingerafdruk; die wordt niet bewaard).
+  (`actions.storable`; bij een actieverzoek van een flow beslist `flowapi.request_action` met het hele verzoek), en
+  bij een event van de Hub `422 event_ongeldig`. Nooit een serverfout, en er wordt niets vastgelegd. Twee
+  uitzonderingen (aanvulling 2026-11-12, herstel S-P2-310):
+  - **Een actieverzoek dat de harde weigerlijst ook zonder die tekens weigert**, met zo'n teken in het doel, de
+    parameters of de reden. De `action_id` is geldig en `actions.local_refusal` weigert het verzoek met een kopie van
+    doel en parameters waarin elk NUL-teken en elke losse surrogaat een `?` is (`actions.cleaned`; twee sleutels die
+    daardoor gelijk worden, blijven allebei staan). Dat geldt voor een actie op de weigerlijst (zoals
+    `zfs.dataset.delete` of `energy.boiler.switch`) of buiten de vaste lijst, en ook voor de boiler of Emby in het
+    doel of de parameters van een actie die zelf wel mag, zoals `app.restart` (R-VEILIG-4 van S-P2-310). Op die
+    inhoud (boiler, Emby, tekens in een id) wordt alleen beoordeeld als doel en parameters samen hooguit 8 kB zijn,
+    net als zonder die tekens; daarboven alleen op de naam van de actie. Het antwoord is de gewone vastgelegde
+    weigering: `403 forbidden` met de weigerreden in `details.reason` (bijvoorbeeld `destructief_verboden`,
+    `boiler_nooit` of `emby_nooit_door_platform`), een rij `geweigerd`, een auditregel en het event
+    `flow.action.rejected` met de ernst van die weigerreden (zie hierboven). Doel, parameters en reden worden dan niet
+    bewaard (zoals bij `geheim_in_parameters`); als reden staat de weigerreden. Op dit pad geldt de grens van 8 kB
+    voor doel en parameters dus niet voor een actie die op naam geweigerd wordt, en wordt een reden met zo'n teken
+    niet op 500 tekens gecontroleerd: die tekst wordt niet bewaard, en de bodylimiet van 1 MiB (`413`) en de grens
+    van 32 niveaus blijven gelden. Waarom `403` en geen `422`: de weigering hangt niet van die tekens af (zonder die
+    tekens wordt hetzelfde verzoek net zo geweigerd), `403` is op deze route het antwoord "geweigerd en vastgelegd",
+    en een `422` zonder spoor liet een flow met één onzichtbaar teken elke vastlegging en de melding met ernst `hoog`
+    ontlopen (R-VEILIG-3 en R-VEILIG-4 van S-P2-310). Weigert de weigerlijst het verzoek zo niet (bijvoorbeeld bij
+    `notification.send`, ook met de boiler in de tekst, bij `app.restart` zonder boiler of Emby, of bij de boiler in
+    parameters van meer dan 8 kB; zonder die tekens is dat laatste `422 parameters_te_groot`), dan blijft het
+    `422 validation_error` met het veld, zonder vastlegging. De Idempotency-Key herkent het verzoek aan de ingevoerde
+    tekst (als ASCII-escapes in de vingerafdruk; die wordt niet bewaard).
   - **Een cursor** met zo'n teken (alleen mogelijk met een zelfgemaakte cursor) is `400 invalid_cursor`, centraal in
     `pagination.decode_cursor` voor elke lijstroute (R-VEILIG-2 en R-TECH-2 van S-P2-310).
 - Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
