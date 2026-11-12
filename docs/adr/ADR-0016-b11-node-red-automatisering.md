@@ -149,8 +149,11 @@ Deze ronde bouwt de vijf werkpakketten:
   tegen. Herhalen met oplopende wachttijd, na 10 pogingen `dead_letter` (zichtbaar, opnieuw aan te bieden door een
   operator). Dubbele events worden één keer afgeleverd.
 - **Lussen:** elk actieverzoek draagt de keten van flows mee. Een event dat door een eigen actie van de flow is
-  veroorzaakt, gaat niet naar die flow terug; een keten langer dan 8 wordt geweigerd.
-- Events met classificatie `sensitive` of hoger gaan nooit naar een flow.
+  veroorzaakt, gaat niet naar die flow terug (`lus_gedetecteerd`). Een keten is hooguit 8 flows lang: een event
+  waarvan de keten al 8 of meer flows telt, gaat naar geen enkele flow, en een actieverzoek op zo'n event wordt
+  geweigerd (beide `keten_te_lang`; `inbox.MAX_CHAIN` = 8).
+- Een event met classificatie `sensitive` (de hoogste van de drie klassen van §7: `public`, `internal`,
+  `sensitive`) gaat nooit naar een flow; het wordt wel bewaard (reden `classificatie_sensitive`).
 - **Bron van de events:** `POST …/automation/events` neemt alleen een dienst-JWT van de Hub aan. De eigen events van
   deze dienst (outbox) biedt de worker zelf aan de flows aan.
 
@@ -206,8 +209,15 @@ Deze ronde bouwt de vijf werkpakketten:
 
 - Een proefrun levert **vaste voorbeeld-events** af (alleen-lezen, met checksum, gemarkeerd als voorbeeld). Een
   gewijzigde voorbeeldset is een fout, geen stil succes.
-- Tijdens een proefrun krijgt elk actieverzoek het antwoord `gesimuleerd`: er gaat niets naar de Hub, de
-  verzoeklimiet wordt niet aangesproken en er wordt niets op Node-RED geschreven.
+- Tijdens een proefrun krijgt elk actieverzoek het antwoord `gesimuleerd`: er gaat niets naar de Hub, er komt geen
+  rij bij de actieverzoeken, de verzoeklimiet wordt niet aangesproken en er wordt niets op Node-RED geschreven. De
+  uitkomst per verzoek (in het antwoord en in het runlog) is alleen `zou_worden_aangevraagd` of `zou_worden_geweigerd`
+  (met de reden van de weigering); het resultaat van de run telt beide.
+- **Geblokkeerde flow:** een geblokkeerde flow start geen proefrun (`409 flow_geblokkeerd`). Raakt een flow
+  geblokkeerd terwijl zijn proefrun al loopt, dan telt die proefrun niet meer: `claim` geeft geen voorbeeld-events
+  meer, `GET …/flow-api/me` toont geen proefrun en een actieverzoek wordt niet gesimuleerd maar geweigerd zoals bij
+  elke geblokkeerde flow (kop 2: `403` met reden `flow_geblokkeerd`, vastgelegd, geen actieverzoek naar de Hub). De
+  proefrun zelf loopt af op zijn vaste eindtijd (15 minuten na de start) en staat dan op `mislukt` (`verlopen`).
 - **Grens van de afscherming (eerlijk gemeld):** de dienst kan alleen het pad via de flow-API afschermen. Een flow
   met nodes die zelf naar buiten gaan (HTTP, MQTT, TCP, …) kan de dienst niet tegenhouden. Zo'n proefrun start
   alleen na een uitdrukkelijke bevestiging (`bevestig_niet_afgeschermd`), en de run zegt dat erbij.

@@ -30,12 +30,17 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   voert nooit iets uit. Alleen de acties van de vaste lijst uit contract §8 kunnen worden aangevraagd; al het
   andere wordt geweigerd. De boiler schakelen, Emby als doel, verwijderen, shell, beleid wijzigen, betaalde acties
   en onzichtbare of niet-ASCII-tekens in een doel worden altijd geweigerd, ook met een ruim token. Hetzelfde event
-  vijf keer geeft één verzoek. Limiet per flow en actie, en per flow over alle acties samen.
+  vijf keer geeft één verzoek. Limiet per flow en actie, en per flow over alle acties samen. Een losse surrogaat in
+  het doel of de parameters (ook in een sleutel of diep genest) is een invoerfout (`422 validation_error`), geen
+  serverfout.
 - **Proefrun (B11-004).** Vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd. Een flow met nodes die
-  zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging.
+  zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging. Raakt een flow geblokkeerd terwijl zijn
+  proefrun al loopt, dan krijgt hij niets meer en worden zijn verzoeken geweigerd (niet meer gesimuleerd).
 - **Versies en herstel (B11-005).** Versleutelde momentopnamen (credentials alleen als door Node-RED versleuteld
   blok), een diff zonder waarden, en herstel als voorstel dat alleen met een door de Hub ondertekend ExecutionRequest
-  wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen.
+  wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen. Synchronisatie,
+  blokkeren bij mislukken en herstel schrijven het flowregister onder één slot: een herstel dat tegelijk met de
+  worker loopt, legt de flows niet meer stil.
 - Connector-health: check `automatisering` (alleen als Node-RED is ingesteld).
 - `deploy/truenas/NODE_RED_CUSTOM_APP.md`: verwijst naar het manifest van `jelly-leon-platform`
   (`install/manifests/node-red.manifest.yaml`, 568:568) als installatieweg en beschrijft alleen wat in deze app
