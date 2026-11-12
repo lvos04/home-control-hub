@@ -265,6 +265,35 @@ def test_failed_delivery_in_a_dry_run_is_logged_and_not_retried(linked: Any, aut
     assert r.status_code == 409 and r.json()["code"] == "aflevering_niet_vastgelopen"
 
 
+def test_a_dry_run_that_started_before_the_block_gives_nothing_and_simulates_nothing(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """Vervolgpunt R-VEILIG-3 (S-P2-295): een proefrun die al liep voordat de flow geblokkeerd raakte. Daarna krijgt
+    de flow geen voorbeeld-events meer en wordt een actieverzoek niet gesimuleerd maar geweigerd, zoals bij elke
+    geblokkeerde flow (ADR-0016 kop 2): 403 ``flow_geblokkeerd``, niets naar de Hub en geen regel in het runlog."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting", "backup-mislukt"]).json()
+    assert run["status"] == "bezig"
+    assert linked.get(f"{FLOW_API}/me", headers=b11.bearer(token)).json()["dry_run"]["run_id"] == run["id"]
+
+    # grof blokkeren: een verboden node in een ander tabblad blokkeert ook deze flow
+    node_red_fake.deploy([*simple_flow(), *exec_flow()])
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "geblokkeerd"
+
+    claimed = b11.claim(linked, token)
+    assert claimed["items"] == [] and claimed["dry_run"] is False and claimed["flow_status"] == "geblokkeerd"
+    me = linked.get(f"{FLOW_API}/me", headers=b11.bearer(token)).json()
+    assert me["dry_run"] is None and me["flow"]["status"] == "geblokkeerd"
+    a = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY)
+    assert a.status_code == 403, a.text
+    assert a.json()["code"] == "forbidden" and a.json()["details"]["reason"] == "flow_geblokkeerd"
+    assert "dry_run" not in a.json()
+    assert b11.outbox(linked, "flow.action.requested") == []
+    log = run_of(linked, auth, run["id"])["runlog"]
+    assert [e["soort"] for e in log] == ["start"], "geen aflevering en geen gesimuleerde actie na de blokkade"
+
+
 def test_paused_flow_can_be_tried_before_it_is_resumed(linked: Any, auth: Any, flow: Any) -> None:
     detail, token = flow
     assert b11.put_flow(linked, auth, detail["id"], "state", {"status": "gepauzeerd", "reden": "x"}).status_code == 200

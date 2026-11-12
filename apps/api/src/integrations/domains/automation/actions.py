@@ -364,7 +364,8 @@ def request_action(
     stored_parameters = {} if refusal == "geheim_in_parameters" else parameters
     stored_target = {} if refusal == "geheim_in_parameters" else target
 
-    run = inbox.active_dry_run(session, flow.id, now)
+    # een geblokkeerde flow heeft geen proefrun meer (ook niet als die al liep vóór de blokkade): weigeren, zie hieronder
+    run = inbox.dry_run_for(session, flow, now)
     if run is not None:
         return _simulate(run, action_id, stored_target, stored_parameters, refusal, preview, trigger_error, now)
     if flow.status == "geblokkeerd":

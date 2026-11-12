@@ -311,6 +311,15 @@ def active_dry_run(session: Session, flow_id: uuid.UUID, now: datetime) -> Autom
     ).first()
 
 
+def dry_run_for(session: Session, flow: AutomationFlow, now: datetime) -> AutomationFlowRun | None:
+    """De lopende proefrun die voor deze flow telt: nooit voor een geblokkeerde flow. Een proefrun die al liep vóór de
+    blokkade geeft dan geen voorbeeld-events meer uit en simuleert geen actieverzoeken; de flow krijgt niets en elk
+    verzoek wordt geweigerd zoals bij elke geblokkeerde flow (ADR-0016 kop 2; vervolgpunt R-VEILIG-3 van S-P2-295)."""
+    if flow.status == "geblokkeerd":
+        return None
+    return active_dry_run(session, flow.id, now)
+
+
 def envelope_of(event: AutomationEvent) -> dict[str, Any]:
     return {
         "schema_version": event.envelope_version,
@@ -404,9 +413,10 @@ def _fail(session: Session, d: AutomationDelivery, error: str, now: datetime, tr
 def claim(
     session: Session, flow: AutomationFlow, *, limit: int, now: datetime, trace_id: str
 ) -> tuple[list[dict[str, Any]], AutomationFlowRun | None]:
-    """Geeft per bron hooguit het oudste openstaande event uit. Tijdens een proefrun alleen de events van die run."""
+    """Geeft per bron hooguit het oudste openstaande event uit. Tijdens een proefrun alleen de events van die run; een
+    geblokkeerde flow krijgt niets, ook niet uit een proefrun die al liep vóór de blokkade (:func:`dry_run_for`)."""
     release_expired(session, now, trace_id, flow.id)
-    run = active_dry_run(session, flow.id, now)
+    run = dry_run_for(session, flow, now)
     if run is None and flow.status != "actief":
         return [], None
     stmt = select(AutomationDelivery).where(

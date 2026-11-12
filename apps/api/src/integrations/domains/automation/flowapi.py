@@ -171,7 +171,7 @@ def me(session: Session = Depends(get_session), identity: FlowIdentity = Depends
     flow = _flow(session, identity)
     token = _token(session, identity)
     now = utcnow()
-    run = inbox.active_dry_run(session, flow.id, now)
+    run = inbox.dry_run_for(session, flow, now)
     triggers = session.scalars(
         select(AutomationTrigger).where(AutomationTrigger.flow_id == flow.id).order_by(AutomationTrigger.event_type)
     ).all()
@@ -334,7 +334,7 @@ def request_action(
         now = utcnow()
         flow = _flow(session, identity, lock=True)
         token = _token(session, identity)
-        if inbox.active_dry_run(session, flow.id, now) is None and not _hub_linked(request):
+        if inbox.dry_run_for(session, flow, now) is None and not _hub_linked(request):
             raise ApiError(
                 503,
                 "hub_unavailable",

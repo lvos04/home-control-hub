@@ -8,6 +8,9 @@ legt vast wat de flow ermee doet. Zolang de proefrun loopt:
   runlog zegt alleen ``zou_worden_aangevraagd`` of ``zou_worden_geweigerd``;
 - wordt een mislukte aflevering niet herhaald: de uitzondering staat in het runlog.
 
+Een geblokkeerde flow heeft geen proefrun: :func:`start_run` weigert, en een proefrun die al liep vóór de blokkade
+telt daarna niet meer (``inbox.dry_run_for``): de flow krijgt niets en elk actieverzoek wordt geweigerd.
+
 **Grens (eerlijk):** deze dienst schermt het pad via de flow-API af. Een node die zelf naar buiten gaat (``http
 request``, ``mqtt out`` …) valt buiten wat deze dienst kan tegenhouden. Daarom meldt de proefrun die nodes als
 ``niet_afgeschermd`` en start hij alleen als de beheerder dat uitdrukkelijk bevestigt. Dat geen enkel echt apparaat
