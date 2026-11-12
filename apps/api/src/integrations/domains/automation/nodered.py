@@ -14,7 +14,8 @@ NIET GEVALIDEERD.
   met de ``rev`` van de laatst gelezen toestand; Node-RED weigert een verouderde ``rev`` met 409 ``version_mismatch``.
 - Contract §5: 5 s connect / 15 s read; alleen GET en het aanmelden worden herhaald (max. 3 pogingen) en alleen bij een
   netwerkfout of 429/502/503/504. ``POST /flows`` wordt **nooit** herhaald. Geen redirects, proxy-variabelen genegeerd.
-- Elke fout wordt ``NodeRedError`` met een vaste ``reason``; nooit een lege lijst als "geen flows".
+- Elke fout wordt ``NodeRedError`` met een vaste ``reason``; nooit een lege lijst als "geen flows". Uitzondering: een
+  antwoord dat te diep genest is voor ``json.loads`` (RecursionError); de synchronisatie blokkeert dan alle flows.
 """
 
 from __future__ import annotations
@@ -66,6 +67,8 @@ REASONS_NL = {
     "credentials_niet_te_ontsleutelen": "Node-RED kan de credentials uit de momentopname niet ontsleutelen (een "
     "andere credentialSecret); de flows zijn niet gewijzigd.",
     "flows_geweigerd": "Node-RED weigerde de flows; er is niets gewijzigd.",
+    "synchronisatie_mislukt": "De synchronisatie met Node-RED is vastgelopen; alle flows van Node-RED zijn geblokkeerd "
+    "tot een synchronisatie weer slaagt en een beheerder ze hervat.",
 }
 
 
@@ -186,6 +189,8 @@ class NodeRedClient:
 
     @staticmethod
     def _json(status: int, body: bytes, path: str) -> Any:
+        # alleen ongeldige JSON is antwoord_ongeldig; een RecursionError (te diep genest) gaat bewust door: dan
+        # blokkeert de synchronisatie alle flows (snapshots.sync, vorm A van R-VEILIG-8) en blijft de oude stand niet
         try:
             return json.loads(body)
         except ValueError as exc:

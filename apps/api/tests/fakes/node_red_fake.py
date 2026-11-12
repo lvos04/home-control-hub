@@ -82,6 +82,16 @@ def _rev(flows: list[dict[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(flows, separators=(",", ":")).encode()).hexdigest()  # gemeten: 64 hex
 
 
+def _stringify(value: Any) -> bytes:
+    """Zoals ``JSON.stringify`` van Node-RED: UTF-8, een NUL als ``\\u0000`` en een losse surrogaat als ``\\ud800``
+    (gemeten op de gepinde image, R-VEILIG-8). ``json.dumps`` met ``ensure_ascii=False`` laat een losse surrogaat
+    staan en UTF-8 kent hem niet; ``backslashreplace`` geeft binnen een JSON-tekst precies die escape. Voor gewone
+    tekst zijn de bytes gelijk aan die van ``httpx.Response(json=...)``."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8", "backslashreplace"
+    )
+
+
 @dataclass
 class NodeRedFake:
     """Eén nep-Node-RED. Standaard **zonder** beveiliging (zoals een verse installatie); ``apply_arguments`` zet het
@@ -103,6 +113,8 @@ class NodeRedFake:
     #: test-knoppen: eerstvolgende POST /flows faalt met deze status, of verliest het antwoord ná het verwerken
     fail_next_post: int | None = None
     drop_next_post_response: bool = False
+    #: test-knop: ``GET /flows`` geeft precies deze bytes (bv. een waarde die dieper genest is dan json.dumps maakt)
+    flows_body: bytes | None = None
     tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
     requests: list[tuple[str, str]] = field(default_factory=list)
     writes: list[dict[str, Any]] = field(default_factory=list)
@@ -373,9 +385,11 @@ class NodeRedFake:
             if principal is None or not self._allowed(principal, permission):
                 return httpx.Response(401, text="Unauthorized")
         if (method, path) == ("GET", "/flows"):
-            if request.headers.get("node-red-api-version") == "v2":
-                return httpx.Response(200, json={"flows": copy.deepcopy(self.flows), "rev": self.rev})
-            return httpx.Response(200, json=copy.deepcopy(self.flows))
+            if self.flows_body is not None:
+                return httpx.Response(200, content=self.flows_body, headers={"content-type": "application/json"})
+            v2 = request.headers.get("node-red-api-version") == "v2"
+            body = _stringify({"flows": self.flows, "rev": self.rev} if v2 else self.flows)
+            return httpx.Response(200, content=body, headers={"content-type": "application/json"})
         if (method, path) == ("POST", "/flows"):
             return self._post_flows(request, principal)
         if (method, path) == ("GET", "/nodes"):

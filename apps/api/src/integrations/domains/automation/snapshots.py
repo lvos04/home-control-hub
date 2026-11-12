@@ -9,11 +9,18 @@
   eerlijk ``niet_gekoppeld``.
 - De diff toont alleen **welke** nodes en velden verschillen, nooit de waarden (een function-node kan een geheim
   bevatten).
+- **Blokkeren bij mislukken** (vorm A, besluit van de gebruiker 2026-11-12, R-VEILIG-8): loopt de synchronisatie vast
+  nadat Node-RED antwoordde (een uitzondering bij het lezen, in de scan, het flowregister of de opslag), dan zet een
+  aparte transactie elke flow van de bron op ``geblokkeerd`` met reden ``synchronisatie_mislukt`` en de stand op
+  ``ok: false``. Nooit de oude stand; na een geslaagde synchronisatie blijven die flows gepauzeerd tot een beheerder
+  of operator ze hervat. Een :class:`NodeRedError` (onbereikbaar, te groot antwoord, 5xx, ongeldige JSON) valt hier
+  niet onder: dan blijft de stand van de flows staan en is alleen de synchronisatie ``ok: false``.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 import uuid
@@ -54,9 +61,14 @@ CRED_FILE = "flows_cred.json"
 MAX_CRED_BYTES = 4 * 1024 * 1024
 MAX_DIFF_ROWS = 200
 ISOLATION_MAX_AGE = timedelta(minutes=15)
-#: redenen van het flowbeleid: is de oorzaak weg, dan wordt de flow gepauzeerd (nooit vanzelf weer actief)
-POLICY_REASONS = policy.BLOCK_REASONS
+#: reden van een flow die geblokkeerd is omdat de synchronisatie vastliep (vorm A, R-VEILIG-8)
+SYNC_FAILED = "synchronisatie_mislukt"
+#: redenen van het flowbeleid en van een vastgelopen synchronisatie: is de oorzaak weg, dan wordt de flow gepauzeerd
+#: (nooit vanzelf weer actief)
+POLICY_REASONS = (*policy.BLOCK_REASONS, SYNC_FAILED)
 SYSTEM_ACTOR = "home-control-hub"
+
+log = logging.getLogger("integrations.automation")
 
 
 def state_get(session: Session, key: str) -> dict[str, Any] | None:
@@ -406,6 +418,43 @@ def apply_scan(
     return blocked
 
 
+def block_every_flow(session: Session, *, trace_id: str, now: datetime) -> list[str]:
+    """Zet elke flow van de bron die nog bestaat op ``geblokkeerd`` met reden :data:`SYNC_FAILED` (een verwijderde flow
+    blijft verwijderd: hij heeft geen token meer en krijgt niets). Per flow die nog niet geblokkeerd was gaat een event
+    ``flow.policy.blocked`` naar de Hub. Geeft de bron-id's van de geblokkeerde flows terug."""
+    reason = SYNC_FAILED
+    blocked: list[str] = []
+    rows = session.scalars(
+        select(AutomationFlow)
+        .where(AutomationFlow.source_id == SOURCE_ID, AutomationFlow.status != "verwijderd")
+        .order_by(AutomationFlow.source_flow_id)
+    ).all()
+    for flow in rows:
+        blocked.append(flow.source_flow_id)
+        was_blocked = flow.status == "geblokkeerd"
+        if was_blocked and flow.blocked_reason == reason:
+            continue
+        flow.status = "geblokkeerd"
+        flow.blocked_reason = reason
+        flow.blocked_at = flow.blocked_at if was_blocked and flow.blocked_at else now
+        if not was_blocked:
+            _emit(
+                session,
+                "flow.policy.blocked",
+                flow,
+                trace_id,
+                {
+                    "ernst": "hoog",
+                    "reden": reason,
+                    "label": flow.label,
+                    "bevindingen": [],
+                    "gevolg_nl": "De synchronisatie met Node-RED is vastgelopen: deze flow krijgt geen events en mag "
+                    "geen acties aanvragen tot een synchronisatie weer slaagt en een beheerder hem hervat.",
+                },
+            )
+    return blocked
+
+
 def revoke_tokens(session: Session, flow_id: uuid.UUID, reason: str, now: datetime) -> int:
     rows = session.scalars(
         select(AutomationFlowToken).where(
@@ -432,8 +481,10 @@ def sync(
 ) -> SyncResult:
     """Leest Node-RED uit, legt een momentopname vast als er iets veranderd is en werkt het flowregister bij.
 
-    Schrijft nooit naar Node-RED. Een fout wordt vastgelegd in de synchronisatietoestand en teruggegeven; de aanroeper
-    committeert."""
+    Schrijft nooit naar Node-RED. Een :class:`NodeRedError` wordt vastgelegd in de synchronisatietoestand en
+    teruggegeven; de aanroeper committeert. Elke andere uitzondering (bij het lezen, bijvoorbeeld een RecursionError
+    uit ``json.loads``, of in de scan, het flowregister of de opslag) wordt teruggedraaid en daarna blokkeert een
+    aparte, hier gecommitte transactie alle flows (:func:`_block_after_failure`)."""
     tid = trace_id or str(uuid.uuid4())
     now = utcnow()
     try:
@@ -453,23 +504,59 @@ def sync(
             status = "down" if exc.reason in UNREACHABLE_REASONS else "degraded"
             _record_probe(session, now, status, exc.reason, {"http_status": exc.http_status, "path": exc.path})
         return SyncResult(ok=False, error=exc.to_dict())
-    _record_probe(
-        session, now, "healthy", "synchronisatie_ok", {"node_red_version": nr_settings.get("version"), "pad": "/flows"}
-    )
-    return record_state(
-        session,
-        settings,
-        vault,
-        doc_flows=doc.flows,
-        rev=doc.rev,
-        node_sets=node_sets,
-        nr_settings=nr_settings,
-        reason=reason,
-        actor=actor,
-        trace_id=tid,
-        force_snapshot=force_snapshot,
-        now=now,
-    )
+    except Exception as exc:  # o.a. RecursionError uit NodeRedClient._json: dicht, nooit de oude stand
+        return _block_after_failure(session, exc, trace_id=tid, now=now)
+    try:
+        _record_probe(
+            session,
+            now,
+            "healthy",
+            "synchronisatie_ok",
+            {"node_red_version": nr_settings.get("version"), "pad": "/flows"},
+        )
+        return record_state(
+            session,
+            settings,
+            vault,
+            doc_flows=doc.flows,
+            rev=doc.rev,
+            node_sets=node_sets,
+            nr_settings=nr_settings,
+            reason=reason,
+            actor=actor,
+            trace_id=tid,
+            force_snapshot=force_snapshot,
+            now=now,
+        )
+    except Exception as exc:  # scan, flowregister of opslag: dicht, nooit de oude stand
+        return _block_after_failure(session, exc, trace_id=tid, now=now)
+
+
+def _block_after_failure(session: Session, exc: Exception, *, trace_id: str, now: datetime) -> SyncResult:
+    """Vorm A ("blokkeren bij mislukken", besluit van de gebruiker 2026-11-12, R-VEILIG-8). Het half gedane werk wordt
+    teruggedraaid (ook een afgebroken databasetransactie); daarna zet een **aparte** transactie elke flow van de bron
+    op ``geblokkeerd`` (:data:`SYNC_FAILED`), de synchronisatie op ``ok: false`` en de meting van de bron op
+    ``degraded``, en commit die meteen: de blokkade blijft ook staan als de aanroeper daarna iets terugdraait. Alleen
+    de soort uitzondering wordt bewaard en gelogd, nooit de tekst (die kan inhoud van de configuratie bevatten). Lukt
+    ook dat niet, dan gaat de uitzondering door (de worker meldt de stap dan als mislukt)."""
+    session.rollback()
+    kind = type(exc).__name__[:80]
+    error: dict[str, Any] = {"reason": SYNC_FAILED, "http_status": None, "path": None, "uitzondering": kind}
+    try:
+        blocked = block_every_flow(session, trace_id=trace_id, now=now)
+        previous = state_get(session, SYNC_KEY) or {}
+        state_put(
+            session,
+            SYNC_KEY,
+            {**previous, "ok": False, "laatste_poging": iso(now), "geblokkeerd": len(blocked), "fout": error},
+        )
+        _record_probe(session, now, "degraded", SYNC_FAILED, {"uitzondering": kind})
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    log.warning("synchronisatie met Node-RED vastgelopen (%s): %d flows geblokkeerd", kind, len(blocked))
+    return SyncResult(ok=False, blocked=blocked, error=error)
 
 
 def _record_probe(session: Session, now: datetime, status: str, reason: str, detail: dict[str, Any]) -> None:

@@ -4,13 +4,14 @@ Drie onderdelen, alle drie fail-closed:
 
 1. **Flowscan** (:func:`scan`): elke node in de configuratie van Node-RED wordt gecontroleerd tegen de verboden typen
    (``exec``: shell-uitvoering), de toegestane modules (standaard alleen de kern ``node-red``) en de geïnstalleerde
-   typen, en de scan controleert of hij elke node kan plaatsen (vorm, dubbele id, tabblad, draden en links).
-   **Grof blokkeren** (besluit van de gebruiker, 2026-11-11): staat er ergens in de configuratie iets verbodens of
-   iets wat de dienst niet kan plaatsen, dan zijn **alle** flows (tabbladen) van de bron geblokkeerd tot het weg is:
-   geen afleveringen, geen actieverzoeken, geen token. De precieze uitkomst per tabblad blijft voor de melding: het
-   tabblad met de oorzaak (of dat er via een subflow, configuratienode, draad, link of eigenschap mee verbonden is)
-   krijgt die bevinding zelf, elk ander tabblad ``bron_geblokkeerd`` met de oorzaak en de plaats ervan. De scan bootst
-   Node-RED niet na om een uitzondering te maken. Let op: Node-RED 5 **accepteert** een flow met een uitgesloten
+   typen, en de scan controleert of hij elke node kan plaatsen (vorm, ook lengte van id en ``z`` en tekens die niet op
+   te slaan zijn, dubbele id, tabblad, draden en links). **Grof blokkeren** (besluit van de gebruiker, 2026-11-11):
+   staat er ergens in de configuratie iets verbodens of iets wat de dienst niet kan plaatsen, dan zijn **alle** flows
+   (tabbladen) van de bron geblokkeerd tot het weg is: geen afleveringen, geen actieverzoeken, geen token. De precieze
+   uitkomst per tabblad blijft voor de melding: het tabblad met de oorzaak (of dat er via een subflow,
+   configuratienode, draad, link of eigenschap mee verbonden is) krijgt die bevinding zelf, elk ander tabblad
+   ``bron_geblokkeerd`` met de oorzaak en de plaats ervan. De scan bootst Node-RED niet na om een uitzondering te
+   maken. Let op: Node-RED 5 **accepteert** een flow met een uitgesloten
    ``exec``-node gewoon (de node draait dan niet); daarom is deze eigen scan nodig. Wat tabbladen tijdens het draaien
    delen zonder dat het in de configuratie staat (global context, een ``http in`` die ``http request`` naar Node-RED
    zelf doet, mqtt via een broker) kan geen scan zien; zie ADR-0016 kop 2.
@@ -82,6 +83,9 @@ SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read
 PROFILE_REF = "vault://automation/node-red-profiel"
 BCRYPT_ROUNDS = 10
 MAX_FINDINGS = 50
+#: langste ``id`` en ``z`` die de dienst kan plaatsen (``automation_flow.source_flow_id`` is String(120)); langer is
+#: ``vorm_ongeldig`` (R-VEILIG-8: de echte Node-RED neemt een langere id aan)
+MAX_ID_LENGTH = 120
 #: reden van een tabblad zonder eigen bevinding dat meegeblokkeerd is omdat elders in de configuratie iets staat
 SOURCE_BLOCKED = "bron_geblokkeerd"
 #: plaats van een oorzaak buiten elk tabblad en elke subflow (een configuratienode of een niet te plaatsen element)
@@ -101,8 +105,13 @@ BLOCK_REASONS = (
 
 
 def canonical(value: Any) -> bytes:
-    """Stabiele JSON voor checksums van flows (kommagetallen mogen: Node-RED gebruikt ze voor posities)."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    """Stabiele JSON voor checksums van flows (kommagetallen mogen: Node-RED gebruikt ze voor posities).
+
+    Een losse surrogaat (Node-RED neemt hem aan en geeft hem terug als ``\\ud800``) kent UTF-8 niet; met
+    ``surrogatepass`` wordt hij toch gecodeerd in plaats van dat de synchronisatie crasht (de flowscan maakt er
+    ``vorm_ongeldig`` van). ``json.loads`` leest die bytes weer terug. Voor geldige tekst zijn de bytes gelijk aan
+    gewone UTF-8, zodat bestaande checksums en momentopnamen blijven kloppen."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogatepass")
 
 
 def sha256_hex(data: bytes) -> str:
@@ -161,10 +170,17 @@ class ScanResult:
         }
 
 
+def _plain(value: Any, limit: int) -> str:
+    """Tekst voor een bevinding: ingekort, met een NUL of een losse surrogaat als U+FFFD. Zo is een bevinding over een
+    node met zo'n tekst (``vorm_ongeldig``) zelf altijd op te slaan; PostgreSQL weigert beide tekens."""
+    text = str(value)[:limit]
+    return "".join("\ufffd" if ch == "\x00" or "\ud800" <= ch <= "\udfff" else ch for ch in text)
+
+
 def _finding(code: str, node: Any, **extra: Any) -> dict[str, Any]:
     if not isinstance(node, dict):
         return {"code": code, "node_id": "", "node_type": "", **extra}
-    return {"code": code, "node_id": str(node.get("id"))[:64], "node_type": str(node.get("type"))[:80], **extra}
+    return {"code": code, "node_id": _plain(node.get("id"), 64), "node_type": _plain(node.get("type"), 80), **extra}
 
 
 def _node_findings(
@@ -181,18 +197,54 @@ def _node_findings(
     if module is None:
         return [_finding("onbekend_type", node)]
     if module not in allowed:
-        return [_finding("module_niet_toegestaan", node, module=module[:80])]
+        return [_finding("module_niet_toegestaan", node, module=_plain(module, 80))]
     return []
 
 
+def _storable(text: str) -> bool:
+    """Geen NUL en geen losse surrogaat: PostgreSQL slaat een NUL niet op en UTF-8 kent geen losse surrogaat."""
+    if "\x00" in text:
+        return False
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _has_unstorable_text(element: Any) -> bool:
+    """Ergens in het element (sleutels en tekstwaarden, op elke diepte) een tekst die niet op te slaan is. Zonder
+    recursie, zodat ook een diep geneste waarde geen RecursionError geeft."""
+    todo = [element]
+    while todo:
+        value = todo.pop()
+        if isinstance(value, str):
+            if not _storable(value):
+                return True
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(key, str) and not _storable(key):
+                    return True
+                todo.append(item)
+        elif isinstance(value, list):
+            todo.extend(value)
+    return False
+
+
 def _shape_problems(node: Any) -> list[str]:
-    """De velden die Node-RED zelf leest en die niet de vorm hebben die deze dienst kan plaatsen (leeg: in orde): een
-    object met ``id`` en ``type`` als niet-lege tekst, ``z`` tekst of afwezig, ``wires`` een lijst van lijsten met
-    teksten en ``links`` een lijst met teksten. Wat Node-RED met een andere vorm doet, wordt niet nagebootst."""
+    """De velden die niet de vorm hebben die deze dienst kan plaatsen (leeg: in orde): een object met ``id`` en
+    ``type`` als niet-lege tekst, ``id`` en ``z`` hooguit :data:`MAX_ID_LENGTH` tekens (``z`` tekst of afwezig),
+    ``wires`` een lijst van lijsten met teksten, ``links`` een lijst met teksten, en nergens in het element (ook niet
+    in een label, een sleutel of diep in een eigenschap) een NUL of een losse surrogaat (``tekst``). Wat Node-RED met
+    een andere vorm doet, wordt niet nagebootst; de echte Node-RED 5.0.9 neemt een lange id, een NUL en een losse
+    surrogaat aan (R-VEILIG-8)."""
     if not isinstance(node, dict):
         return ["node"]
     bad = [key for key in ("id", "type") if not (isinstance(node.get(key), str) and node.get(key))]
-    if node.get("z") is not None and not isinstance(node.get("z"), str):
+    if "id" not in bad and len(node["id"]) > MAX_ID_LENGTH:
+        bad.append("id")
+    z = node.get("z")
+    if z is not None and not (isinstance(z, str) and len(z) <= MAX_ID_LENGTH):
         bad.append("z")
     wires = node.get("wires", [])
     if not (isinstance(wires, list) and all(isinstance(p, list) and all(isinstance(t, str) for t in p) for p in wires)):
@@ -200,6 +252,8 @@ def _shape_problems(node: Any) -> list[str]:
     links = node.get("links", [])
     if not (isinstance(links, list) and all(isinstance(t, str) for t in links)):
         bad.append("links")
+    if _has_unstorable_text(node):
+        bad.append("tekst")
     return bad
 
 
@@ -225,10 +279,15 @@ def scan(flows: list[Any], modules: dict[str, str], allowed_modules: tuple[str, 
     (een verboden node, een onbekend type, een module buiten de allowlist; in een tabblad, een subflow of een
     configuratienode, gebruikt of niet) of iets wat de dienst niet kan plaatsen, dan is **elk** tabblad van de bron
     geblokkeerd tot het weg is. Niet te plaatsen is: een element met een andere vorm dan :func:`_shape_problems`
-    toestaat (``vorm_ongeldig``), een dubbele id (``dubbele_id``), een node met een ``z`` die geen tabblad of subflow
-    is (``tabblad_onbekend``), een draad of link naar een id die nergens staat (``verwijzing_onbekend``) en een draad
-    of link van of naar iets wat geen node in een tabblad of subflow is, zoals een configuratienode zonder ``z`` of
-    een tabblad zelf (``niet_plaatsbaar``). De scan bootst Node-RED niet na om een uitzondering te maken.
+    toestaat, ook een ``id`` of ``z`` langer dan 120 tekens en een NUL of een losse surrogaat in een tekst (ook in een
+    label of een sleutel) (``vorm_ongeldig``), een dubbele id (``dubbele_id``), een node met een ``z`` die geen
+    tabblad of subflow is (``tabblad_onbekend``), een draad of link naar een id die nergens staat
+    (``verwijzing_onbekend``) en een draad of link van of naar iets wat geen node in een tabblad of subflow is, zoals
+    een configuratienode zonder ``z`` of een tabblad zelf (``niet_plaatsbaar``). De scan bootst Node-RED niet na om een
+    uitzondering te maken. Wat de dienst opslaat (tabblad-id, label, bevindingen) bevat daardoor nooit zo'n tekst. Loopt
+    de synchronisatie tóch vast (een uitzondering bij het lezen, in de scan, het flowregister of de opslag), dan
+    blokkeert ``snapshots.sync`` in een eigen transactie alle flows met ``synchronisatie_mislukt`` (vorm A, R-VEILIG-8):
+    nooit de oude stand.
 
     De precieze uitkomst blijft voor de melding (welk tabblad de oorzaak is): een tabblad met de oorzaak zelf, of dat
     er via een subflow, een configuratienode, een draad, een link of een eigenschap mee verbonden is, krijgt die

@@ -789,6 +789,21 @@ def _with(*extra: Any) -> list[Any]:
     return [*simple_flow(), *simple_flow(tab_id=TAB2, label="Ook schoon"), *extra]
 
 
+LONG_ID = "t" * 121  # één teken langer dan automation_flow.source_flow_id (String(120))
+#: R-VEILIG-8: id of z langer dan 120 tekens, een NUL of een losse surrogaat in een tekst (ook een label of een
+#: sleutel, ook diep in een eigenschap). De echte Node-RED neemt ze aan; vóór het herstel stopte elke synchronisatie.
+ODD_TEXT_FORMS: dict[str, tuple[Any, ...]] = {
+    "tabblad-id 121 tekens": (tab(LONG_ID, "Lang"), node("lang0000inject01", "inject", LONG_ID)),
+    "id 121 tekens": (node("i" * 121, "inject", TAB2),),
+    "z 121 tekens": (node("los", "debug", "z" * 121),),
+    "NUL in id": (tab("tabexec000000001", "Shell"), node("exec\x00x", "exec", "tabexec000000001")),
+    "NUL in label": (tab("tablabel00000001", "a\x00b"),),
+    "NUL diep in een eigenschap": (node("los", "comment", TAB2, info={"a": ["b", {"c": "d\x00"}]}),),
+    "losse surrogaat in naam": (node("naam0000inject01", "inject", TAB2, name="\ud800"),),
+    "losse surrogaat in sleutel": (node("los", "inject", TAB2) | {"\udfff": 1},),
+}
+
+
 @pytest.mark.parametrize(
     ("flows", "cause"),
     [
@@ -837,6 +852,8 @@ def _with(*extra: Any) -> list[Any]:
             id="ongebruikte subflow met exec",
         ),
         pytest.param(_with({"id": "cfg0000000000002", "type": "x"}), "module_niet_toegestaan", id="ongebruikte config"),
+        # R-VEILIG-8 (herreview 4): vormen die de echte Node-RED 5.0.9 aanneemt, bewaart en teruggeeft
+        *(pytest.param(_with(*form), "vorm_ongeldig", id=name) for name, form in ODD_TEXT_FORMS.items()),
     ],
 )
 def test_scan_blocks_every_tab_when_something_cannot_be_placed_or_is_forbidden(flows: list[Any], cause: str) -> None:
@@ -897,6 +914,67 @@ def test_scan_leaves_a_clean_configuration_active() -> None:
     assert len(result.tabs) == 5
     assert [(t.tab_id, t.findings) for t in result.tabs if t.blocked] == []
     assert result.global_findings == [] and result.summary()["geblokkeerd"] == 0
+
+
+@pytest.mark.parametrize("name", list(ODD_TEXT_FORMS))
+def test_scan_of_an_odd_text_form_gives_findings_and_checksums_that_can_be_stored(name: str) -> None:
+    """R-VEILIG-8: zo'n vorm is een gewone bevinding ``vorm_ongeldig``, geen crash. Wat de dienst daarna opslaat
+    (tabblad-id hooguit 120 tekens, label, typen, bevindingen, samenvatting) bevat geen NUL en geen losse surrogaat
+    (PostgreSQL en UTF-8 weigeren die), de checksum is te berekenen en de momentopname bewaart de configuratie zelf
+    ongewijzigd (versleuteld) en leest haar terug."""
+    import json
+    import re
+
+    flows = _with(*ODD_TEXT_FORMS[name])
+    result = policy.scan(flows, BYPASS_MODULES, ALLOWED)
+    _assert_source_blocked(result)
+    assert "vorm_ongeldig" in _causes(result)
+    stored = json.dumps(
+        [[t.tab_id, t.label, t.node_types, t.findings, t.checksum] for t in result.tabs] + [result.summary()],
+        ensure_ascii=False,
+    )
+    assert "\x00" not in stored and "\\u0000" not in stored, stored
+    stored.encode("utf-8")  # een losse surrogaat zou hier falen
+    assert all(len(t.tab_id) <= 120 for t in result.tabs)
+    assert re.fullmatch("[0-9a-f]{64}", policy.flows_checksum(flows))
+    assert json.loads(policy.canonical({"flows": flows})) == {"flows": flows}
+
+
+def test_scan_leaves_ids_of_120_characters_and_any_valid_text_active() -> None:
+    """Geen vals blokkeren (R-VEILIG-8): een id en een ``z`` van precies 120 tekens, letters met accenten, een emoji
+    (een geldig surrogaatpaar in JSON), andere schriften en stuurtekens als tab, regeleinde of bel zijn gewoon tekst."""
+    import json
+
+    long_tab = "t" * 120
+    flows = json.loads(
+        json.dumps(
+            [
+                tab(long_tab, "Wóónkamer ☕ 😀 中文 ελληνικά\tmet tab\nen regel"),
+                node("i" * 120, "inject", long_tab, [["f" * 120]], name="ïnject"),
+                node("f" * 120, "function", long_tab, [["d" * 120]], func="// é \x07\r\n\treturn msg; // 😀"),
+                node("d" * 120, "debug", long_tab, name="\U0001f600 klaar", info={"ß": ["ü", {"ø": "ç"}]}),
+            ],
+            ensure_ascii=True,  # zoals over de lijn: de emoji als 😀, een geldig paar
+        )
+    )
+    result = policy.scan(flows, MODULES, ALLOWED)
+    assert [(t.tab_id, t.blocked) for t in result.tabs] == [(long_tab, False)], result.tabs[0].findings
+    assert result.global_findings == []
+
+
+def test_checksums_of_valid_text_are_unchanged_by_the_surrogate_rule() -> None:
+    """Een losse surrogaat maakt de checksum niet meer onmogelijk (R-VEILIG-8), maar voor geldige tekst blijven de bytes
+    precies zoals voorheen: anders zou elke bestaande momentopname als onleesbaar gelden (``open_snapshot``)."""
+    import hashlib
+    import json
+
+    flows = [
+        *simple_flow(label="Wóónkamer ☕ 😀 中文"),
+        node("tab00000comment1", "comment", "tab0000000000001", info="é"),
+    ]
+    before = json.dumps(flows, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    assert policy.canonical(flows) == before
+    assert policy.flows_checksum(flows) == hashlib.sha256(before).hexdigest()
 
 
 _SEED_SCRIPT = """

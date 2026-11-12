@@ -7,15 +7,17 @@ Echte Node-RED op de NAS: NIET GEVALIDEERD (echte NAS).
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import pytest
 
+from integrations.worker import Worker
 from tests import b11
 from tests.b11 import A
 from tests.conftest import NODE_RED_URL, idem, setup_node_red
-from tests.fakes.node_red_fake import bypass_scenarios, clean_tab_id, exec_flow, node, simple_flow
+from tests.fakes.node_red_fake import bypass_scenarios, clean_tab_id, exec_flow, node, simple_flow, tab
 
 
 # ------------------------------------------------------------------------------------------------ toegang tot de editor
@@ -337,6 +339,215 @@ def test_a_node_of_the_wrong_shape_blocks_every_flow_instead_of_stopping_the_syn
     node_red_fake.deploy([*two, odd])
     _every_flow_blocked(linked, auth, b11.snapshot(linked, auth))
     _blocked_and_asks_nothing(linked, auth, flow["id"], token, "bron_geblokkeerd", "vorm_ongeldig")
+
+
+# --------------------------------------------- R-VEILIG-8 (herreview 4): nooit de oude stand als het uitlezen vastloopt
+T = "tab0000000000001"
+LONG = "t" * 121  # één teken langer dan automation_flow.source_flow_id (String(120))
+#: (vooraf, daarna): vormen die de echte Node-RED 5.0.9 aanneemt, bewaart en op GET /flows teruggeeft (NUL en een losse
+#: surrogaat als \u-escape, zoals JSON.stringify); daarna staat er ook een exec-node. Vóór het herstel liep elke
+#: synchronisatie vanaf "daarna" vast en bleef T actief, met token, afleveringen en actieverzoeken naar de Hub.
+ODD_FORMS: dict[str, tuple[list[Any], list[Any]]] = {
+    "lange_tab_id": (
+        [*simple_flow(), tab(LONG, "Lang"), node("lang0000inject01", "inject", LONG)],
+        [*simple_flow(), tab(LONG, "Lang"), node("lang0000inject01", "inject", LONG), *exec_flow()],
+    ),
+    "nul_in_id": (
+        simple_flow(),
+        [*simple_flow(), tab("tabexec000000001", "Shell"), node("exec\x00x", "exec", "tabexec000000001")],
+    ),
+    "nul_in_label": (simple_flow(), [*simple_flow(), *exec_flow(), tab("tablabel00000001", "a\x00b")]),
+    "surrogaat_in_naam": (
+        simple_flow(),
+        [*simple_flow(), *exec_flow(), node("naam0000inject01", "inject", T, name="\ud800")],
+    ),
+}
+
+
+def _owner_and_token(linked: Any, auth: Any, flow_id: str) -> Any:
+    b11.set_owner(linked, auth, flow_id)
+    return linked.post(
+        f"{A}/flows/{flow_id}/tokens",
+        json={"label": "test", "allowed_actions": ["notification.send"]},
+        headers=idem(auth("admin")),
+    )
+
+
+def _nothing_gets_through(linked: Any, auth: Any, flow_id: str, token: str | None, reason: str) -> None:
+    """Elke flow die nog bestaat is geblokkeerd; deze flow vraagt niets aan, krijgt geen nieuw token en er gaat geen
+    actieverzoek naar de Hub."""
+    listed = [f for f in b11.flows(linked, auth) if f["status"] != "verwijderd"]
+    assert listed and all(f["status"] == "geblokkeerd" for f in listed), listed
+    flow = b11.flow_detail(linked, auth, flow_id)
+    assert flow["status"] == "geblokkeerd" and flow["blocked_reason"] == reason, flow
+    if token is not None:
+        r = b11.request_action(
+            linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+        )
+        assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd", r.text
+    r = _owner_and_token(linked, auth, flow_id)
+    assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict", r.text
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
+@pytest.mark.parametrize("case", list(ODD_FORMS))
+def test_a_form_that_stopped_the_sync_is_a_finding_that_blocks_every_flow(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, make_settings: Any, case: str
+) -> None:
+    """R-VEILIG-8 (herreview 4, besluit van de gebruiker: vorm A): een id of z langer dan 120 tekens, een NUL of een
+    losse surrogaat in een tekst is een gewone bevinding ``vorm_ongeldig``: de synchronisatie slaagt en blokkeert
+    (grof) alle flows. Staat de vorm er al vóór het token (lange_tab_id), dan krijgt T geen token."""
+    before, after = ODD_FORMS[case]
+    setup_node_red(linked, fake_hub, auth, flows=before)
+    worker = Worker(make_settings(node_red_sync_interval_s=60), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    flow = b11.flow_by_tab(linked, auth, T)
+    issued = _owner_and_token(linked, auth, flow["id"])
+    assert issued.status_code == (409 if case == "lange_tab_id" else 201), issued.text
+    token = issued.json()["flow_token"] if issued.status_code == 201 else None
+
+    node_red_fake.deploy(after)
+    worker.automation_step(200.0)
+    worker.automation_step(300.0)
+    assert worker.state.stats["node_red_sync_failed"] == 0, "een gewone bevinding, geen mislukte synchronisatie"
+    # de node met de losse surrogaat staat in T zelf: T heeft dan de bevinding zelf, de andere vormen staan elders
+    own = case == "surrogaat_in_naam"
+    _nothing_gets_through(linked, auth, flow["id"], token, "vorm_ongeldig" if own else "bron_geblokkeerd")
+    found = b11.flow_detail(linked, auth, flow["id"])["current_version"]["findings"]
+    assert "vorm_ongeldig" in {f.get("oorzaak", f["code"]) for f in found}, found
+    sync = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert sync["ok"] is True and sync["fout"] is None, sync
+
+
+def _deep_flows_body() -> bytes:
+    """GET /flows met een eigenschap die 100000 keer genest is: ``json.loads`` geeft dan RecursionError (geen
+    ValueError, dus geen ``antwoord_ongeldig``). Zo'n antwoord kan json.dumps zelf niet maken: ruwe bytes."""
+    deep = b'{"id":"diep0000comment1","type":"comment","z":"' + T.encode() + b'","info":'
+    deep += b"[" * 100_000 + b"]" * 100_000 + b"}"
+    flows = json.dumps([*simple_flow(), *simple_flow(tab_id="tabander00000002", label="Ander")]).encode()
+    return b'{"flows":' + flows[:-1] + b"," + deep + b'],"rev":"' + b"0" * 64 + b'"}'
+
+
+def _fail_in(where: str, monkeypatch: pytest.MonkeyPatch, node_red_fake: Any) -> None:
+    """Laat de synchronisatie om een andere reden vastlopen: in de opslag (een echte databasefout), het flowregister,
+    de scan, of bij het lezen (RecursionError uit ``NodeRedClient._json``)."""
+    from sqlalchemy import text
+
+    from integrations.domains.automation import policy, snapshots
+
+    def storage_fails(session: Any, *_args: Any, **_kwargs: Any) -> Any:
+        session.execute(text("SELECT 1/0"))  # de transactie is daarna afgebroken: alleen een rollback helpt
+
+    def fails(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("ingespoten fout")
+
+    if where == "opslag":
+        monkeypatch.setattr(snapshots, "create_snapshot", storage_fails)
+    elif where == "register":
+        monkeypatch.setattr(snapshots, "apply_scan", fails)
+    elif where == "scan":
+        monkeypatch.setattr(policy, "scan", fails)
+    else:
+        node_red_fake.flows_body = _deep_flows_body()
+
+
+@pytest.mark.parametrize("where", ["opslag", "register", "scan", "lezen"])
+def test_a_sync_that_fails_blocks_every_flow_until_an_admin_resumes(
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+) -> None:
+    """R-VEILIG-8, vorm A ("blokkeren bij mislukken"): loopt de synchronisatie vast, dan zet een aparte transactie
+    elke flow van de bron die nog bestaat op geblokkeerd met reden ``synchronisatie_mislukt`` en de stand op
+    ``ok: false``; de check ``automatisering`` is dan degraded. Een verwijderde flow blijft verwijderd. Slaagt een
+    synchronisatie daarna weer, dan blijven de flows gepauzeerd tot een beheerder ze hervat (geen automatisch
+    heropenen)."""
+    three = [
+        *simple_flow(),
+        *simple_flow(tab_id="tabander00000002", label="Ander"),
+        *simple_flow(tab_id="tabweg0000000003", label="Weg"),
+    ]
+    setup_node_red(linked, fake_hub, auth, flows=three)
+    worker = Worker(make_settings(node_red_sync_interval_s=60), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    node_red_fake.deploy(three[:-4])
+    worker.automation_step(160.0)
+    assert b11.flow_by_tab(linked, auth, "tabweg0000000003")["status"] == "verwijderd"
+    flow, token = b11.ready_flow(linked, auth, T, "notification.send")
+    assert flow["status"] == "actief"
+    before = len(b11.outbox(linked, "flow.policy.blocked"))
+
+    _fail_in(where, monkeypatch, node_red_fake)
+    node_red_fake.deploy([*three[:-4], node("tab00000inject02", "inject", T)])  # een wijziging: alles wordt gelezen
+    worker.automation_step(220.0)  # mag zelf niet mislukken: de fout is vastgelegd en dichtgezet
+    assert worker.state.stats["node_red_sync_failed"] == 1
+    _nothing_gets_through(linked, auth, flow["id"], token, "synchronisatie_mislukt")
+    assert b11.flow_by_tab(linked, auth, "tabweg0000000003")["status"] == "verwijderd"
+    blocked = b11.outbox(linked, "flow.policy.blocked")[before:]
+    assert sorted(e["payload"]["reden"] for e in blocked) == ["synchronisatie_mislukt"] * 2, blocked
+    state = linked.get(f"{A}/isolation", headers=auth("viewer")).json()
+    assert state["synchronisatie"]["ok"] is False, state
+    assert state["synchronisatie"]["fout"]["reason"] == "synchronisatie_mislukt", state
+    check = {c["name"]: c for c in linked.get("/connector/v1/health", headers=fake_hub.service_auth()).json()["checks"]}
+    assert check["automatisering"]["status"] == "degraded", check["automatisering"]
+    assert check["automatisering"]["reason_code"] == "synchronisatie_mislukt", check["automatisering"]
+    worker.automation_step(280.0)  # blijft het vastlopen: blijft dicht, zonder nieuwe events
+    assert len(b11.outbox(linked, "flow.policy.blocked")) == before + 2
+    assert b11.flow_detail(linked, auth, flow["id"])["status"] == "geblokkeerd"
+
+    monkeypatch.undo()
+    node_red_fake.flows_body = None
+    worker.automation_step(340.0)
+    assert worker.state.stats["node_red_syncs"] == 3
+    for tab_id in (T, "tabander00000002"):
+        assert b11.flow_by_tab(linked, auth, tab_id)["status"] == "gepauzeerd", "nooit vanzelf weer actief"
+    r = b11.put_flow(linked, auth, flow["id"], "state", {"status": "actief", "reden": "nagekeken"})
+    assert r.status_code == 200 and r.json()["status"] == "actief", r.text
+
+
+def test_a_manual_snapshot_that_fails_blocks_every_flow_too(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dezelfde synchronisatie via ``POST …/snapshots``: 502 met reden ``synchronisatie_mislukt``, geen momentopname,
+    en de blokkade blijft staan (aparte transactie), ook al wordt de rest van het verzoek teruggedraaid."""
+    setup_node_red(linked, fake_hub, auth, flows=[*simple_flow(), *simple_flow(tab_id="tabander00000002")])
+    first = b11.snapshot(linked, auth)
+    flow, token = b11.ready_flow(linked, auth, T, "notification.send")
+    _fail_in("opslag", monkeypatch, node_red_fake)
+    r = linked.post(f"{A}/snapshots", headers=idem(auth("admin")))
+    assert r.status_code == 502 and r.json()["code"] == "node_red_fout", r.text
+    assert r.json()["details"]["reason"] == "synchronisatie_mislukt", r.text
+    _nothing_gets_through(linked, auth, flow["id"], token, "synchronisatie_mislukt")
+    listed = linked.get(f"{A}/snapshots", headers=auth("viewer")).json()["items"]
+    assert [s["id"] for s in listed] == [first["snapshot_id"]], listed
+
+
+def test_a_clean_configuration_with_long_ids_and_any_text_stays_active(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, make_settings: Any
+) -> None:
+    """Geen vals blokkeren (R-VEILIG-8): een tabblad-id van precies 120 tekens en tekst met accenten, een emoji en
+    andere schriften worden opgeslagen; de flow is actief en mag aanvragen."""
+    long_tab = "w" * 120
+    clean = [
+        tab(long_tab, "Wóónkamer ☕ 😀 中文"),
+        node("w" * 112 + "inject01", "inject", long_tab, [["w" * 112 + "debug001"]], name="ïnject"),
+        node("w" * 112 + "debug001", "debug", long_tab, info="é\tß\n\U0001f600"),
+    ]
+    setup_node_red(linked, fake_hub, auth, flows=clean)
+    worker = Worker(make_settings(node_red_sync_interval_s=60), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    assert worker.state.stats["node_red_syncs"] == 1
+    flow, token = b11.ready_flow(linked, auth, long_tab, "notification.send")
+    assert flow["status"] == "actief" and flow["label"] == "Wóónkamer ☕ 😀 中文", flow
+    r = b11.request_action(
+        linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+    )
+    assert r.status_code == 202, r.text
+    assert len(b11.outbox(linked, "flow.action.requested")) == 1
 
 
 def test_blocked_flow_stays_paused_after_the_node_is_removed(
