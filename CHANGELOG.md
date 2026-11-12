@@ -107,6 +107,7 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
 - Een databasefout zet de parameterwaarden (mogelijk een geheim of token) niet meer in de foutmelding en de
   app-log (`hide_parameters=True`, V-094).
 - Een NUL-teken of losse surrogaat in de credential van `PUT …/sources/{id}` is `422 validation_error`, geen serverfout (KLEIN-22).
+- Een NUL-teken in de wachtwoordzin van de herstelkit (`POST …/sso/recovery/kit/export` en `…/kit/verify`) is `422 validation_error`; eerst opende `abc` ook een kit van `abc` + NUL (KLEIN-24).
 
 **Bekende grenzen**
 - De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een

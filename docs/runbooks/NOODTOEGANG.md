@@ -17,9 +17,9 @@ thuisnetwerk (LAN) of de VPN mag inloggen.
 4. Stel de **noodtoegang** in: de netwerkbereiken van je LAN en/of VPN (CIDR, bv. het bereik dat je router uitgeeft;
    gebruik je eigen waarden). Internetadressen worden geweigerd. Kies hoe lang een noodsessie mag duren (5–240 min).
 5. Bevestig de MFA-status van elk account (alleen een vinkje + methode; geen codes).
-6. Maak een **herstelkit**: kies een lange wachtwoordzin (min. 16 tekens). Bewaar het bestand offline (USB-stick in de
-   kluis) en de wachtwoordzin apart. De kit bevat geen wachtwoorden, codes of sleutels; controleer hem met *Kit
-   controleren*.
+6. Maak een **herstelkit**: kies een lange wachtwoordzin (min. 16 tekens). Een NUL-teken in de wachtwoordzin wordt
+   geweigerd. Bewaar het bestand offline (USB-stick in de kluis) en de wachtwoordzin apart. De kit bevat geen
+   wachtwoorden, codes of sleutels; controleer hem met *Kit controleren*.
 
 ## Oefenen (minstens elke 90 dagen)
 1. **Zelftest** (knop in de Hub): controleert de inrichting en het beleid. Dit werkt ook als Authentik uit staat — dat

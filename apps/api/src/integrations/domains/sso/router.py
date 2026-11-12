@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ... import API_PREFIX, audit, events
 from ...deps import check_if_match, etag, get_session, if_match, trace_id
 from ...errors import ApiError, not_found
-from ...idempotency import idempotency_key, run_idempotent
+from ...idempotency import idempotency_key, run_idempotent, unstorable_text
 from ...pagination import decode_cursor, encode_cursor, limit_param
 from ...redact import looks_like_secret
 from ...security.auth import (
@@ -925,6 +925,15 @@ def record_drill(
 
 
 # ------------------------------------------------------------------ herstelkit
+def _refuse_unstorable_passphrase(passphrase: str) -> None:
+    """Een NUL-teken (of losse surrogaat) in de wachtwoordzin is ``422 validation_error``, vóór de sleutelafleiding.
+    scrypt vult de sleutel aan met nullen, dus "x\\x00" zou dezelfde kit openen als "x" (KLEIN-24). De wachtwoordzin gaat
+    niet als tekst door de centrale controle van run_idempotent (alleen als hash), dus deze controle staat hier."""
+    refusal = unstorable_text({"passphrase": passphrase})
+    if refusal is not None:
+        raise refusal
+
+
 @router.post("/recovery/kit/export", status_code=201, summary="Versleutelde herstelkit maken (zonder geheimen)")
 def export_kit(
     body: KitExportIn,
@@ -934,6 +943,7 @@ def export_kit(
     key: uuid.UUID = Depends(idempotency_key),
     tid: str = Depends(trace_id),
 ) -> Any:
+    _refuse_unstorable_passphrase(body.passphrase)
     try:
         check_passphrase(body.passphrase)
     except KitError as exc:
@@ -1003,6 +1013,7 @@ def export_kit(
 
 @router.post("/recovery/kit/verify", summary="Controleren dat een herstelkit te openen is (wijzigt niets)")
 def verify_kit(body: KitVerifyIn, _p: Principal = Depends(require_admin)) -> dict[str, Any]:
+    _refuse_unstorable_passphrase(body.passphrase)
     try:
         data = decrypt_kit(body.kit, body.passphrase)
     except KitError as exc:

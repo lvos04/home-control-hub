@@ -221,6 +221,55 @@ def test_recovery_kit_export_verify_without_secrets(paired_client: Any, auth: An
 
 
 @pytest.mark.parametrize(
+    "bad_passphrase",
+    [PASSPHRASE + "\x00", PASSPHRASE[:8] + "\x00" + PASSPHRASE[8:], "\x00" + PASSPHRASE, PASSPHRASE + "\ud800"],
+    ids=["NUL achteraan", "NUL midden", "NUL vooraan", "losse surrogaat"],
+)
+def test_recovery_kit_refuses_nul_in_passphrase(
+    paired_client: Any, auth: Any, bad_passphrase: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """KLEIN-24: scrypt vult de sleutel aan met nullen, dus "x\\x00" zou dezelfde kit openen als "x". Een NUL-teken
+    (of losse surrogaat) in de wachtwoordzin is daarom 422 validation_error bij export én verify, vóór de
+    sleutelafleiding; er wordt niets bewaard of gelogd. Een kit zonder NUL blijft gewoon te openen."""
+    c, h = paired_client, auth("admin")
+    _prepare_break_glass(c, h)
+    ok = c.post(f"{BASE}/recovery/kit/export", json={"passphrase": PASSPHRASE}, headers=idem(h))
+    assert ok.status_code == 201, ok.text
+    kit = ok.json()["kit"]
+
+    # als JSON-escape verstuurd (json.dumps met ensure_ascii), zodat ook een losse surrogaat over de lijn kan
+    def raw(path: str, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        return c.post(
+            f"{BASE}{path}", content=json.dumps(body), headers={**headers, "Content-Type": "application/json"}
+        )
+
+    r = raw("/recovery/kit/export", {"passphrase": bad_passphrase}, idem(h))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
+    assert "\x00" not in r.text and "\\u0000" not in r.text and "paard" not in r.text
+
+    v = raw("/recovery/kit/verify", {"passphrase": bad_passphrase, "kit": kit}, h)
+    assert v.status_code == 422, v.text
+    assert v.json()["code"] == "validation_error"
+    assert "\x00" not in v.text and "\\u0000" not in v.text and "paard" not in v.text
+
+    # alleen de ene geldige export is bewaard; de wachtwoordzin staat nergens in de database of het log
+    assert len(c.get(f"{BASE}/recovery/kit/exports", headers=h).json()["items"]) == 1
+    with c.app.state.db.sessions() as s:
+        dump = " ".join(
+            str(row)
+            for table in ("idempotency_record", "audit_event", "outbox_event", "sso_recovery_kit_export")
+            for row in s.execute(text(f"SELECT * FROM {table}"))  # noqa: S608 - vaste tabelnamen
+        )
+    assert "paard batterij" not in dump
+    assert "paard batterij" not in caplog.text
+
+    # de kit zonder NUL blijft te openen
+    good = c.post(f"{BASE}/recovery/kit/verify", json={"passphrase": PASSPHRASE, "kit": kit}, headers=h)
+    assert good.status_code == 200 and good.json()["readable"] is True
+
+
+@pytest.mark.parametrize(
     ("body", "fragment"),
     [
         ({"system": "hub_local", "username": "x", "login_kind": "lokaal", "password": "geheim"}, "password"),
