@@ -542,6 +542,27 @@ def test_ack_of_a_sample_after_the_dry_run_expired_is_refused_and_it_is_no_trigg
     assert run_of(linked, auth, run["id"]) == done
 
 
+def test_a_sample_is_no_trigger_once_its_dry_run_has_expired_even_before_the_worker_closes_it(
+    linked: Any, auth: Any, flow: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vervolgpunt 3 van S-P2-300 (proef P1 van R-VEILIG-3), overgenomen in S-P2-310: het venster waarin ``expires_at``
+    van de proefrun al voorbij is, maar ``simulate.expire_runs`` nog niet heeft gedraaid (de run staat nog op
+    ``bezig``). Een actieverzoek met een voorbeeld-aflevering van die run als trigger telt dan niet als proefrun en ook
+    niet als echt verzoek: het wordt geweigerd en vastgelegd (``403 voorbeeld_buiten_proefrun``), er gaat niets naar de
+    Hub, en de run zelf verandert niet."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    delivery_id = b11.claim(linked, token)["items"][0]["id"]
+    before = run_of(linked, auth, run["id"])
+    later = utcnow() + simulate.RUN_TTL + timedelta(seconds=5)
+    monkeypatch.setattr("integrations.domains.automation.flowapi.utcnow", lambda: later)
+    a = b11.request_action(
+        linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=delivery_id
+    )
+    assert run_of(linked, auth, run["id"]) == before and before["status"] == "bezig", "de worker heeft niet gedraaid"
+    assert_sample_trigger_refused(linked, auth, a)
+
+
 def test_a_failed_sync_that_blocks_every_flow_also_closes_the_dry_run(
     linked: Any, fake_hub: Any, auth: Any, flow: Any, node_red_fake: Any, make_settings: Any, monkeypatch: Any
 ) -> None:

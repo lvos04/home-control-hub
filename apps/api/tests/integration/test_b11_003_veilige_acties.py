@@ -287,6 +287,52 @@ def test_dataset_delete_is_refused_even_with_admin_issued_wide_scope(linked: Any
     assert r.json()["risk_preview"]["klasse_min"] == "R1"
 
 
+@pytest.mark.parametrize(
+    ("action_id", "reason"),
+    [
+        # contract §8: R3, nooit aangeboden (destructief)
+        ("app.uninstall_data", "destructief_verboden"),
+        # contract §8: R3 via de eigenaar-connector van media-guard-ultimate, nooit door een flow
+        ("mediaguard.quarantine.restore", "onbekende_actie"),
+    ],
+)
+def test_risk_claim_r0_on_an_r3_action_is_refused_and_counts_nowhere(
+    linked: Any, auth: Any, flow: Any, action_id: str, reason: str
+) -> None:
+    """S-P2-310 (EX18): een flow vraagt een R3-actie aan en noemt zelf ``risk_claim: "R0"``. Het verzoek wordt hier al
+    geweigerd en vastgelegd, en de claim telt nergens: met elke andere claim (of zonder) is de uitkomst precies gelijk,
+    de risico-inschatting is nooit "R0", en de claim staat niet in het event, de audit of de inschatting als klasse."""
+    _, token = flow
+    outcomes: dict[str | None, Any] = {}
+    for claim in ("R0", "R3", None):
+        extra = {"risk_claim": claim} if claim is not None else {}
+        r = b11.request_action(linked, token, action_id, target=APP, **extra)
+        assert r.status_code == 403, (claim, r.text)
+        assert r.json()["details"]["reason"] == reason, claim
+        outcomes[claim] = r.json()
+    rows = {row["id"]: row for row in _requests(linked, auth)}
+    assert len(rows) == 3 and all(row["status"] == "geweigerd" for row in rows.values())
+    for claim, body in outcomes.items():
+        row = rows[body["details"]["action_request_id"]]
+        assert (row["action_id"], row["rejected_reason"], row["risk_claim"]) == (action_id, reason, claim)
+        # de inschatting komt uit de vaste tabel; de claim van de flow verandert er niets aan
+        assert row["risk_preview"] == {
+            **rows[outcomes[None]["details"]["action_request_id"]]["risk_preview"],
+            "risk_claim": claim,
+        }
+        assert row["risk_preview"]["klasse_min"] is None and row["risk_preview"]["risk_claim_genegeerd"] is True
+        assert {k: v for k, v in body.items() if k != "trace_id"} == {
+            **{k: v for k, v in outcomes[None].items() if k != "trace_id"},
+            "details": {"reason": reason, "action_request_id": row["id"]},
+        }
+    assert b11.outbox(linked, "flow.action.requested") == []
+    rejected = b11.outbox(linked, "flow.action.rejected")
+    assert [e["payload"]["reden"] for e in rejected] == [reason] * 3
+    assert all("risk_claim" not in e["payload"] and e["payload"]["ernst"] == "hoog" for e in rejected)
+    refused = [a for a in b11.audit_rows(linked) if a["action"] == "automation.action.rejected"]
+    assert len(refused) == 3 and all("risk_claim" not in a["details"] for a in refused)
+
+
 def test_renamed_destructive_actions_never_reach_the_hub_even_with_a_wide_scope(
     linked: Any, auth: Any, flow: Any
 ) -> None:
