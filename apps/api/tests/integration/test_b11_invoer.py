@@ -28,7 +28,7 @@ import pytest
 
 from tests import b11
 from tests.b11 import FLOW_API, A
-from tests.conftest import idem, setup_node_red
+from tests.conftest import NODE_RED_URL, idem, setup_node_red
 from tests.fakes.node_red_fake import simple_flow
 
 TAB = "tab0000000000001"
@@ -445,3 +445,28 @@ def test_unstorable_text_in_a_result_from_the_hub_is_a_422_and_changes_nothing(
     ok = _send(linked, "POST", path, raw.replace(BAD[bad], ""), idem(fake_hub.service_auth()))
     assert ok.status_code == 200, ok.text
     assert ok.json()["status"] == "uitgevoerd" and uuid.UUID(ok.json()["id"])
+
+
+@pytest.mark.parametrize("bad", list(BAD))
+@pytest.mark.parametrize("where", ["base_url", "credential"])
+def test_unstorable_text_in_a_source_is_a_422_and_stores_nothing(linked: Any, auth: Any, bad: str, where: str) -> None:
+    """Vervolgpunt van S-P2-310 (KLEIN-22): een NUL-teken in ``base_url`` van ``PUT /integrations/v1/sources/node_red``
+    gaf een serverfout (``DataError`` van PostgreSQL bij het bewaren); een NUL-teken in ``credential`` ook (de vault
+    bewaart de laatste vier tekens als tekst). Beide zijn ``422 validation_error``, zoals een losse surrogaat: er wordt
+    niets bewaard (geen bron, geen credential, geen audit, geen event) en het teken staat niet in het antwoord.
+    Dezelfde Idempotency-Key met gewone tekst werkt daarna gewoon."""
+    path = "/integrations/v1/sources/node_red"
+    body = {"base_url": NODE_RED_URL + "/x", "enabled": True, "credential": "geheim-van-de-test"}
+    good = json.dumps(body)
+    part = {"base_url": "/x", "credential": "de-test"}[where]
+    raw = good.replace(part, part + BAD[bad])
+    before = linked.get(path, headers=auth("viewer")).json(), len(b11.audit_rows(linked)), len(b11.outbox(linked))
+    key = str(uuid.uuid4())
+    r = _send(linked, "PUT", path, raw, idem(auth("admin"), key=key))
+    _refused(r, {"validation_error"})
+    after = linked.get(path, headers=auth("viewer")).json(), len(b11.audit_rows(linked)), len(b11.outbox(linked))
+    assert after == before
+    ok = _send(linked, "PUT", path, good, idem(auth("admin"), key=key))
+    assert ok.status_code in (200, 201), ok.text
+    runtime = ok.json()["runtime"]
+    assert runtime["base_url"] == NODE_RED_URL + "/x" and runtime["credential_present"] is True

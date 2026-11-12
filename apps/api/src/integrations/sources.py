@@ -32,7 +32,7 @@ from .domains.network.catalog import SOURCES as NETWORK_SOURCES
 from .domains.sso.catalog import SOURCES as SSO_SOURCES
 from .errors import ApiError, capability_unavailable, not_found
 from .hubclient import HubUrlError, validate_hub_url
-from .idempotency import idempotency_key, run_idempotent
+from .idempotency import idempotency_key, run_idempotent, unstorable_text
 from .models import IntegrationSource
 from .redact import looks_like_secret
 from .security.auth import AuthFirstRoute, Principal, require_admin, require_reader
@@ -220,6 +220,11 @@ def put_source(
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
     if body.enabled and not base_url:
         raise ApiError(422, "validation_error", "Een bron aanzetten kan alleen met een adres.", {"veld": "base_url"})
+    # de credential gaat niet mee in de verzoek-hash (alleen of hij er is), dus ook niet door de centrale controle van
+    # run_idempotent: een NUL-teken of losse surrogaat erin is hier al 422, vóór er iets gebeurt (KLEIN-22)
+    refusal = unstorable_text({"credential": body.credential})
+    if refusal is not None:
+        raise refusal
     payload = body.model_dump()
     payload["credential"] = bool(body.credential)  # nooit de waarde in de verzoek-hash/opslag
 
