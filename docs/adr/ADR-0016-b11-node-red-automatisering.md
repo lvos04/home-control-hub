@@ -106,10 +106,11 @@ Deze ronde bouwt de vijf werkpakketten:
   `onbekende_actie`); er gaat dan geen actieverzoek naar de Hub (wel, zoals bij elke weigering, het event
   `flow.action.rejected`). Een bestaand token blijft bestaan, maar opent alleen nog: de eigen stand lezen
   (`GET …/flow-api/me` toont de status en de reden, en `GET …/flow-api/actions/{id}`), `claim` (geeft niets) en het
-  bevestigen (`ack`/`nack`) van een aflevering die al vóór de blokkade was opgehaald; die wordt niet opnieuw
-  afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en geen actieverzoek van de flow naar de
-  Hub. Is de oorzaak weg, dan blijft elke flow die geblokkeerd was gepauzeerd tot een beheerder of operator hem
-  bewust hervat (ook een flow die alleen `bron_geblokkeerd` was).
+  bevestigen (`ack`/`nack`) van een aflevering die al vóór de blokkade was opgehaald (niet voor een
+  voorbeeld-aflevering van een proefrun: die wordt geweigerd, `409 proefrun_afgesloten`, zie kop 5); die wordt niet
+  opnieuw afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en geen actieverzoek van de flow
+  naar de Hub. Is de oorzaak weg, dan blijft elke flow die geblokkeerd was gepauzeerd tot een beheerder of operator
+  hem bewust hervat (ook een flow die alleen `bron_geblokkeerd` was).
 - **Blokkeren bij mislukken (besluit van de gebruiker, 2026-11-12, vorm A; R-VEILIG-8):** loopt de synchronisatie
   vast nadat Node-RED antwoordde (een uitzondering bij het lezen, zoals een antwoord dat te diep genest is voor de
   JSON-lezer, of in de scan, het flowregister of de opslag), dan blijft de oude stand **niet** staan: het half gedane
@@ -227,6 +228,15 @@ Deze ronde bouwt de vijf werkpakketten:
   was, komt dus niet meer in het runlog. Zo'n proefrun kan nooit als vergelijkingsrun dienen
   (`422 vergelijking_ongeldig`: alleen een afgeronde proefrun telt). Ook na het opheffen van de blokkade (de flow
   staat dan gepauzeerd) telt die proefrun niet meer; een nieuwe proefrun kan wel.
+- **Voorbeeld-event als trigger:** een voorbeeld-aflevering is alleen binnen haar eigen, nu lopende proefrun een
+  trigger (`trigger_delivery_id`). Is die proefrun niet meer bezig (klaar, verlopen of bij een blokkade afgesloten,
+  ook nadat de flow weer is hervat), dan wordt een actieverzoek met zo'n trigger geweigerd en vastgelegd (`403` met
+  reden `voorbeeld_buiten_proefrun`, of de reden `flow_geblokkeerd`/`flow_niet_actief` als de flow niet actief is):
+  nooit een rij `aangevraagd` en nooit een event `flow.action.requested`, dus een voorbeeld-event start nooit een
+  echt verzoek bij de Hub. Loopt er een andere proefrun van de flow, dan wordt het verzoek zoals elk verzoek in een
+  proefrun gesimuleerd, met uitkomst `zou_worden_geweigerd` en dezelfde reden. Een ack of nack van een voorbeeld-
+  aflevering van een proefrun die niet meer bezig is, geeft `409 proefrun_afgesloten` (een herhaling met dezelfde
+  `Idempotency-Key` geeft het bewaarde antwoord) en verandert de run niet.
 - **Grens van de afscherming (eerlijk gemeld):** de dienst kan alleen het pad via de flow-API afschermen. Een flow
   met nodes die zelf naar buiten gaan (HTTP, MQTT, TCP, …) kan de dienst niet tegenhouden. Zo'n proefrun start
   alleen na een uitdrukkelijke bevestiging (`bevestig_niet_afgeschermd`), en de run zegt dat erbij.

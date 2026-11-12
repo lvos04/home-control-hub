@@ -37,7 +37,10 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   zelf naar buiten gaan start alleen na een uitdrukkelijke bevestiging. Raakt een flow geblokkeerd terwijl zijn
   proefrun al loopt, dan wordt die proefrun direct afgesloten (`mislukt`, `flow_geblokkeerd`; open voorbeeld-events
   naar dead-letter): hij geeft niets meer, zijn verzoeken worden geweigerd (niet meer gesimuleerd), een ack of nack
-  daarna wordt geweigerd (`409 proefrun_afgesloten`) en hij telt ook na het opheffen van de blokkade niet meer.
+  daarna wordt geweigerd (`409 proefrun_afgesloten`) en hij telt ook na het opheffen van de blokkade niet meer. Een
+  voorbeeld-event is alleen binnen zijn eigen lopende proefrun een trigger: daarbuiten (proefrun klaar, verlopen of
+  afgesloten, ook na hervatten) wordt een actieverzoek ermee geweigerd en vastgelegd (`403
+  voorbeeld_buiten_proefrun`), nooit aangevraagd bij de Hub.
 - **Versies en herstel (B11-005).** Versleutelde momentopnamen (credentials alleen als door Node-RED versleuteld
   blok), een diff zonder waarden, en herstel als voorstel dat alleen met een door de Hub ondertekend ExecutionRequest
   wordt uitgevoerd. De huidige stand wordt eerst zelf bewaard; na het schrijven wordt teruggelezen. Synchronisatie,
