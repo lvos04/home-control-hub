@@ -143,6 +143,21 @@ def _strings(value: Any, depth: int = 0, *, keys_only: bool = False) -> Iterator
             yield from _strings(v, depth + 1, keys_only=keys_only)
 
 
+#: melding bij invoer met tekst die niet op te slaan is (validatiefout ``422``, nooit een serverfout)
+UNSTORABLE_NL = "bevat een NUL-teken of een losse surrogaat; alleen tekst die als UTF-8 op te slaan is, is toegestaan"
+
+
+def storable[T](value: T) -> T:
+    """Invoercontrole voor de API (S-P2-310; vervolgpunt 5 van S-P2-300): ergens in de waarde (sleutels en tekst, op
+    elke diepte) een NUL-teken of een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die
+    in UTF-8 kan) gooit ``ValueError``; in een validator wordt dat ``422 validation_error`` met het veld. Zonder deze
+    controle gaf zo'n teken een serverfout: bij het vastleggen van de Idempotency-Key (UTF-8) of in PostgreSQL (geen
+    NUL). Dezelfde regel als de flowscan (:func:`policy._has_unstorable_text`)."""
+    if policy._has_unstorable_text(value):
+        raise ValueError(UNSTORABLE_NL)
+    return value
+
+
 def _fold(text: str) -> str:
     """Voor de woordcontrole: NFKC, zonder accenten, onzichtbare tekens en scheidingstekens, in kleine letters."""
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))

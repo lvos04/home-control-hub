@@ -540,7 +540,7 @@ class OwnerEntry(BaseModel):
     @field_validator("note")
     @classmethod
     def _note(cls, v: str | None) -> str | None:
-        return _no_secret(v, "note")
+        return _no_secret(actions.storable(v), "note")
 
 
 class OwnerIn(BaseModel):
@@ -552,7 +552,7 @@ class OwnerIn(BaseModel):
     @field_validator("owner")
     @classmethod
     def _owner(cls, v: str) -> str:
-        return _no_secret(v.strip(), "owner") or ""
+        return _no_secret(actions.storable(v).strip(), "owner") or ""
 
 
 def _flow_mutation(
@@ -638,7 +638,7 @@ class StateIn(BaseModel):
     @field_validator("reden")
     @classmethod
     def _reden(cls, v: str | None) -> str | None:
-        return _no_secret(v, "reden")
+        return _no_secret(actions.storable(v), "reden")
 
 
 @router.put("/flows/{flow_id}/state", summary="Flow pauzeren of hervatten (afleveren van events en actieverzoeken)")
@@ -845,7 +845,12 @@ class TokenIn(BaseModel):
     @field_validator("label")
     @classmethod
     def _label(cls, v: str) -> str:
-        return _no_secret(v.strip(), "label") or ""
+        return _no_secret(actions.storable(v).strip(), "label") or ""
+
+    @field_validator("allowed_actions")
+    @classmethod
+    def _allowed_actions(cls, v: list[str]) -> list[str]:
+        return actions.storable(v)
 
 
 def _mask_token(body: Any) -> Any:
@@ -1153,6 +1158,17 @@ def post_event(
     key: uuid.UUID = Depends(idempotency_key),
     tid: str = Depends(trace_id),
 ) -> Any:
+    try:
+        actions.storable(envelope)
+    except ValueError as exc:
+        # vóór de Idempotency-Key: zo'n envelope is niet te bewaren (S-P2-310; anders een serverfout)
+        raise ApiError(
+            422,
+            "event_ongeldig",
+            "De envelope van dit event is ongeldig; er is niets bewaard of afgeleverd.",
+            {"fouten": [{"veld": "", "probleem": actions.UNSTORABLE_NL}]},
+        ) from exc
+
     def action() -> Result:
         try:
             result = inbox.intake(session, envelope, received_by=principal.audit_id, trace_id=tid)
@@ -1291,6 +1307,11 @@ class ActionResultIn(BaseModel):
     reason: str | None = Field(default=None, max_length=80, pattern=r"^[a-z0-9_.-]+$")
     result: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("result")
+    @classmethod
+    def _result(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return actions.storable(v)
+
 
 @router.post(
     "/action-requests/{request_id}/result",
@@ -1361,6 +1382,11 @@ class RunIn(BaseModel):
     baseline_run_id: uuid.UUID | None = None
     #: verplicht ``true`` als de flow zelf naar buiten kan (http request, mqtt, …): dat pad schermt een proefrun niet af
     bevestig_niet_afgeschermd: bool = False
+
+    @field_validator("sample_ids")
+    @classmethod
+    def _sample_ids(cls, v: list[str]) -> list[str]:
+        return actions.storable(v)
 
 
 @router.post(

@@ -174,12 +174,15 @@ class ActionIn(BaseModel):
     def _utf8_text(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Een losse surrogaat (een geldige JSON-escape zoals ``\\ud800``, maar geen tekst die in UTF-8 kan), ook in
         een sleutel of diep genest, is een invoerfout (422 ``validation_error``), geen serverfout bij de
-        groottecontrole (vervolgpunt R-VEILIG-5 van S-P2-295)."""
-        try:
-            json.dumps(value, ensure_ascii=False).encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise ValueError("bevat een losse surrogaat; alleen tekst die in UTF-8 kan is toegestaan") from exc
-        return value
+        groottecontrole (vervolgpunt R-VEILIG-5 van S-P2-295). Hetzelfde geldt voor een NUL-teken, dat PostgreSQL niet
+        opslaat (S-P2-310)."""
+        return actions.storable(value)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_text(cls, value: str) -> str:
+        """Een NUL-teken in de reden is een invoerfout (422), geen serverfout in de database (S-P2-310)."""
+        return actions.storable(value)
 
 
 def _flow(session: Session, identity: FlowIdentity, *, lock: bool = False) -> AutomationFlow:
