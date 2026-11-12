@@ -15,10 +15,15 @@
   ``ok: false``. Nooit de oude stand; na een geslaagde synchronisatie blijven die flows gepauzeerd tot een beheerder
   of operator ze hervat. Een :class:`NodeRedError` (onbereikbaar, te groot antwoord, 5xx, ongeldige JSON) valt hier
   niet onder: dan blijft de stand van de flows staan en is alleen de synchronisatie ``ok: false``.
+- **Eén slot op het flowregister** (R-VEILIG-9): elke schrijver van het flowregister (de synchronisatie, het
+  blokkeren bij mislukken en het herstel in ``restore.py``) neemt eerst :func:`lock_register`, vóór hij
+  :func:`latest_snapshot` en het flowregister leest. Zo schrijven een herstel en de worker nooit tegelijk dezelfde
+  flowversie; zonder slot gaf dat een uniekheidsfout en legde het blokkeren bij mislukken alle flows stil.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -67,8 +72,28 @@ SYNC_FAILED = "synchronisatie_mislukt"
 #: (nooit vanzelf weer actief)
 POLICY_REASONS = (*policy.BLOCK_REASONS, SYNC_FAILED)
 SYSTEM_ACTOR = "home-control-hub"
+#: vaste sleutel van het transactieslot op het flowregister (``pg_advisory_xact_lock``, R-VEILIG-9); afgeleid van een
+#: vaste tekst, zodat geen ander slot in deze database dezelfde sleutel heeft
+REGISTER_LOCK_KEY = int.from_bytes(
+    hashlib.sha256(b"home-control-hub:automation:flowregister").digest()[:8], "big", signed=True
+)
 
 log = logging.getLogger("integrations.automation")
+
+
+def lock_register(session: Session) -> None:
+    """Neemt het slot op het flowregister voor de rest van de transactie (R-VEILIG-9).
+
+    Elke schrijver van het flowregister roept dit aan vóór hij :func:`latest_snapshot` en de flows leest: de
+    synchronisatie (ook vóór het uitlezen van Node-RED, zodat het register Node-RED in commitvolgorde volgt), het
+    blokkeren bij mislukken en het herstel (``restore.apply`` vóór de readback, ``restore._finish_apply`` vóór
+    :func:`record_state`). Een tweede schrijver wacht tot de eerste gecommit of teruggedraaid is. Daarna leest hij
+    altijd de nieuwe stand: eerst gaat wat nog openstaat naar de database (``flush``), daarna vervalt wat de sessie
+    nog in het geheugen had (``expire_all``; de sessies hebben ``expire_on_commit=False``). Het slot vervalt vanzelf
+    bij commit of rollback."""
+    session.flush()
+    session.execute(select(func.pg_advisory_xact_lock(REGISTER_LOCK_KEY)))
+    session.expire_all()
 
 
 def state_get(session: Session, key: str) -> dict[str, Any] | None:
@@ -484,8 +509,12 @@ def sync(
     Schrijft nooit naar Node-RED. Een :class:`NodeRedError` wordt vastgelegd in de synchronisatietoestand en
     teruggegeven; de aanroeper committeert. Elke andere uitzondering (bij het lezen, bijvoorbeeld een RecursionError
     uit ``json.loads``, of in de scan, het flowregister of de opslag) wordt teruggedraaid en daarna blokkeert een
-    aparte, hier gecommitte transactie alle flows (:func:`_block_after_failure`)."""
+    aparte, hier gecommitte transactie alle flows (:func:`_block_after_failure`).
+
+    Neemt eerst het slot op het flowregister (:func:`lock_register`, R-VEILIG-9), vóór het uitlezen van Node-RED: een
+    herstel dat tegelijk loopt, wacht of wordt afgewacht."""
     tid = trace_id or str(uuid.uuid4())
+    lock_register(session)
     now = utcnow()
     try:
         with client_from_source(session, settings, vault, transport) as client:
@@ -538,11 +567,13 @@ def _block_after_failure(session: Session, exc: Exception, *, trace_id: str, now
     op ``geblokkeerd`` (:data:`SYNC_FAILED`), de synchronisatie op ``ok: false`` en de meting van de bron op
     ``degraded``, en commit die meteen: de blokkade blijft ook staan als de aanroeper daarna iets terugdraait. Alleen
     de soort uitzondering wordt bewaard en gelogd, nooit de tekst (die kan inhoud van de configuratie bevatten). Lukt
-    ook dat niet, dan gaat de uitzondering door (de worker meldt de stap dan als mislukt)."""
+    ook dat niet, dan gaat de uitzondering door (de worker meldt de stap dan als mislukt). De rollback geeft ook het slot
+    op het flowregister vrij; de aparte transactie neemt het opnieuw (R-VEILIG-9)."""
     session.rollback()
     kind = type(exc).__name__[:80]
     error: dict[str, Any] = {"reason": SYNC_FAILED, "http_status": None, "path": None, "uitzondering": kind}
     try:
+        lock_register(session)
         blocked = block_every_flow(session, trace_id=trace_id, now=now)
         previous = state_get(session, SYNC_KEY) or {}
         state_put(

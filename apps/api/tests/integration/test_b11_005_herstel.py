@@ -12,14 +12,16 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
-from integrations.domains.automation import restore
+from integrations.domains.automation import restore, snapshots
 from integrations.domains.automation.models import AutomationRestore, AutomationSnapshot
 from integrations.timeutil import utcnow
 from integrations.worker import Worker
@@ -387,6 +389,95 @@ def test_response_lost_after_writing_is_confirmed_by_readback(scene: Scene) -> N
     assert r.json()["readback"]["gelijk_aan_momentopname"] is True
     assert scene.restore_row(view["proposal_id"])["result"]["bevestigd_via"] == "readback"
     assert scene.nr.flows == flows_v1() and len(scene.nr.writes) == 1
+
+
+# ------------------------------------------------------------ R-VEILIG-9: herstel en worker tegelijk (één slot op het register)
+def _waiting_on_a_lock(linked: Any) -> int:
+    """Hoeveel databaseverbindingen van deze test nu op een slot wachten (pg_stat_activity; alleen lezen)."""
+    with linked.app.state.db.engine.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+        ).scalar_one()
+    return int(found)
+
+
+def test_a_restore_and_the_worker_at_the_same_time_block_nothing(
+    scene: Scene,
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-VEILIG-9 (herreview 5 van S-P2-295): een geslaagd herstel van een schone configuratie en een gewone
+    workerronde die tegelijk lopen, leggen niets stil. Het herstel houdt na zijn momentopname ``na_herstel`` (nog niet
+    gecommit) stil tot de worker op de database wacht. Zonder één slot op het flowregister schreef de worker daarna
+    dezelfde flowversie nog een keer: een uniekheidsfout, en daarmee (blokkeren bij mislukken) elke flow geblokkeerd
+    met ``synchronisatie_mislukt`` tot een beheerder hem hervat."""
+    worker = Worker(
+        make_settings(node_red_sync_interval_s=60, node_red_data_dir=node_red_fake.data_dir),
+        transport=fake_hub.transport,
+    )
+    worker.automation_step(100.0)
+    flow, token = b11.ready_flow(linked, auth, TAB, "notification.send")
+    assert flow["status"] == "actief"
+    request = scene.sign(scene.propose())
+
+    recorded, go = threading.Event(), threading.Event()
+    original = snapshots.record_state
+
+    def record_then_wait(*args: Any, **kwargs: Any) -> Any:
+        out = original(*args, **kwargs)
+        if kwargs.get("reason") == "na_herstel":
+            recorded.set()
+            go.wait(20)
+        return out
+
+    monkeypatch.setattr(snapshots, "record_state", record_then_wait)
+    outcome: dict[str, Any] = {}
+
+    def run_restore() -> None:
+        outcome["herstel"] = scene.apply(request)
+
+    def run_worker() -> None:
+        try:
+            worker.automation_step(200.0)
+        except Exception as exc:  # de stap zelf mag niet mislukken; dan faalt de test hieronder
+            outcome["worker"] = repr(exc)
+
+    restoring = threading.Thread(target=run_restore)
+    restoring.start()
+    assert recorded.wait(20), "het herstel kwam niet tot de momentopname na_herstel"
+    worker.state.next_node_red_sync = 0
+    syncing = threading.Thread(target=run_worker)
+    syncing.start()
+    deadline = time.monotonic() + 20
+    while not _waiting_on_a_lock(linked) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    waited = _waiting_on_a_lock(linked) > 0
+    go.set()
+    restoring.join(30)
+    syncing.join(30)
+    monkeypatch.undo()
+
+    assert waited, "de worker moet tijdens het herstel op de database wachten; anders toetst deze test de race niet"
+    assert not restoring.is_alive() and not syncing.is_alive()
+    assert outcome["herstel"].status_code == 200 and outcome["herstel"].json()["status"] == "uitgevoerd"
+    assert "worker" not in outcome, outcome
+    assert worker.state.stats["node_red_sync_failed"] == 0 and worker.state.stats["node_red_syncs"] == 2
+    states = {f["source_flow_id"]: (f["status"], f["blocked_reason"]) for f in b11.flows(linked, auth)}
+    assert states == {TAB: ("actief", None)}, states
+    sync = linked.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert sync["ok"] is True and sync["fout"] is None, sync
+    assert b11.outbox(linked, "flow.policy.blocked") == []
+    act = b11.request_action(
+        linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+    )
+    assert act.status_code == 202, act.text
+    assert len(b11.outbox(linked, "flow.action.requested")) == 1
 
 
 # ------------------------------------------------------------- weigeringen vóórdat er iets is vastgelegd (vorm, sleutel, tijd)

@@ -9,6 +9,9 @@
   gebonden is (preview, ETag, actie, beleid), eenmalig gebruik van die goedkeuring en — via readback — dat Node-RED
   nog in de toestand van de preview staat. Pas daarna: momentopname van de huidige toestand (``voor_herstel``),
   ``POST /flows`` met de ``rev`` van de readback, readback van het resultaat en een momentopname ``na_herstel``.
+  Vanaf de goedkeuring tot en met de momentopname ``voor_herstel``, en opnieuw bij het vastleggen van ``na_herstel``,
+  houdt het herstel het slot op het flowregister vast (``snapshots.lock_register``, R-VEILIG-9): een synchronisatie
+  die tegelijk loopt, wacht en schrijft daarna geen dubbele flowversie.
 - **Nooit**: een herstel zonder ondertekend verzoek, een tweede uitvoering met dezelfde nonce of goedkeuring, een
   herstel naar flows die het flowbeleid nu zou blokkeren, of een geheim in log, event, audit of antwoord. De
   credentials gaan als het door Node-RED zelf versleutelde bestand heen en terug; deze dienst kan ze niet lezen.
@@ -421,6 +424,9 @@ def apply(
                 {"verwacht": {"target": TARGET, "parameters": {"snapshot_id": "<uuid>"}}},
             )
         )
+    # vanaf hier tot de commit vóór het schrijven: het slot op het flowregister (R-VEILIG-9), vóór de rij van het
+    # voorstel en vóór de readback; zelfde volgorde als _finish_apply (eerst het slot, dan de rij)
+    snapshots.lock_register(session)
     # 7: risicoklasse en goedkeuring, gebonden aan het eigen voorstel
     approval = request.get("approval")
     if not isinstance(approval, dict):
@@ -637,6 +643,9 @@ def _finish_apply(
         and after_checksum == row.target_checksum
         and (write_error is None or write_error.reason in UPSTREAM_UNKNOWN)
     ):
+        # het slot op het flowregister vóór latest_snapshot en de flows (R-VEILIG-9): een synchronisatie die tegelijk
+        # loopt, schrijft dan niet dezelfde flowversie
+        snapshots.lock_register(session)
         result = snapshots.record_state(
             session,
             settings,
