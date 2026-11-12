@@ -63,6 +63,14 @@ Deze ronde bouwt de vijf werkpakketten:
   eigen `credentialSecret`. Het beheerwachtwoord en de argumenten worden één keer getoond; bewaard blijft alleen wat
   de dienst zelf nodig heeft, versleuteld in de vault. Een herhaald verzoek met dezelfde `Idempotency-Key` krijgt het
   gemaskeerde antwoord.
+- **Gebruiker (aanvulling 2026-11-12, S-P2-310):** waar het antwoord van het profiel een gebruiker noemt (veld
+  `gebruiker`), is dat de installatiegebruiker van het manifest: 568:568 (`catalog.NODE_RED_INSTALL_UID`; contract kop 2,
+  één container "als 568:568 waar de image dat toestaat"). De standaardgebruiker 1000 van de image
+  (`catalog.NODE_RED_IMAGE_UID`) is alleen de verwachte uitkomst van de meting `gebruiker_niet_root` in
+  `tools/node_red_verify.py` ("de image draait standaard als een gewone gebruiker", gemeten zonder `--user`) en geen
+  installatievoorschrift. Dit is geen wijziging van het profiel in de zin van besluit C-12: de argumenten, de accounts
+  en de `credentialSecret` blijven zoals ze zijn. Het verificatierapport is niet opnieuw gemaakt (de image-pin is
+  ongewijzigd) en blijft dus gemeten met gebruiker 1000.
 - De dienst **weigert een onbeveiligde Node-RED** (`niet_beveiligd`): zonder aanmelding wordt er niets gelezen en
   niets geschreven.
 
@@ -78,6 +86,19 @@ Deze ronde bouwt de vijf werkpakketten:
 - Een meting ouder dan 15 minuten telt niet meer: de stand is dan `onbekend`.
 - **De editor:** `GET …/automation/editor` geeft het adres alleen aan een beheerder (viewer en operator: 403). Node-RED
   zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
+- **Rechten op de beheer-API (aanvulling 2026-11-12, S-P2-310):** de staptekst van S-P2-310 vroeg "elke schrijvende
+  route alleen voor de beheerder". Gekozen is de bestaande indeling, die daar bewust van afwijkt:
+  - alleen de **beheerder**: beleid en toegang, dus het beveiligingsprofiel, de eigenaar, de triggers, de grenzen en
+    het uitgeven en intrekken van flow-tokens (en het adres van de editor);
+  - de **beheerder of de operator**: bediening, dus een flow pauzeren of hervatten, de isolatie meten, een
+    momentopname maken, een vastgelopen aflevering opnieuw aanbieden en een proefrun starten. Geen van deze routes
+    schrijft in Node-RED of verruimt wat een flow mag; een geblokkeerde flow kan ook een operator niet hervatten;
+  - alleen de **Hub** (dienst-JWT): events aanbieden en de uitkomst van een actieverzoek melden;
+  - een **viewer** of een **kind** krijgt op elke schrijvende route `403`. Elke schrijvende route van de beheerder of
+    de operator, en het melden van een uitkomst door de Hub, legt een auditregel vast (een aangeboden event staat in
+    `GET …/automation/events`). Een geweigerde aanvraag legt niets vast.
+  `apps/api/tests/integration/test_b11_rechten.py` leest de schrijvende routes uit de app zelf en toetst deze indeling
+  per route: een nieuwe schrijvende route zonder plaats erin laat de test falen.
 - **Exec-node en grof blokkeren:** gemeten is dat Node-RED een flow met een uitgesloten exec-node gewoon aanneemt
   (de node draait niet, maar de flow staat er). Daarom scant de dienst elke gelezen configuratie zelf: elke node (in
   een tabblad, in een subflow of als configuratienode, gebruikt of niet) tegen de verboden typen, de geïnstalleerde
@@ -203,6 +224,11 @@ Deze ronde bouwt de vijf werkpakketten:
   samen. Een beheerder kan dit alleen strenger zetten. Een afgeremd verzoek (`429`) wordt niet vastgelegd. Doel en
   parameters zijn samen hooguit 8 kB (`422 parameters_te_groot`) en elk hooguit 32 niveaus diep genest
   (`actions.MAX_NESTING`); dieper is een invoerfout (`422 validation_error`) en wordt niet vastgelegd.
+- **Tekst die niet op te slaan is (aanvulling 2026-11-12, S-P2-310):** een NUL-teken (dat PostgreSQL niet opslaat) of
+  een losse surrogaat (een geldige JSON-escape zoals `\ud800`, maar geen tekst die in UTF-8 kan), in een tekstveld,
+  een sleutel of diep genest, is op de flow-API en op de beheer-API een invoerfout: `422 validation_error` met het veld
+  (`actions.storable`), en bij een event van de Hub `422 event_ongeldig`. Nooit een serverfout, en er wordt niets
+  vastgelegd.
 - Zonder koppeling met de Hub is een verzoek `503 hub_unavailable`: er wordt niets in een wachtrij gezet dat later
   ongezien alsnog uitgevoerd zou worden.
 - De Hub meldt de uitkomst terug met `POST …/action-requests/{id}/result` (alleen dienst-JWT). Een eindstand

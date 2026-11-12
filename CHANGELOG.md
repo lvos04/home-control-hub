@@ -62,6 +62,16 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   `HCH_NODE_RED_ALLOWED_MODULES`. Nieuwe afhankelijkheid `bcrypt`.
 - Manifest: optionele afhankelijkheid `node-red` (verwijst naar het manifest van `jelly-leon-platform`); de
   upgradenotitie noemt migratie `0005`.
+- Het beveiligingsprofiel noemt als gebruiker 568:568, de installatiegebruiker van het manifest van
+  `jelly-leon-platform`. De standaardgebruiker 1000 van de image is alleen nog de meting "draait niet als root" in
+  `tools/node_red_verify.py`. Argumenten, accounts en `credentialSecret` van het profiel zijn niet gewijzigd
+  (besluit C-12).
+- Een NUL-teken of een losse surrogaat in een tekstveld van de flow-API of de beheer-API (ook in de lijst toegestane
+  acties van een flow-token, de voorbeelden van een proefrun, de uitkomst die de Hub meldt en een event van de Hub)
+  is een invoerfout (`422`), geen serverfout; er wordt niets vastgelegd.
+- Rechten op de beheer-API vastgelegd in ADR-0016 kop 2 en getest per route: beleid en toegang (profiel, eigenaar,
+  triggers, grenzen, flow-tokens) alleen voor de beheerder, bediening (pauzeren, isolatie meten, momentopname,
+  opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`.
 
 **Bekende grenzen**
 - De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een
