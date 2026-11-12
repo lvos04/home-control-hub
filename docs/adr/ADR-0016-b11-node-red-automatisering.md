@@ -39,9 +39,11 @@ Deze ronde bouwt de vijf werkpakketten:
   568:568 en zet de instellingen via de omgevingsvariabele `FLOWS`. `deploy/truenas/NODE_RED_CUSTOM_APP.md` verwijst
   daarnaar en beschrijft alleen wat in deze dienst wordt ingesteld; het bevat geen eigen formuliervelden.
 - **Besluit C-11:** geen anonieme toegang tot de editor; alleen bruikbaar via een beheerder. De controle
-  `anoniem_geweigerd` (401) blijft zoals hij is. Het manifest van `jelly-leon-platform` volgt dit pas na stap
-  S-P2-410 (tot dan "anoniem alleen lezen"). De controle draait alleen als deze dienst zich kan aanmelden: zodra er
-  een dienstaccount is (besluit C-12) en het manifest nog "anoniem alleen lezen" heeft, geeft ze een afwijking.
+  `anoniem_geweigerd` (401) blijft zoals hij is. Het manifest van `jelly-leon-platform` volgt dit sinds stap
+  S-P2-410: `adminAuth` in `FLOWS` zonder anonieme rechten, dus ook geen anoniem lezen, met dezelfde controle
+  `anoniem_geweigerd` (401 op `/flows`, `/nodes` en `/settings`) bij de controles na installatie. De controle van
+  deze dienst draait alleen als deze dienst zich kan aanmelden (zodra er een dienstaccount is, besluit C-12); geeft
+  een Node-RED dan anoniem toch iets terug, dan geeft ze een afwijking.
   Zonder dienstaccount (zo staat het bij een Node-RED volgens het manifest tot de voorziening van C-12) meet de
   dienst niets: `snapshots.run_isolation_check` geeft `onbekend` met de fout `geen_aanmelding` en een lege lijst
   controles (`nodered.client_from_source`), en de andere routes geven `409 node_red_niet_ingesteld`.

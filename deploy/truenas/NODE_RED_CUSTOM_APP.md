@@ -24,12 +24,13 @@ Er is **geen anonieme toegang** tot de editor van Node-RED: de editor is alleen 
 Control Hub controleert dat met `anoniem_geweigerd`: een lezer zonder aanmelding moet `401` krijgen op `/flows`,
 `/nodes` en `/settings`.
 
-Het manifest van `jelly-leon-platform` doet dat pas na stap S-P2-410. Tot die commit staat er in het manifest nog
-"anoniem alleen lezen" (aanmelden verplicht om te schrijven, lezen open op het vertrouwde netwerk). Home Control Hub
-meet `anoniem_geweigerd` alleen als het zich bij Node-RED kan aanmelden, dus pas **zodra er een dienstaccount is**
-(besluit C-12, hieronder). Is er dan nog "anoniem alleen lezen", dan geeft `anoniem_geweigerd` een **afwijking**. Dat
-is bekend en wordt niet weggewerkt door de controle af te zwakken. Tot er een dienstaccount is, wordt
-`anoniem_geweigerd` niet gemeten: de isolatie is dan `onbekend` (zie "Gevolg tot dan").
+Het manifest van `jelly-leon-platform` volgt dit sinds stap S-P2-410: `adminAuth` in `FLOWS` zonder anonieme
+rechten, dus ook geen anoniem lezen. Het manifest heeft zelf een controle na installatie `anoniem_geweigerd` met
+dezelfde paden (elk `401`). Home Control Hub meet `anoniem_geweigerd` alleen als het zich bij Node-RED kan aanmelden,
+dus pas **zodra er een dienstaccount is** (besluit C-12, hieronder). Geeft een Node-RED dan anoniem toch flows, nodes
+of instellingen terug, dan geeft `anoniem_geweigerd` een **afwijking**; dat wordt niet weggewerkt door de controle af
+te zwakken. Tot er een dienstaccount is, wordt `anoniem_geweigerd` niet gemeten: de isolatie is dan `onbekend` (zie
+"Gevolg tot dan").
 
 ## Beheerder- en dienstaccount (besluit C-12)
 
@@ -115,7 +116,7 @@ Loop ze na de installatie en na elke wijziging van het formulier van Node-RED na
 | Isolatie `onbekend` met `geen_aanmelding` (*Er zijn geen aanmeldgegevens voor Node-RED opgeslagen*) | Verwacht bij een Node-RED volgens het manifest, tot de voorziening van besluit C-12 er is (er is nog geen dienstaccount). Maak **niet** het beveiligingsprofiel en zet geen wachtwoord in een formulier. |
 | Hub: `niet_beveiligd` | Node-RED vraagt geen aanmelding. Controleer of de app volgens het manifest is geïnstalleerd; stop Node-RED tot dat zo is. Zolang zijn alle flows geblokkeerd met reden `synchronisatie_mislukt` (zie de rij daarover). |
 | Hub: *Node-RED is niet bereikbaar* (`node_red_unavailable`) | App gestopt, verkeerde poort of verkeerd adres. De Hub probeert het zelf opnieuw. |
-| Isolatie: afwijking bij `anoniem_geweigerd` | Alleen te zien zodra er een dienstaccount is. Verwacht tot het manifest besluit C-11 volgt (na S-P2-410); zie "Anonieme toegang". |
+| Isolatie: afwijking bij `anoniem_geweigerd` | Alleen te zien zodra er een dienstaccount is. Het manifest heeft sinds stap S-P2-410 geen anoniem lezen meer (besluit C-11): controleer of Node-RED volgens het huidige manifest is geïnstalleerd; zie "Anonieme toegang". |
 | Flow staat op *geblokkeerd* | Ergens in de configuratie van Node-RED staat een verboden node, een onbekend type, een module die niet is toegestaan, of iets wat deze app niet kan plaatsen (een vormfout, ook een id langer dan 120 tekens of een NUL of een ongeldig teken in een naam of label, een dubbele id, een node buiten elk tabblad, een draad of link naar een node die niet bestaat). Dan zijn **alle** flows geblokkeerd (besluit "grof blokkeren"); een flow zonder eigen fout heeft de reden `bron_geblokkeerd`, en zijn bevindingen noemen de oorzaak en waar die staat. Haal dat weg; hervat de flows daarna zelf. |
 | Alle flows staan op *geblokkeerd* met reden `synchronisatie_mislukt` | Deze app kon de configuratie van Node-RED niet verwerken (de synchronisatie liep vast). Uit voorzorg zijn alle flows geblokkeerd en staat de check `automatisering` op *degraded*. Zoek in de editor van Node-RED wat er laatst is gewijzigd en haal dat weg. Slaagt een synchronisatie weer, dan staan de flows gepauzeerd; hervat ze daarna zelf. Dat gebeurt ook als Node-RED een antwoord geeft dat deze app niet kan gebruiken: te groot of ongeldig, geen aanmelding (`niet_beveiligd`), een geweigerde aanmelding of ontbrekende rechten van het dienstaccount, een onbekend pad of een doorverwijzing (de meting van de bron noemt de oorzaak). Antwoordt Node-RED niet (niet bereikbaar, time-out) of met een serverfout, dan blijft de stand van de flows nog staan; zie de rij *Node-RED is niet bereikbaar*. |
 | Herstel: `credentials_niet_te_ontsleutelen` | De sleutel waarmee Node-RED de credentials versleutelt is een andere dan toen de momentopname werd gemaakt. Er is niets gewijzigd. |
