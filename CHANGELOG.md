@@ -14,11 +14,16 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   voorziening zonder geheim in het formulier via de manifeststandaard; het profiel vervalt daarna of wordt
   daaraan gelijkgetrokken. Grof blokkeren (besluit van de gebruiker): staat er ergens in de configuratie van
   Node-RED een exec-node, een onbekend type of een module buiten de allowlist, of iets wat de dienst niet kan
-  plaatsen (een vormfout in id, type, z, wires of links, een dubbele id, een node buiten elk bekend tabblad, een
-  draad of link naar een id die nergens staat of naar iets wat geen node in een tabblad is), dan worden **alle**
-  flows van Node-RED geblokkeerd tot het weg is. Het tabblad met de oorzaak (of dat ermee verbonden is) krijgt die
-  bevinding zelf, elk ander tabblad de reden `bron_geblokkeerd` met de oorzaak en de plaats; daarna blijven ze
-  gepauzeerd tot een beheerder ze hervat. Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
+  plaatsen (een vormfout in id, type, z, wires of links, een id of z langer dan 120 tekens, een NUL of een losse
+  surrogaat in een tekst, ook in een label, een dubbele id, een node buiten elk bekend tabblad, een draad of link
+  naar een id die nergens staat of naar iets wat geen node in een tabblad is), dan worden **alle** flows van Node-RED
+  geblokkeerd tot het weg is. Het tabblad met de oorzaak (of dat ermee verbonden is) krijgt die bevinding zelf, elk
+  ander tabblad de reden `bron_geblokkeerd` met de oorzaak en de plaats; daarna blijven ze gepauzeerd tot een
+  beheerder ze hervat. Blokkeren bij mislukken (besluit van de gebruiker): loopt de synchronisatie vast nadat
+  Node-RED antwoordde (bij het lezen, in de scan, het flowregister of de opslag), dan worden in een aparte transactie
+  alle flows geblokkeerd met reden `synchronisatie_mislukt` en is de check `automatisering` degraded; nooit de oude
+  stand. Geeft Node-RED zelf een fout (onbereikbaar, te groot antwoord, 5xx, ongeldige JSON), dan blijft de stand
+  van de flows nog staan (open vervolgpunt). Zie ADR-0016 kop 2. Een Node-RED zonder aanmelding wordt geweigerd.
 - **Eventtypencatalogus (B11-002).** Events worden bewaard met een catalogusstatus en per flow in volgorde
   afgeleverd, met herhalen en dead-letter. Een onbekende schema-versie blijft zichtbaar en wordt gemeld.
 - **Veilige acties (B11-003).** Een flow vraagt een actie aan met een eigen flow-token; de Hub beslist. Deze dienst

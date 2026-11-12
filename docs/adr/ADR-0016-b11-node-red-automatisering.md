@@ -83,11 +83,13 @@ Deze ronde bouwt de vijf werkpakketten:
   een tabblad, in een subflow of als configuratienode, gebruikt of niet) tegen de verboden typen, de geïnstalleerde
   typen en de allowlist, én of hij elke node kan plaatsen. Niet te plaatsen is: een element dat geen object is met
   `id` en `type` als niet-lege tekst, `z` als tekst (of zonder `z`: een configuratienode), `wires` als lijst van
-  lijsten met teksten en `links` als lijst met teksten (`vorm_ongeldig`); een dubbele id (`dubbele_id`); een node met
-  een `z` die geen tabblad of subflow is (`tabblad_onbekend`); een draad of link naar een id die nergens staat,
-  bijvoorbeeld de id `<instantie>-<node>` die Node-RED een node in een subflow-instantie pas tijdens het draaien
-  geeft (`verwijzing_onbekend`); en een draad of link van of naar iets wat geen node in een tabblad of subflow is,
-  zoals een configuratienode zonder `z` of een tabblad zelf (`niet_plaatsbaar`). **Besluit van de gebruiker
+  lijsten met teksten en `links` als lijst met teksten, en ook een element met een `id` of `z` langer dan 120 tekens
+  of met een NUL of een losse surrogaat in een tekst (ook in een label, een sleutel of diep in een eigenschap; de
+  gepinde Node-RED neemt die aan, bewaart ze en geeft ze terug) (`vorm_ongeldig`); een dubbele id (`dubbele_id`);
+  een node met een `z` die geen tabblad of subflow is (`tabblad_onbekend`); een draad of link naar een id die
+  nergens staat, bijvoorbeeld de id `<instantie>-<node>` die Node-RED een node in een subflow-instantie pas tijdens
+  het draaien geeft (`verwijzing_onbekend`); en een draad of link van of naar iets wat geen node in een tabblad of
+  subflow is, zoals een configuratienode zonder `z` of een tabblad zelf (`niet_plaatsbaar`). **Besluit van de gebruiker
   (2026-11-11, "grof blokkeren"):** staat er **ergens** in de configuratie iets verbodens of iets wat de dienst niet
   kan plaatsen, dan worden **alle** flows van de bron geblokkeerd tot het weg is. Reden: Node-RED levert berichten
   tussen tabbladen ook af langs wegen die een scan per tabblad niet betrouwbaar volgt (gemeten op de gepinde image:
@@ -108,6 +110,20 @@ Deze ronde bouwt de vijf werkpakketten:
   afgeleverd zolang de flow geblokkeerd is. Er gaat dus niets naar de flow en geen actieverzoek van de flow naar de
   Hub. Is de oorzaak weg, dan blijft elke flow die geblokkeerd was gepauzeerd tot een beheerder of operator hem
   bewust hervat (ook een flow die alleen `bron_geblokkeerd` was).
+- **Blokkeren bij mislukken (besluit van de gebruiker, 2026-11-12, vorm A; R-VEILIG-8):** loopt de synchronisatie
+  vast nadat Node-RED antwoordde (een uitzondering bij het lezen, zoals een antwoord dat te diep genest is voor de
+  JSON-lezer, of in de scan, het flowregister of de opslag), dan blijft de oude stand **niet** staan: het half gedane
+  werk wordt teruggedraaid en een aparte transactie zet elke flow van de bron die nog bestaat op geblokkeerd met reden
+  `synchronisatie_mislukt` (per flow die nog niet geblokkeerd was een event `flow.policy.blocked`), de synchronisatie
+  op `ok: false` en de check `automatisering` op `degraded` (kop 8). Een verwijderde flow blijft verwijderd. Slaagt
+  een synchronisatie daarna weer, dan blijven die flows gepauzeerd tot een beheerder of operator ze hervat (geen
+  automatisch heropenen). De vormen hierboven (lange id, NUL, losse surrogaat) zijn een gewone bevinding
+  `vorm_ongeldig`, geen vastgelopen synchronisatie: tabblad-id, label en bevindingen bevatten zo'n teken nooit, en de
+  momentopname bewaart de configuratie zelf ongewijzigd (versleuteld).
+  **Grens (open vervolgpunt):** kan de dienst de configuratie niet lezen omdat Node-RED of het netwerk een fout geeft
+  (onbereikbaar, time-out, 5xx, een antwoord groter dan 16 MiB of ongeldige JSON), dan blijft de stand van de flows
+  staan tot de volgende geslaagde synchronisatie; alleen de synchronisatie is dan `ok: false` en de check
+  `automatisering` `degraded`. Daarvoor is in deze herstelpoging niets gebouwd.
 - **Grens van de blokkade:** de blokkade geldt voor wat deze dienst doet (events afleveren, actieverzoeken
   doorsturen, tokens uitgeven); Node-RED zelf blijft de flows draaien. Omdat bij elke bevinding alle flows van de
   bron geblokkeerd zijn, maakt het voor de blokkade niet uit langs welke weg tabbladen tijdens het draaien berichten
