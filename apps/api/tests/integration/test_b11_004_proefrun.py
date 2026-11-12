@@ -402,6 +402,146 @@ def test_after_the_block_is_lifted_the_old_dry_run_does_not_count(
     assert again.status_code == 201 and again.json()["id"] != run["id"], again.text
 
 
+def assert_sample_trigger_refused(linked: Any, auth: Any, answer: Any) -> None:
+    """R-VEILIG-3 (S-P2-300): een voorbeeld-aflevering is buiten haar eigen lopende proefrun geen trigger. Het verzoek
+    wordt geweigerd en vastgelegd (403 ``voorbeeld_buiten_proefrun``): er komt geen rij ``aangevraagd`` en geen event
+    ``flow.action.requested``, dus niets gaat naar de Hub."""
+    assert answer.status_code == 403, answer.text
+    body = answer.json()
+    assert body["code"] == "forbidden" and body["details"]["reason"] == "voorbeeld_buiten_proefrun"
+    assert "dry_run" not in body
+    rows = linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]
+    assert [(r["id"], r["status"], r["rejected_reason"]) for r in rows] == [
+        (body["details"]["action_request_id"], "geweigerd", "voorbeeld_buiten_proefrun")
+    ]
+    assert b11.outbox(linked, "flow.action.requested") == []
+    assert [e["payload"]["reden"] for e in b11.outbox(linked, "flow.action.rejected")] == ["voorbeeld_buiten_proefrun"]
+
+
+def test_a_sample_of_a_closed_dry_run_is_no_trigger_after_the_flow_is_resumed(
+    linked: Any, auth: Any, flow: Any, node_red_fake: Any
+) -> None:
+    """PROEF-E van R-VEILIG (S-P2-300): een voorbeeld-event is vóór de blokkade geclaimd; de blokkade wordt opgeheven
+    en een beheerder hervat de flow. Een actieverzoek met die voorbeeld-aflevering als trigger gaat niet als echt
+    verzoek naar de Hub, maar wordt geweigerd en vastgelegd. De afgesloten proefrun verandert niet."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    delivery_id = b11.claim(linked, token)["items"][0]["id"]
+    block_by_policy(linked, auth, node_red_fake, detail["id"])
+    node_red_fake.deploy(simple_flow())
+    b11.snapshot(linked, auth)
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "gepauzeerd"
+    resumed = b11.put_flow(linked, auth, detail["id"], "state", {"status": "actief"})
+    assert resumed.status_code == 200 and resumed.json()["status"] == "actief", resumed.text
+    before = assert_closed_by_the_block(linked, auth, run["id"], open_deliveries=1)
+
+    a = b11.request_action(
+        linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=delivery_id
+    )
+    assert_sample_trigger_refused(linked, auth, a)
+    assert run_of(linked, auth, run["id"]) == before
+
+
+def test_a_sample_of_a_finished_dry_run_is_no_trigger_and_only_its_own_running_dry_run_simulates(
+    linked: Any, auth: Any, flow: Any
+) -> None:
+    """PROEF-F van R-VEILIG (S-P2-300): een proefrun die gewoon klaar is. Een actieverzoek van de (actieve) flow met een
+    voorbeeld-aflevering daarvan als trigger wordt geweigerd en vastgelegd, niet aangevraagd. Loopt er een nieuwe
+    proefrun, dan wordt een verzoek gesimuleerd zoals elk verzoek in een proefrun: met een voorbeeld-aflevering van
+    die run als ``zou_worden_aangevraagd``, met een van de oude run als ``zou_worden_geweigerd``."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    old = b11.claim(linked, token)["items"][0]["id"]
+    assert b11.ack(linked, token, old).status_code == 200
+    done = run_of(linked, auth, run["id"])
+    assert done["status"] == "klaar" and b11.flow_detail(linked, auth, detail["id"])["status"] == "actief"
+
+    a = b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=old)
+    assert_sample_trigger_refused(linked, auth, a)
+    assert run_of(linked, auth, run["id"]) == done
+
+    second = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    own = b11.claim(linked, token)["items"][0]["id"]
+    answers = [
+        b11.request_action(linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=d)
+        for d in (own, old)
+    ]
+    assert [(x.status_code, x.json()["status"], x.json()["run_id"]) for x in answers] == [
+        (200, "gesimuleerd", second["id"]),
+        (200, "gesimuleerd", second["id"]),
+    ]
+    assert [(x.json()["uitkomst"], x.json()["reden"]) for x in answers] == [
+        ("zou_worden_aangevraagd", None),
+        ("zou_worden_geweigerd", "voorbeeld_buiten_proefrun"),
+    ]
+    assert len(linked.get(f"{A}/action-requests", headers=auth("viewer")).json()["items"]) == 1
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
+def test_ack_of_a_sample_after_the_dry_run_finished_is_refused_and_a_replay_keeps_its_answer(
+    linked: Any, auth: Any, flow: Any
+) -> None:
+    """R-TECH-4 (S-P2-300): een voorbeeld-aflevering van een proefrun die klaar is, terwijl de flow gewoon actief is.
+    Dezelfde ``Idempotency-Key`` geeft het bewaarde antwoord (200); een nieuwe sleutel geeft 409
+    ``proefrun_afgesloten`` (ook een nack), en de run verandert niet."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
+    delivery_id = b11.claim(linked, token)["items"][0]["id"]
+    key = str(uuid.uuid4())
+    url = f"{FLOW_API}/deliveries/{delivery_id}/ack"
+    first = linked.post(url, headers=idem(b11.bearer(token), key=key))
+    assert first.status_code == 200, first.text
+    done = run_of(linked, auth, run["id"])
+    assert done["status"] == "klaar" and b11.flow_detail(linked, auth, detail["id"])["status"] == "actief"
+
+    replay = linked.post(url, headers=idem(b11.bearer(token), key=key))
+    assert (replay.status_code, replay.json()) == (200, first.json())
+    for again in (b11.ack(linked, token, delivery_id), b11.nack(linked, token, delivery_id, "kapot")):
+        assert (again.status_code, again.json().get("code")) == (409, "proefrun_afgesloten"), again.text
+        assert again.json()["details"] == {"run_id": run["id"], "run_status": "klaar", "flow_status": "actief"}
+    assert run_of(linked, auth, run["id"]) == done
+
+
+def test_ack_of_a_sample_after_the_dry_run_expired_is_refused_and_it_is_no_trigger(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any, make_settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-TECH-4 en R-VEILIG-3 (S-P2-300): een proefrun die verlopen is (``expire_runs``), terwijl de flow actief is.
+    Een herhaalde ack met dezelfde sleutel geeft het bewaarde antwoord; elke nieuwe ack of nack van een voorbeeld-
+    aflevering van die run geeft 409 ``proefrun_afgesloten`` en verandert de run niet; zo'n aflevering is ook geen
+    trigger voor een echt actieverzoek."""
+    detail, token = flow
+    run = start(linked, auth, detail["id"], sample_ids=["energie-meting", "backup-mislukt"]).json()
+    items = b11.claim(linked, token)["items"]
+    assert len(items) == 2
+    key = str(uuid.uuid4())
+    url = f"{FLOW_API}/deliveries/{items[0]['id']}/ack"
+    first = linked.post(url, headers=idem(b11.bearer(token), key=key))
+    assert first.status_code == 200, first.text
+    later = utcnow() + simulate.RUN_TTL + timedelta(seconds=1)
+    monkeypatch.setattr("integrations.worker.utcnow", lambda: later)
+    Worker(make_settings(), transport=fake_hub.transport).automation_step(0.0)
+    done = run_of(linked, auth, run["id"])
+    assert (done["status"], done["error_code"]) == ("mislukt", "verlopen")
+    assert b11.flow_detail(linked, auth, detail["id"])["status"] == "actief"
+
+    replay = linked.post(url, headers=idem(b11.bearer(token), key=key))
+    assert (replay.status_code, replay.json()) == (200, first.json())
+    for again in (
+        b11.ack(linked, token, items[0]["id"]),
+        b11.ack(linked, token, items[1]["id"]),
+        b11.nack(linked, token, items[1]["id"], "kapot"),
+    ):
+        assert (again.status_code, again.json().get("code")) == (409, "proefrun_afgesloten"), again.text
+        assert again.json()["details"] == {"run_id": run["id"], "run_status": "mislukt", "flow_status": "actief"}
+    assert run_of(linked, auth, run["id"]) == done
+
+    a = b11.request_action(
+        linked, token, "notification.send", target=USER, parameters=NOTIFY, trigger_delivery_id=items[1]["id"]
+    )
+    assert_sample_trigger_refused(linked, auth, a)
+    assert run_of(linked, auth, run["id"]) == done
+
+
 def test_a_failed_sync_that_blocks_every_flow_also_closes_the_dry_run(
     linked: Any, fake_hub: Any, auth: Any, flow: Any, node_red_fake: Any, make_settings: Any, monkeypatch: Any
 ) -> None:

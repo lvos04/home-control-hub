@@ -15,6 +15,8 @@ Het pad van een actieverzoek (``POST /integrations/v1/automation/flow-api/action
 7. het verzoek gaat als event ``flow.action.requested`` (in de vorm van een ActionProposal) naar de Hub.
 
 Een geweigerd verzoek wordt vastgelegd (rij, audit en event ``flow.action.rejected``): de flow blijft auditbaar.
+Een voorbeeld-aflevering (proefrun, B11-004) is alleen binnen haar eigen lopende proefrun een trigger; daarbuiten wordt
+het verzoek geweigerd met ``voorbeeld_buiten_proefrun`` (ADR-0016 kop 5).
 """
 
 from __future__ import annotations
@@ -94,6 +96,8 @@ REFUSALS_NL = {
     "geen onzichtbare tekens).",
     "emby_nooit_door_platform": "Het platform stopt, updatet of verwijdert Emby nooit; ook een flow kan dat niet "
     "aanvragen (contract §2.3 regel 3).",
+    "voorbeeld_buiten_proefrun": "De trigger is een voorbeeld-event van een proefrun die nu niet loopt; een "
+    "voorbeeld-event is alleen binnen zijn eigen proefrun bruikbaar en start nooit een echt verzoek.",
 }
 #: weigeringen die op een poging tot iets verbodens wijzen: het event flow.action.rejected krijgt ernst "hoog"
 HIGH_SEVERITY = frozenset(
@@ -370,12 +374,22 @@ def request_action(
 
     # een geblokkeerde flow heeft geen proefrun meer (ook niet als die al liep vóór de blokkade): weigeren, zie hieronder
     run = inbox.dry_run_for(session, flow, now)
+    # een voorbeeld-aflevering telt alleen als trigger binnen haar eigen, nu lopende proefrun; daarbuiten (proefrun
+    # klaar, verlopen of bij een blokkade afgesloten, ook na hervatten) is het verzoek een vastgelegde weigering en
+    # nooit een echt verzoek. In een andere lopende proefrun: zou_worden_geweigerd (R-VEILIG-3 van S-P2-300)
+    sample_outside_its_run = (
+        delivery is not None and delivery.run_id is not None and (run is None or delivery.run_id != run.id)
+    )
     if run is not None:
+        if sample_outside_its_run:
+            refusal = refusal or "voorbeeld_buiten_proefrun"
         return _simulate(run, action_id, stored_target, stored_parameters, refusal, preview, trigger_error, now)
     if flow.status == "geblokkeerd":
         refusal = refusal or "flow_geblokkeerd"
     elif flow.status != "actief":
         refusal = refusal or "flow_niet_actief"
+    if sample_outside_its_run:
+        refusal = refusal or "voorbeeld_buiten_proefrun"
     if trigger_error is not None:
         return Outcome(
             422,
