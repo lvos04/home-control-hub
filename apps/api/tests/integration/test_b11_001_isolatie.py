@@ -509,6 +509,56 @@ def test_a_sync_that_fails_blocks_every_flow_until_an_admin_resumes(
     assert r.status_code == 200 and r.json()["status"] == "actief", r.text
 
 
+@pytest.mark.parametrize("where", ["register", "lezen"])
+def test_a_sync_that_fails_also_blocks_paused_and_disabled_flows(
+    linked: Any,
+    fake_hub: Any,
+    auth: Any,
+    node_red_fake: Any,
+    make_settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+) -> None:
+    """R-VEILIG-10 (herreview 5 van S-P2-295): "elke flow van de bron die nog bestaat" (ADR-0016 kop 2) geldt ook voor
+    een flow die vóór het vastlopen gepauzeerd was en voor een flow die in Node-RED uit staat (uitgeschakeld). Beide
+    staan daarna op geblokkeerd met ``synchronisatie_mislukt``: hervatten geeft 409, hun token 403 en er gaat geen
+    actieverzoek naar de Hub. Zou alleen een actieve flow geblokkeerd worden, dan kon een beheerder de gepauzeerde
+    flow hervatten terwijl de synchronisatie blijft vastlopen."""
+    paused, disabled = "tabpauze00000003", "tabuit0000000004"
+    flows = [
+        *simple_flow(),
+        *simple_flow(tab_id=paused, label="Pauze"),
+        tab(disabled, "Uit", disabled=True),
+        node("tabuit00inject01", "inject", disabled),
+    ]
+    setup_node_red(linked, fake_hub, auth, flows=flows)
+    worker = Worker(make_settings(node_red_sync_interval_s=60), transport=fake_hub.transport)
+    worker.automation_step(100.0)
+    p_flow, p_token = b11.ready_flow(linked, auth, paused, "notification.send")
+    d_flow, d_token = b11.ready_flow(linked, auth, disabled, "notification.send")
+    r = b11.put_flow(linked, auth, p_flow["id"], "state", {"status": "gepauzeerd", "reden": "onderhoud"})
+    assert r.status_code == 200 and r.json()["status"] == "gepauzeerd", r.text
+    assert b11.flow_detail(linked, auth, d_flow["id"])["status"] == "uitgeschakeld"
+    before = len(b11.outbox(linked, "flow.policy.blocked"))
+
+    _fail_in(where, monkeypatch, node_red_fake)
+    node_red_fake.deploy([*flows, node("tab00000inject02", "inject", T)])  # een wijziging: alles wordt gelezen
+    worker.automation_step(200.0)
+    assert worker.state.stats["node_red_sync_failed"] == 1
+    for flow_id, token in ((p_flow["id"], p_token), (d_flow["id"], d_token)):
+        detail = b11.flow_detail(linked, auth, flow_id)
+        assert detail["status"] == "geblokkeerd" and detail["blocked_reason"] == "synchronisatie_mislukt", detail
+        r = b11.put_flow(linked, auth, flow_id, "state", {"status": "actief", "reden": "toch hervatten"})
+        assert r.status_code == 409 and r.json()["code"] == "flow_status_conflict", r.text
+        r = b11.request_action(
+            linked, token, "notification.send", target={"type": "user", "id": "user-1"}, parameters={"tekst": "x"}
+        )
+        assert r.status_code == 403 and r.json()["details"]["reason"] == "flow_geblokkeerd", r.text
+    blocked = b11.outbox(linked, "flow.policy.blocked")[before:]
+    assert {e["entity"]["id"] for e in blocked} >= {p_flow["id"], d_flow["id"]}, blocked
+    assert b11.outbox(linked, "flow.action.requested") == []
+
+
 def test_a_manual_snapshot_that_fails_blocks_every_flow_too(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
