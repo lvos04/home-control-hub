@@ -40,7 +40,11 @@ class Timestamps:
 class Database:
     def __init__(self, url: str) -> None:
         self.url = url
-        self.engine: Engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, future=True)
+        # hide_parameters: een databasefout zet de parameterwaarden (mogelijk een geheim of token) niet in de
+        # foutmelding en dus niet in de app-log (V-094).
+        self.engine: Engine = create_engine(
+            url, pool_pre_ping=True, pool_size=5, max_overflow=5, future=True, hide_parameters=True
+        )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, autoflush=False)
 
     def session(self) -> Iterator[Session]:

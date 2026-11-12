@@ -104,6 +104,8 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
   triggers, grenzen, flow-tokens) alleen voor de beheerder, bediening (pauzeren, isolatie meten, momentopname,
   opnieuw aanbieden, proefrun) ook voor de operator; een viewer of kind krijgt op elke schrijvende route `403`, de
   Hub (dienst-JWT) op elke route van de beheerder en de operator.
+- Een databasefout zet de parameterwaarden (mogelijk een geheim of token) niet meer in de foutmelding en de
+  app-log (`hide_parameters=True`, V-094).
 
 **Bekende grenzen**
 - De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een
