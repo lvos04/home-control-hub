@@ -173,6 +173,15 @@ def test_niet_gevalideerd_in_blokkade_staat_ook_in_validatie() -> None:
     assert not problems, "\n".join(problems)
 
 
+def test_b11_001_note_names_the_installation_user_and_the_uid_1000_measurement_together() -> None:
+    """S-P2-320 vervolg (KLEIN-59, A-13): de opmerking bij B11-001 noemt de profielgebruiker niet meer als "uid 1000";
+    de eerste zin zegt dat het profiel 568:568 noemt en dat 1000 alleen de meting van de image is."""
+    opmerking = next(i for i in _items() if i["id"] == "B11-001")["opmerking"]
+    eerste_zin = opmerking.split("; ")[0]
+    assert "uid 1000" not in opmerking
+    assert "568:568" in eerste_zin and "1000" in eerste_zin
+
+
 _TEST_REF = re.compile(r"((?:apps/api/tests|tests)/[\w/.-]+\.(?:py|ts|mjs|sh))|(?<![\w/])::(\w+)|(?<=\.py)::(\w+)")
 
 

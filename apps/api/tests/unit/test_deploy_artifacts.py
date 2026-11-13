@@ -313,6 +313,20 @@ def test_node_red_docs_do_not_promise_that_the_key_is_out_of_reach() -> None:
         assert "Mount Path = `/node-red-data`" not in text and "Mount Path `/node-red-data`" not in text, naam
 
 
+def test_env_example_warns_that_the_node_red_data_dir_also_holds_the_key() -> None:
+    """S-P2-290 R-EERLIJK (KLEIN-59, A-14): ook `.env.example` zegt bij HCH_NODE_RED_DATA_DIR dat de dataset van
+    Node-RED de sleutel (.config.runtime.json) bevat en dat de variabele leeg blijft tot besluit C-12, zoals
+    CUSTOM_APP.md en NODE_RED_CUSTOM_APP.md."""
+    regels = (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+    eind = next(i for i, r in enumerate(regels) if r.startswith("HCH_NODE_RED_DATA_DIR="))
+    begin = eind
+    while begin > 0 and regels[begin - 1].startswith("#"):
+        begin -= 1
+    blok = "\n".join(regels[begin:eind])
+    assert ".config.runtime.json" in blok and "C-12" in blok and "leeg" in blok
+    assert "niet ontsleutelen" not in blok
+
+
 def test_install_docs_name_settings_that_the_manifest_does_not_set() -> None:
     """R-MANIFEST-3 (P-INSTALLATIE punt 9): een HCH_*-variabele uit een installatiedocument die het manifest niet
     zet, staat er met de uitdrukkelijke melding dat ze niet in het manifest staat."""
