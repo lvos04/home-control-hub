@@ -11,10 +11,12 @@ import threading
 from pathlib import Path
 
 from .config import Settings
+from .logfilter import install_log_filter, uvicorn_log_config
 
 
 def _logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    install_log_filter()  # KLEIN-32: vangnet tegen de DETAIL-regel van PostgreSQL
     logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -69,7 +71,15 @@ def cmd_api(settings: Settings, host: str, port: int) -> int:
 
     from .app import create_app
 
-    uvicorn.run(create_app(settings), host=host, port=port, log_level="info", proxy_headers=False, server_header=False)
+    uvicorn.run(
+        create_app(settings),
+        host=host,
+        port=port,
+        log_level="info",
+        log_config=uvicorn_log_config(),
+        proxy_headers=False,
+        server_header=False,
+    )
     return 0
 
 

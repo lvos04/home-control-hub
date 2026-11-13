@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import DBAPIError
 
 from . import events
 from .config import Settings
@@ -33,6 +34,7 @@ from .enrollment import EVENTS_INBOX_PATH, HubLink
 from .hubclient import HubClient
 from .hublink_store import HubLinkStore
 from .idempotency import purge_expired
+from .logfilter import db_error_text
 from .security.replay import purge_expired as purge_jti
 from .security.secrets import enroll_public_jwk, ensure_secrets, load_identity, load_vault_key
 from .security.vault import Vault
@@ -203,6 +205,9 @@ class Worker:
         ):
             try:
                 step()
+            except DBAPIError as exc:  # KLEIN-32: zonder de DETAIL-regel van PostgreSQL
+                failed.append(name)
+                log.error("workerstap %s mislukt: %s", name, db_error_text(exc))
             except Exception:  # een fout in één stap mag de andere niet blokkeren
                 failed.append(name)
                 log.exception("workerstap mislukt")
