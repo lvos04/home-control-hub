@@ -47,8 +47,10 @@ Node-RED. Het profiel vervalt of wordt gelijkgetrokken met de voorziening zodra 
 Gevolg tot dan: Home Control Hub werkt alleen met een Node-RED die een aanmelding vraagt en een dienstaccount voor
 Home Control Hub heeft; het meldt zich aan met dat account. Een Node-RED volgens het manifest heeft nog geen
 dienstaccount. Home Control Hub meet dan **niets**: de isolatie heet `onbekend` met de fout `geen_aanmelding`, de
-lijst met controles is leeg (ook `anoniem_geweigerd` wordt niet gemeten), en het uitlezen van flows en het maken van
-een momentopname geven `node_red_niet_ingesteld` met de reden `geen_aanmelding`. Dat is verwacht tot de voorziening
+lijst met controles is leeg (ook `anoniem_geweigerd` wordt niet gemeten), het uitlezen van flows legt de reden
+`geen_aanmelding` vast in de synchronisatietoestand, en het maken van een momentopname of een herstelvoorstel geeft
+`node_red_niet_ingesteld` met de reden `geen_aanmelding`. Het adres van de editor, de lijst met flows en de stand van
+de isolatie blijven gewoon zichtbaar. Dat is verwacht tot de voorziening
 van besluit C-12 er is. De melding bij `geen_aanmelding` zegt "maak eerst het beveiligingsprofiel": doe dat **niet**
 (het profiel is geen installatiestap, zie hierboven).
 

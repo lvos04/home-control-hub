@@ -120,7 +120,8 @@ def test_isolation_without_a_service_account_is_unknown_not_measured(
     """Zo staat het bij een Node-RED volgens het manifest van jelly-leon-platform tot de voorziening van besluit C-12
     er is: alleen het adres, geen dienstaccount (deploy/truenas/NODE_RED_CUSTOM_APP.md, kop "Wat je in Home Control
     Hub instelt"). Dan wordt er niets gemeten, ook `anoniem_geweigerd` niet: de stand is `onbekend` met de fout
-    `geen_aanmelding`, en andere routes geven `409 node_red_niet_ingesteld`."""
+    `geen_aanmelding`. Wat Node-RED moet uitlezen (een momentopname maken) geeft `409 node_red_niet_ingesteld`;
+    de routes die alleen de eigen stand tonen (`GET /editor`, `/flows`, `/isolation`) geven 200 (A-12 van KLEIN-48)."""
     r = linked.put(
         "/integrations/v1/sources/node_red",
         json={"base_url": NODE_RED_URL, "enabled": True},
@@ -139,6 +140,11 @@ def test_isolation_without_a_service_account_is_unknown_not_measured(
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "node_red_niet_ingesteld"
     assert r.json()["details"]["reason"] == "geen_aanmelding"
+    for path in ("/editor", "/flows", "/isolation"):
+        r = linked.get(f"{A}{path}", headers=auth("admin"))
+        assert r.status_code == 200, (path, r.text)
+    isolation = linked.get(f"{A}/isolation", headers=auth("admin")).json()["isolatie"]
+    assert isolation["status"] == "onbekend", isolation
     assert node_red_fake.writes == []
 
 

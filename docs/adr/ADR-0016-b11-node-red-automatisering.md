@@ -46,7 +46,12 @@ Deze ronde bouwt de vijf werkpakketten:
   een Node-RED dan anoniem toch iets terug, dan geeft ze een afwijking.
   Zonder dienstaccount (zo staat het bij een Node-RED volgens het manifest tot de voorziening van C-12) meet de
   dienst niets: `snapshots.run_isolation_check` geeft `onbekend` met de fout `geen_aanmelding` en een lege lijst
-  controles (`nodered.client_from_source`), en de andere routes geven `409 node_red_niet_ingesteld`.
+  controles (`nodered.client_from_source`). Wat Node-RED moet uitlezen geeft dan `409 node_red_niet_ingesteld` met de
+  reden `geen_aanmelding`: een momentopname maken (`POST /automation/snapshots`), en een herstelvoorstel of het
+  uitvoeren daarvan (`propose`/`apply` voor `automation.flows.restore`) zodra ze bij Node-RED aankomen. De
+  synchronisatie op de achtergrond legt dezelfde reden vast in de synchronisatietoestand. De routes die alleen de
+  eigen stand tonen, geven gewoon 200: `GET /automation/editor` (met een ingesteld adres), `GET /automation/flows` en
+  `GET /automation/isolation` (gemeten in `test_isolation_without_a_service_account_is_unknown_not_measured`).
 - **Besluit C-12:** het beveiligingsprofiel hieronder is een tweede beschrijving van de installatie en zet geheimen
   (wachtwoord-hashes, `credentialSecret`) in het Custom App-formulier, tegen contract §3.1 ("Nooit geheimen in het
   Custom App-formulier"). De manifeststandaard (`appstore-en-fork`) krijgt een voorziening voor een beheerder en een
@@ -411,9 +416,9 @@ Deze ronde bouwt de vijf werkpakketten:
 
 | Situatie | Antwoord |
 |---|---|
-| Node-RED niet ingesteld of onbeveiligd | `409 node_red_niet_ingesteld` |
+| Node-RED niet (volledig) ingesteld: geen adres, bron uit, ongeldig adres, geen of ongeldige aanmelding (ook zonder dienstaccount) | `409 node_red_niet_ingesteld` |
 | Node-RED onbereikbaar | `503 node_red_unavailable` met `Retry-After: 30` |
-| Node-RED antwoordt met een fout | `502 node_red_fout` |
+| Node-RED antwoordt met een fout, of vraagt geen aanmelding (`niet_beveiligd`) | `502 node_red_fout` |
 | Weigering door beleid | `403 forbidden` met `details.reason` |
 | NUL-teken of losse surrogaat in een wijziging (ook in een sleutel die met `_sa` begint) | `422 validation_error` (er gebeurt niets) |
 | Wijziging dieper genest dan 64 niveaus | `422 validation_error` (er gebeurt niets) |
