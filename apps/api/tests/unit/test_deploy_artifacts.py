@@ -207,21 +207,77 @@ def test_no_yaml_or_compose_install_instructions() -> None:
 
 #: alle installatiedocumenten onder deploy/truenas (V-096): ook NODE_RED_CUSTOM_APP.md (S-P2-290)
 INSTALL_DOCS = sorted((DEPLOY / "truenas").glob("*.md"))
-NEGATIEF = re.compile(r"\b(geen|nooit|niet)\b")
+#: een verbod staat direct vóór de genoemde weg ("geen *Install via YAML*", "niet `curl … | sh`"); een los "geen",
+#: "nooit" of "niet" ergens anders in de regel telt niet als verbod (A-09, S-P2-290 R-MANIFEST-5)
+_VERBOD = r"\b(?:geen|nooit|niet)\s+(?:(?:via|met|een)\s+)?[*_`(\"']*"
+#: installatiewegen die alleen als verbod genoemd mogen worden: YAML en een terminal (curl/wget naar een shell, ssh,
+#: sudo, een shellscript of sh -c)
+VERBODEN_WEGEN: dict[str, str] = {
+    "Install via YAML": r"install via yaml",
+    "curl/wget naar een shell": r"(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b",
+    "ssh": r"\bssh\s+[\w.@-]",
+    "sudo": r"\bsudo\s+[\w.-]",
+    "shellscript": r"(?:\b(?:ba|z|da)?sh\s+|\./)[\w./-]*\.sh\b",
+    "sh -c": r"\b(?:ba|z|da)?sh\s+-c\b",
+}
+
+
+def _installatieweg_fouten(naam: str, tekst: str) -> list[str]:
+    """Alle plekken in een installatiedocument met een installatieweg via YAML, compose of een terminal."""
+    fouten: list[str] = []
+    lowered = tekst.lower()
+    for verboden in ("custom_compose_config", "docker compose up", "docker-compose up", "docker exec"):
+        if verboden in lowered:
+            fouten.append(f"{naam}: {verboden}")
+    for regel in lowered.splitlines():
+        for weg, patroon in VERBODEN_WEGEN.items():
+            for treffer in re.finditer(patroon, regel):
+                if not re.search(_VERBOD + r"$", regel[: treffer.start()]):
+                    fouten.append(f"{naam}: '{weg}' niet als verbod genoemd: {regel}")
+    return fouten
 
 
 def test_install_docs_give_no_yaml_compose_or_terminal_route() -> None:
-    """V-096 / contract kop 1: geen installatieweg via YAML, compose of een terminal in welk installatiedocument dan
-    ook; *Install via YAML* alleen genoemd als wat je niet doet."""
+    """V-096 / contract kop 1: geen installatieweg via YAML, compose of een terminal (curl/wget naar een shell, ssh,
+    sudo, een shellscript) in welk installatiedocument dan ook; zulke wegen alleen genoemd als wat je niet doet."""
     namen = [p.name for p in INSTALL_DOCS]
     assert "CUSTOM_APP.md" in namen and "NODE_RED_CUSTOM_APP.md" in namen, namen
     for p in INSTALL_DOCS:
-        lowered = p.read_text(encoding="utf-8").lower()
-        for verboden in ("custom_compose_config", "docker compose up", "docker-compose up", "docker exec"):
-            assert verboden not in lowered, f"{p.name}: {verboden}"
-        for regel in lowered.splitlines():
-            if "install via yaml" in regel:
-                assert NEGATIEF.search(regel), f"{p.name}: 'Install via YAML' niet als verbod genoemd: {regel}"
+        assert _installatieweg_fouten(p.name, p.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    "regel",
+    [
+        "Installeer met `curl … | sh`.",
+        "Installeer met `curl -fsSL https://voorbeeld.invalid/install | sudo bash`.",
+        "Of: `wget -qO- https://voorbeeld.invalid/i | sh`.",
+        "Log in met `ssh beheerder@nas` en start de app.",
+        "Voer `sudo docker run home-control-hub` uit.",
+        "Draai `bash install.sh` of `./install.sh`.",
+        "Start met `sh -c 'installeer'`.",
+        "Geen zorgen: kies *Install via YAML*.",
+        "Dit is niet moeilijk: Install via YAML.",
+    ],
+)
+def test_install_route_check_rejects_a_terminal_or_yaml_route_in_a_copy(regel: str) -> None:
+    """A-09: de controle ziet een terminal- of YAML-weg in een kopie van een installatiedocument; een los
+    "geen/niet/nooit" elders in de regel maakt er geen verbod van."""
+    tekst = (DEPLOY / "truenas/CUSTOM_APP.md").read_text(encoding="utf-8") + "\n" + regel + "\n"
+    assert _installatieweg_fouten("CUSTOM_APP.md (kopie)", tekst) != []
+
+
+@pytest.mark.parametrize(
+    "regel",
+    [
+        "Geen YAML, geen *Install via YAML*, geen terminal.",
+        "Knop **Custom App** (niet *Install via YAML*).",
+        "Nooit `curl … | sh`, geen `sudo docker run` en geen `ssh beheerder@nas`.",
+    ],
+)
+def test_install_route_check_accepts_a_route_named_as_prohibition(regel: str) -> None:
+    tekst = (DEPLOY / "truenas/CUSTOM_APP.md").read_text(encoding="utf-8") + "\n" + regel + "\n"
+    assert _installatieweg_fouten("CUSTOM_APP.md (kopie)", tekst) == []
 
 
 def test_node_red_doc_refers_to_the_manifest_without_own_form_fields() -> None:
