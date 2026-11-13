@@ -11,9 +11,11 @@ een wijziging loopt via de Hub, en tijdens een proefrun komt er over die weg nie
   niet op de vaste lijst van contract §8 staat (een stekker schakelen) nooit;
 - B11-004: een proefrun wijzigt geen apparaat;
 - B11-005: herstel naar een eerdere momentopname met een door de Hub ondertekend verzoek, zonder geheimen in de logs.
-  De datamap van Node-RED is hier een gewone, beschrijfbare map (een alleen-lezen-koppeling vraagt root): de dienst
-  neemt het credentials-bestand dan eerlijk niet mee (``niet_gekoppeld``). Credentials heen en terug staan in
-  ``apps/api/tests/integration/test_b11_005_herstel.py``.
+  Standaard is de datamap van Node-RED een gewone, beschrijfbare map (een alleen-lezen-koppeling vraagt root): de
+  dienst neemt het credentials-bestand dan eerlijk niet mee (``niet_gekoppeld``). In de variant "alleen-lezen"
+  (``make e2e-alleen-lezen``; zie ``conftest.py``) draaien API en worker in een container die de map via
+  ``docker -v …:ro`` ziet: dan gaan de credentials heen en terug, alleen uit de gekozen momentopname en alleen omdat
+  de huidige credentials eerst zijn vastgelegd (momentopname ``voor_herstel``).
 
 Echte Node-RED, echte Hub en echte apparaten: NIET GEVALIDEERD (echte NAS). Volgorde van de tests is bewust
 (module-scope stack)."""
@@ -241,9 +243,12 @@ def test_01_editor_alleen_beheerder_en_exec_flow_geblokkeerd(stack: Stack) -> No
     # de beheerder haalt de exec-flow weer weg in de editor
     httpx.post(f"{stack.node_red}/sim/deploy", json={"flows": _flows_v1(), "credentials": creds})
     STATE["snap1"] = _snapshot(stack)
-    # de datamap is in deze proef beschrijfbaar: geen alleen-lezen-koppeling, dus geen credentials (S-P2-320)
-    assert STATE["snap1"]["credentials_status"] == "niet_gekoppeld"
-    assert STATE["snap1"]["credentials_present"] is False
+    if stack.credentials_ro:  # variant "alleen-lezen": de map is via docker -v …:ro gekoppeld
+        assert STATE["snap1"]["credentials_status"] == "meegenomen", STATE["snap1"]
+        assert STATE["snap1"]["credentials_present"] is True
+    else:  # de datamap is beschrijfbaar: geen alleen-lezen-koppeling, dus geen credentials (S-P2-320)
+        assert STATE["snap1"]["credentials_status"] == "niet_gekoppeld"
+        assert STATE["snap1"]["credentials_present"] is False
     # het beleid is weer in orde: de schone flow staat gepauzeerd tot een beheerder hem bewust hervat
     assert _flow(stack, TAB)["status"] == "gepauzeerd"
     r = httpx.put(
@@ -403,9 +408,10 @@ def test_04_proefrun_wijzigt_geen_apparaat(stack: Stack) -> None:
 
 
 def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
-    """B11-005: undo naar de eerdere momentopname, alleen met een ondertekend verzoek van de Hub. De datamap van
-    Node-RED is hier beschrijfbaar en telt dus niet als gekoppeld: de flows gaan terug, de credentials niet (de nodes
-    houden hun huidige inloggegevens)."""
+    """B11-005: undo naar de eerdere momentopname, alleen met een ondertekend verzoek van de Hub. Is de datamap van
+    Node-RED beschrijfbaar, dan telt hij niet als gekoppeld: de flows gaan terug, de credentials niet (de nodes houden
+    hun huidige inloggegevens). In de variant "alleen-lezen" gaan ook de credentials terug, precies die van de
+    gekozen momentopname, nadat de huidige zijn vastgelegd."""
     admin = stack.token("admin")
     snap1 = STATE["snap1"]
     # iemand past de flow en het broker-wachtwoord aan in de editor
@@ -432,6 +438,8 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     assert r.status_code == 201, r.text
     view = r.json()
     assert _nr_state(stack)["flows"] == _flows_v2(), "een voorstel wijzigt niets"
+    # het voorstel zegt vooraf of het credentials-bestand meegaat; de goedkeuring (preview_hash) is daaraan gebonden
+    assert view["credentials"]["terugzetten"] is stack.credentials_ro, view
 
     signed = httpx.post(
         f"{stack.hub}/sim/execution-request",
@@ -460,13 +468,22 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     r = httpx.post(f"{stack.hch}/connector/v1/apply", json=signed, headers=_idem(stack.service(), key=key))
     assert r.status_code == 200, r.text
     result = r.json()
-    assert result["status"] == "uitgevoerd" and result["credentials_teruggezet"] is False
+    assert result["status"] == "uitgevoerd" and result["credentials_teruggezet"] is stack.credentials_ro, result
     assert result["readback"]["gelijk_aan_momentopname"] is True
     assert "NIET GEVALIDEERD (echte NAS)" in result["validatie"]
     state = _nr_state(stack)
     assert state["flows"] == _flows_v1()
-    assert state["credentials"] == {BROKER: {"user": "nas", "password": PW2}}
-    assert len(state["writes"]) == 1 and state["writes"][0]["met_credentials"] is False
+    assert len(state["writes"]) == 1 and state["writes"][0]["met_credentials"] is stack.credentials_ro
+    if stack.credentials_ro:
+        # alleen de credentials van de gekozen momentopname (PW1), niet de huidige (PW2) of die van een andere stand
+        assert state["credentials"] == {BROKER: {"user": "nas", "password": PW1}}
+        # en de huidige credentials zijn vóór het schrijven vastgelegd, zodat terugdraaien ze kan terugzetten
+        items = httpx.get(f"{stack.hch}{A}/snapshots", headers=stack.token("viewer")).json()["items"]
+        pre = [i for i in items if i["reason"] == "voor_herstel"]
+        assert len(pre) == 1 and pre[0]["credentials_status"] == "meegenomen", pre
+        assert pre[0]["credentials_present"] is True
+    else:
+        assert state["credentials"] == {BROKER: {"user": "nas", "password": PW2}}
     # hetzelfde verzoek nog eens: zelfde antwoord, geen tweede schrijfactie; met een nieuwe sleutel: geweigerd
     again = httpx.post(f"{stack.hch}/connector/v1/apply", json=signed, headers=_idem(stack.service(), key=key))
     assert again.status_code == 200 and again.json() == result

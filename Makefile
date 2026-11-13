@@ -3,7 +3,7 @@ PY ?= .venv/bin/python
 API := apps/api
 IMAGE ?= home-control-hub:dev
 
-.PHONY: lint test e2e interop openapi lock image smoke clean toestanden test-ui schermafdrukken peil-drift contract-drift ontwerpreview
+.PHONY: lint test e2e e2e-alleen-lezen interop openapi lock image smoke clean toestanden test-ui schermafdrukken peil-drift contract-drift ontwerpreview
 
 lint:
 	cd $(API) && ../../$(PY) -m ruff check . && ../../$(PY) -m ruff format --check . && ../../$(PY) -m mypy
@@ -13,6 +13,12 @@ test:
 
 e2e:
 	$(PY) -m pytest -q tests/e2e -p no:cacheprovider
+
+# Dienst-E2E van B11 met de datamap van Node-RED ALLEEN-LEZEN gekoppeld (docker -v …:ro, zoals een Custom App): API en
+# worker draaien in een container van $(IMAGE) (eerst `make image`) met de code en migraties uit de werkboom, zodat de
+# credentials heen en terug gaan (A-10 van KLEIN-48). Start containers: lokaal achter de docker-lock.
+e2e-alleen-lezen:
+	HCH_E2E_RO_IMAGE=$(IMAGE) $(PY) -m pytest -q tests/e2e/test_automation_e2e.py -p no:cacheprovider
 
 # Statuspagina in Peil (HC11): toestanden uit de echte app (PostgreSQL + Hub-simulator) → Playwright (axe-core,
 # overloop 320–1440 px, CSP, focus) → schermafdrukken in docs/screenshots/peil/statuspagina/.

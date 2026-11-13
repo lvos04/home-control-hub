@@ -5,6 +5,13 @@ bron instelt.
 
 Vereist: de Python-omgeving met ``apps/api[dev]`` en een PostgreSQL (standaard de lokale ontwikkel-PostgreSQL;
 database ``hch_test_e2e``). Geen echte NAS, Hub, Authentik of accounts.
+
+Variant "alleen-lezen" (``make e2e-alleen-lezen``, A-10 van KLEIN-48): met ``HCH_E2E_RO_IMAGE=<image van deze app>``
+draaien API en worker in een container van die image (``--network host``), met de code en de migraties uit de
+werkboom (``PYTHONPATH``, alleen-lezen) en de datamap van de nep-Node-RED via ``docker -v …:ro``, zoals een Custom
+App die map koppelt. De dienst meet die koppeling zelf (``fstatvfs``, ``ST_RDONLY``) en neemt het versleutelde
+credentials-bestand dan mee. Zonder die variabele is de datamap een gewone, beschrijfbare map (een alleen-lezen
+koppeling op de machine zelf vraagt root) en telt hij als ``niet_gekoppeld``. Lokaal achter de docker-lock.
 """
 
 from __future__ import annotations
@@ -15,6 +22,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +35,11 @@ from sqlalchemy import create_engine, text
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 E2E_DB = "hch_test_e2e"
 HERE = Path(__file__).resolve().parent
+API_DIR = HERE.parents[1] / "apps" / "api"
+#: variant "alleen-lezen" (zie boven): de image van deze app (``make image``); leeg = API en worker als gewone processen
+RO_IMAGE = os.environ.get("HCH_E2E_RO_IMAGE", "")
+CT_SRC, CT_ALEMBIC, CT_NODE_RED = "/hch/src", "/hch/alembic", "/node-red-data"
+DOCKER = "docker"
 
 
 def free_port() -> int:
@@ -47,6 +60,79 @@ def wait_http(url: str, timeout: float = 30) -> None:
             pass
         time.sleep(0.3)
     raise RuntimeError(f"{url} kwam niet op")
+
+
+def _docker_argv(name: str, env: dict[str, str], nr_data: Path) -> list[str]:
+    """``docker run`` voor de variant "alleen-lezen": de code en migraties uit de werkboom (niet die in de image), de
+    appdata op hetzelfde pad en de datamap van Node-RED **alleen-lezen** (``:ro``). Waarden van variabelen gaan via de
+    omgeving van ``docker`` mee (``-e NAAM``), niet op de opdrachtregel."""
+    data = env["HCH_DATA_DIR"]
+    argv = [
+        DOCKER,
+        "run",
+        "--rm",
+        "--init",
+        "--name",
+        name,
+        "--network",
+        "host",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "-v",
+        f"{API_DIR / 'src'}:{CT_SRC}:ro",
+        "-v",
+        f"{API_DIR / 'alembic'}:{CT_ALEMBIC}:ro",
+        "-v",
+        f"{data}:{data}",
+        "-v",
+        f"{nr_data}:{CT_NODE_RED}:ro",
+        "-e",
+        f"PYTHONPATH={CT_SRC}",
+        "-e",
+        f"HCH_ALEMBIC_DIR={CT_ALEMBIC}",
+        "-e",
+        f"HCH_NODE_RED_DATA_DIR={CT_NODE_RED}",
+    ]
+    for key in sorted(env):
+        passed = key.startswith(("HCH_", "HUB_")) or key.endswith("_PROXY")
+        if passed and key not in ("HCH_ALEMBIC_DIR", "HCH_NODE_RED_DATA_DIR"):
+            argv += ["-e", key]
+    return [*argv, "--entrypoint", "python", RO_IMAGE]
+
+
+def _dienst(
+    args: list[str], env: dict[str, str], log: Path, mode: str, nr_data: Path, containers: list[str]
+) -> subprocess.Popen[bytes]:
+    """Start ``integrations <args>``: als gewoon proces, of in de variant "alleen-lezen" in een eigen container."""
+    argv = [sys.executable, "-m", "integrations", *args]
+    if RO_IMAGE:
+        name = f"hch-e2e-ro-{args[0]}-{uuid.uuid4().hex[:12]}"
+        containers.append(name)
+        argv = [*_docker_argv(name, env, nr_data), "-m", "integrations", *args]
+    return subprocess.Popen(argv, env=env, stdout=open(log, mode), stderr=subprocess.STDOUT)
+
+
+def _check_ro_image(env: dict[str, str], nr_data: Path, containers: list[str]) -> None:
+    """De variant "alleen-lezen" moet de code uit de werkboom draaien (anders toetst een mutatie niets) en de datamap
+    echt alleen-lezen zien; anders hard falen, nooit stil overslaan."""
+    name = f"hch-e2e-ro-proef-{uuid.uuid4().hex[:12]}"
+    containers.append(name)
+    code = (
+        f"import os, integrations; fd = os.open({CT_NODE_RED!r}, os.O_RDONLY | os.O_DIRECTORY); "
+        "print(integrations.__file__, bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY))"
+    )
+    try:
+        out = subprocess.run(
+            [*_docker_argv(name, env, nr_data), "-c", code], env=env, capture_output=True, text=True, timeout=120
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.fail(f"variant alleen-lezen: docker niet bruikbaar ({type(exc).__name__})")
+    if out.stdout.split() != [f"{CT_SRC}/integrations/__init__.py", "True"]:
+        pytest.fail(f"variant alleen-lezen: onverwachte proef in {RO_IMAGE}: {out.stdout!r} {out.stderr[-500:]!r}")
 
 
 class TokenHeaders(dict[str, str]):
@@ -79,6 +165,10 @@ class Stack:
     env: dict[str, str] = field(default_factory=dict)
     enroll_tokens: list[str] = field(default_factory=list)
     node_red: str = ""  # nep-Node-RED (B11); pas in gebruik als een test de bron instelt
+    nr_data: Path | None = None  # datamap van de nep-Node-RED
+    #: variant "alleen-lezen": de dienst ziet de datamap via ``docker -v …:ro`` en neemt de credentials mee
+    credentials_ro: bool = False
+    containers: list[str] = field(default_factory=list)  # eigen containers (variant "alleen-lezen"), bij naam opgeruimd
 
     def mint(self, roles: tuple[str, ...]) -> dict[str, str]:
         r = httpx.post(f"{self.hub}/sim/token", json={"roles": list(roles)}, timeout=5)
@@ -106,17 +196,12 @@ class Stack:
 
     def restart_worker(self, **extra_env: str) -> None:
         """Herstart de worker met andere env (zoals de Hub via ``app.update`` een nieuw token meegeeft, §3.8)."""
-        assert self.logs is not None
+        assert self.logs is not None and self.nr_data is not None
         old = self.procs[1]
         old.terminate()
         old.wait(15)
         self.env.update(extra_env)
-        self.procs[1] = subprocess.Popen(
-            [sys.executable, "-m", "integrations", "worker"],
-            env=self.env,
-            stdout=open(self.logs / "worker.log", "ab"),
-            stderr=subprocess.STDOUT,
-        )
+        self.procs[1] = _dienst(["worker"], self.env, self.logs / "worker.log", "ab", self.nr_data, self.containers)
 
 
 @pytest.fixture(scope="module")
@@ -213,7 +298,8 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         "HCH_AUTHENTIK_SYNC_INTERVAL_S": "2",
         "HCH_NODE_RED_SYNC_INTERVAL_S": "2",
         # de datamap van Node-RED: hier een gewone, beschrijfbare map (een alleen-lezen-koppeling vraagt root); de dienst
-        # telt hem daarom als niet_gekoppeld (S-P2-320) en neemt het credentials-bestand niet mee
+        # telt hem daarom als niet_gekoppeld (S-P2-320) en neemt het credentials-bestand niet mee. In de variant
+        # "alleen-lezen" ziet de dienst dezelfde map via docker -v …:ro (_docker_argv) en neemt hij ze wel mee.
         "HCH_NODE_RED_DATA_DIR": str(nr_data),
         # proxy-omgevingsvariabelen worden genegeerd (§3.2/§5): een kapotte proxy mag het koppelen niet raken
         "HTTP_PROXY": "http://127.0.0.1:9",
@@ -222,27 +308,25 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
     }
     subprocess.run([sys.executable, "-m", "integrations", "init"], env=env, check=True, capture_output=True)
     subprocess.run([sys.executable, "-m", "integrations", "migrate"], env=env, check=True, capture_output=True)
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-m", "integrations", "api", "--host", "127.0.0.1", "--port", str(hch_port)],
-            env=env,
-            stdout=open(logs / "api.log", "wb"),
-            stderr=subprocess.STDOUT,
-        ),
-        subprocess.Popen(
-            [sys.executable, "-m", "integrations", "worker"],
-            env=env,
-            stdout=open(logs / "worker.log", "wb"),
-            stderr=subprocess.STDOUT,
-        ),
-    ]
-    wait_http(f"{hch_url}/healthz")
-    st = Stack(hch_url, hub_url, hub_proc, procs, ak_url, logs, data, env, [grant["secret"]], nr_url)
-    yield st
-    for p in [*st.procs, hub_proc, ak_proc, nr_proc]:
-        if p.poll() is None:
-            p.terminate()
-            try:
-                p.wait(10)
-            except subprocess.TimeoutExpired:
-                p.kill()
+    containers: list[str] = []
+    procs: list[subprocess.Popen[bytes]] = []  # restart_worker vervangt procs[1] in deze lijst
+    try:
+        if RO_IMAGE:
+            _check_ro_image(env, nr_data, containers)
+        api_args = ["api", "--host", "127.0.0.1", "--port", str(hch_port)]
+        procs.append(_dienst(api_args, env, logs / "api.log", "wb", nr_data, containers))
+        procs.append(_dienst(["worker"], env, logs / "worker.log", "wb", nr_data, containers))
+        wait_http(f"{hch_url}/healthz", timeout=60 if RO_IMAGE else 30)
+        st = Stack(hch_url, hub_url, hub_proc, procs, ak_url, logs, data, env, [grant["secret"]], nr_url)
+        st.nr_data, st.credentials_ro, st.containers = nr_data, bool(RO_IMAGE), containers
+        yield st
+    finally:
+        for p in [*procs, hub_proc, ak_proc, nr_proc]:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(10)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        for name in containers:  # alleen de eigen containers, bij naam (--rm ruimt ze normaal al op)
+            subprocess.run([DOCKER, "rm", "-f", name], capture_output=True, check=False)

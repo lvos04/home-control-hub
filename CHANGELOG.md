@@ -110,6 +110,7 @@ NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie
 - Een NUL-teken in de wachtwoordzin van de herstelkit (`POST …/sso/recovery/kit/export` en `…/kit/verify`) is `422 validation_error`; eerst opende `abc` ook een kit van `abc` + NUL (KLEIN-24).
 - Een onverwachte databasefout zet de DETAIL-regel van PostgreSQL (sleutelwaarde of hele rij) niet meer in de app-log: de algemene foutafhandeling van API en worker logt alleen soort, sqlstate, constraint en tabel, en een logfilter haalt DETAIL ook elders weg (KLEIN-32).
 - Geen deadlock meer tussen de worker en een claim op het moment dat een proefrun verloopt: `simulate.expire_runs` wacht niet op een vergrendelde aflevering, maar sluit zo'n run in de volgende ronde (SKIP LOCKED, KLEIN-47).
+- Nieuwe dienst-E2E-variant `make e2e-alleen-lezen` (eerst `make image`): API en worker in een container die de datamap van Node-RED via `docker -v …:ro` ziet; het herstel zet dan precies de credentials van de gekozen momentopname terug, nadat de huidige zijn vastgelegd (Sim-getest, KLEIN-71).
 
 **Bekende grenzen**
 - De Hub verwerkt `flow.action.requested` nog niet en kent `automation.flows.restore` nog niet in zijn policy: een
