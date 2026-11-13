@@ -9,11 +9,14 @@ proefrun meldt dat en start alleen na een uitdrukkelijke bevestiging. Echte Node
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from integrations.domains.automation import samples, simulate
 from integrations.timeutil import utcnow
@@ -696,3 +699,112 @@ def test_dry_run_start_is_audited(linked: Any, auth: Any, flow: Any) -> None:
     run = start(linked, auth, detail["id"], sample_ids=["energie-meting"]).json()
     rows = [a for a in b11.audit_rows(linked) if a["action"] == "automation.simulation.started"]
     assert len(rows) == 1 and rows[0]["details"] == {"run_id": run["id"], "voorbeelden": ["energie-meting"]}
+
+
+# ------------------------------------------------------- KLEIN-47: worker en claim tegelijk rond het verlopen van een proefrun
+def _lock_waits(linked: Any) -> int:
+    """Hoeveel databaseverbindingen van deze test nu op een slot wachten (pg_stat_activity; alleen lezen)."""
+    with linked.app.state.db.engine.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+        ).scalar_one()
+    return int(found)
+
+
+def _deadlocks(linked: Any, *workers: Worker) -> int:
+    """Het aantal deadlocks in deze database. Eerst gaan de verbindingen dicht, zodat hun tellingen bij de server
+    staan; een deadlock is ook zichtbaar als fout in een van de uitkomsten van de test zelf."""
+    for engine in (linked.app.state.db.engine, *(w.db.engine for w in workers)):
+        engine.dispose()
+    time.sleep(1.0)
+    with linked.app.state.db.engine.connect() as conn:
+        conn.execute(text("SELECT pg_stat_clear_snapshot()"))
+        found = conn.execute(
+            text("SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()")
+        ).scalar_one()
+    return int(found)
+
+
+def _in_thread(target: Any, out: dict[str, Any], name: str) -> threading.Thread:
+    def body() -> None:
+        try:
+            out[name] = target()
+        except Exception as exc:  # de test zelf beoordeelt de uitkomst
+            out[name] = exc
+
+    thread = threading.Thread(target=body, name=name)
+    thread.start()
+    return thread
+
+
+def test_the_worker_and_a_claim_at_the_moment_a_dry_run_expires_do_not_deadlock(
+    linked: Any, fake_hub: Any, auth: Any, flow: Any, make_settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KLEIN-47 (vervolgpunt van R-VEILIG-2 uit S-P2-300): de worker en een claim van de flow, tegelijk op het moment
+    dat de proefrun verloopt, met twee eigen databaseverbindingen.
+
+    De worker (één transactie) vergrendelt eerst een voorbeeld-aflevering waarvan de lease voorbij is
+    (``inbox.release_expired``, SKIP LOCKED) en daarna de verlopen proefrun (``simulate.expire_runs``). Daartussen komt
+    de claim: hij ziet de proefrun nog als lopend (zijn ``now`` ligt net vóór ``expires_at``), vergrendelt de open
+    aflevering met het laagste volgnummer en wacht dan op de aflevering die de worker al heeft. De worker wil daarna de
+    open aflevering van de verlopen run bijwerken die de claim heeft. Vóór KLEIN-47 was dat een deadlock (PostgreSQL
+    breekt een van beide af). Nu slaat de worker een run over waarvan een open aflevering door een ander vergrendeld
+    is, net als een vergrendelde run (SKIP LOCKED), en sluit hem in de volgende ronde. Uitkomst: geen fout, geen
+    deadlock, de claim geeft niets dubbel uit en de run eindigt als ``verlopen``."""
+    detail, token = flow
+    run = start(
+        linked, auth, detail["id"], sample_ids=["energie-meting", "netwerk-nieuw-apparaat", "backup-mislukt"]
+    ).json()
+    expires = datetime.fromisoformat(run["expires_at"])
+
+    def claim_at(moment: datetime) -> Any:
+        monkeypatch.setattr("integrations.domains.automation.flowapi.utcnow", lambda: moment)
+        return linked.post(f"{FLOW_API}/deliveries/claim", json={"limit": 5}, headers=idem(b11.bearer(token)))
+
+    # vlak voor het einde van de run: per bron het oudste voorbeeld (energie-meting en backup-mislukt)
+    first = claim_at(expires - timedelta(seconds=150)).json()["items"]
+    assert [i["event"]["source_app"] for i in first] == ["home-control-hub", "ai-server-manager"], first
+    assert b11.ack(linked, token, first[0]["id"]).status_code == 200
+    # daarna het volgende voorbeeld van dezelfde bron; backup-mislukt wordt nooit bevestigd (lease tot expires - 30 s)
+    second = claim_at(expires - timedelta(seconds=60)).json()["items"]
+    assert [i["event"]["source_app"] for i in second] == ["home-control-hub"], second
+
+    worker = Worker(make_settings(), transport=fake_hub.transport)
+    before = _deadlocks(linked, worker)
+    monkeypatch.setattr("integrations.worker.utcnow", lambda: expires + timedelta(seconds=1))
+    holding, go = threading.Event(), threading.Event()
+    expire_runs = simulate.expire_runs
+
+    def hold_then_expire(*args: Any, **kwargs: Any) -> Any:
+        # hier heeft de worker de verlopen claim van backup-mislukt al vergrendeld (release_expired, vlak hiervoor)
+        holding.set()
+        go.wait(30)
+        return expire_runs(*args, **kwargs)
+
+    monkeypatch.setattr(simulate, "expire_runs", hold_then_expire)
+    out: dict[str, Any] = {}
+    working = _in_thread(lambda: worker.automation_step(0.0), out, "worker")
+    assert holding.wait(20), "de worker kwam niet bij expire_runs"
+    claiming = _in_thread(lambda: claim_at(expires - timedelta(seconds=1)), out, "claim")
+    deadline = time.monotonic() + 15
+    while _lock_waits(linked) < 1 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    claim_waited = _lock_waits(linked) >= 1
+    go.set()
+    for thread in (working, claiming):
+        thread.join(40)
+    monkeypatch.setattr(simulate, "expire_runs", expire_runs)
+
+    assert claim_waited, "de claim wachtte niet op de aflevering die de worker vasthield"
+    assert not working.is_alive() and not claiming.is_alive()
+    assert out["worker"] is None, out["worker"]
+    assert not isinstance(out["claim"], Exception), out["claim"]
+    assert out["claim"].status_code == 200, out["claim"].text
+    assert out["claim"].json()["items"] == [], "niets dubbel uitgegeven"
+    worker.automation_step(0.0)  # de volgende ronde sluit de verlopen run (als hij nog liep)
+    done = run_of(linked, auth, run["id"])
+    assert (done["status"], done["error_code"]) == ("mislukt", "verlopen"), done
+    assert done["result"]["afleveringen"] == {"verwerkt": 1, "mislukt": 2}, done["result"]
+    assert _deadlocks(linked, worker) == before

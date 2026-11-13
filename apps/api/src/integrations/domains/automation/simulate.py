@@ -28,7 +28,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...errors import ApiError
@@ -338,7 +338,13 @@ def settle(session: Session, delivery: AutomationDelivery, *, now: datetime) -> 
 
 
 def expire_runs(session: Session, now: datetime) -> int:
-    """Een proefrun die niet binnen een kwartier is afgerond wordt gesloten; de flow krijgt weer echte events."""
+    """Een proefrun die niet binnen een kwartier is afgerond wordt gesloten; de flow krijgt weer echte events.
+
+    De worker wacht hier nooit op een slot (KLEIN-47): een run die een ander vasthoudt, of waarvan een open aflevering
+    door een ander vergrendeld is (een claim, ack of nack die nog loopt), slaat hij over (SKIP LOCKED) en sluit hij in
+    de volgende ronde. Anders kon een claim op het verloopmoment een deadlock geven: de worker houdt dan al een
+    aflevering met een verlopen lease vast (``inbox.release_expired``) en wacht op een aflevering die de claim heeft,
+    terwijl de claim (afleveringen op volgnummer) op die eerste wacht. Geeft het aantal gesloten runs terug."""
     runs = session.scalars(
         select(AutomationFlowRun)
         .where(
@@ -348,12 +354,15 @@ def expire_runs(session: Session, now: datetime) -> int:
         )
         .with_for_update(skip_locked=True)
     ).all()
+    closed = 0
     for run in runs:
-        rows = session.scalars(
-            select(AutomationDelivery).where(
-                AutomationDelivery.run_id == run.id, AutomationDelivery.status.in_(("wachtend", "geclaimd"))
-            )
-        ).all()
+        still_open = select(AutomationDelivery).where(
+            AutomationDelivery.run_id == run.id, AutomationDelivery.status.in_(("wachtend", "geclaimd"))
+        )
+        rows = session.scalars(still_open.with_for_update(skip_locked=True)).all()
+        if len(rows) != session.scalar(select(func.count()).select_from(still_open.subquery())):
+            continue  # een open aflevering is door een ander vergrendeld: volgende ronde
+        closed += 1
         for d in rows:
             d.status = "dead_letter"
             d.lease_until = None
@@ -364,4 +373,4 @@ def expire_runs(session: Session, now: datetime) -> int:
         run.status = "mislukt"
         run.error_code = "verlopen"
         _log(run, {"t": iso(now), "soort": "verlopen", "niet_verwerkt": len(rows)})
-    return len(runs)
+    return closed
