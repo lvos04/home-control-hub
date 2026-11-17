@@ -41,7 +41,7 @@ jobs:
           python -m pip install --disable-pip-version-check -e 'apps/api[dev]'
       - name: Manifestvalidator van appstore-en-fork op een vaste commit (contract 1.3 §9, C1.3-HCH-13; alleen lezen)
         env:
-          VALIDATOR_COMMIT: 77ea6296011aae7fcbe7c6a757b404ff762aebb2
+          VALIDATOR_COMMIT: a994c2a51f45b81b2c48c6533b0ccf51ba857f5a
         run: |
           dir="$RUNNER_TEMP/appstore"
           git init -q "$dir"

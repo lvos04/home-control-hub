@@ -1,5 +1,15 @@
 # Wijzigingen
 
+## Onderhoud — manifestvalidator (2026-11-17, KLEIN-103)
+
+- CI gebruikt nu `appstore-en-fork@a994c2a51f45b81b2c48c6533b0ccf51ba857f5a` in plaats van
+  `77ea6296011aae7fcbe7c6a757b404ff762aebb2`, volgens ADR-0015. Hiermee volgen de manifestcontroles ook het veld
+  `accounts`, de uitgebreidere accountnamen, variant B voor geheimnamen, `vault_ref_not_allowed` in `validate`
+  en de extra checklistwaarde van ADR-0023 in de bron.
+- Het eigen manifest geeft vóór en na in `validate --strict` exitcode 0, geen fouten en dezelfde geaccepteerde
+  waarschuwing `digest_pending_release`. Het manifest en de bewijsstatussen zijn ongewijzigd. Het
+  Node-RED-beveiligingsprofiel blijft werk voor S-P3-360.
+
 ## 0.1.0 — B11 Node-RED-automatisering (fase P2, ADR-0016, nog niet uitgebracht)
 
 Alles hieronder is met een Node-RED-simulator en een Hub-simulator getest. De aannames over Node-RED zelf zijn

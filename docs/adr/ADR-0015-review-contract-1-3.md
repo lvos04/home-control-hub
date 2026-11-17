@@ -117,3 +117,22 @@ Authentik of met echte accounts gevalideerd.
   resultaat wordt dus nooit stil als geslaagd geteld.
 - Een nieuwe Peil-kopie (`tools/peil_kopie.py bijwerken`) neemt in CI automatisch de referentie van de nieuwe commit
   mee. Een nieuwe validatorversie vraagt een bewuste wijziging van `VALIDATOR_COMMIT`.
+
+## Overname validator op 2026-11-17 (KLEIN-103)
+
+`VALIDATOR_COMMIT` in `.github/workflows/ci.yml` gaat van `77ea6296011aae7fcbe7c6a757b404ff762aebb2` naar
+`a994c2a51f45b81b2c48c6533b0ccf51ba857f5a` van `appstore-en-fork`. De bestaande installatieweg blijft gelden:
+een afzonderlijke venv, afhankelijkheden met `--require-hashes` en het pakket met `--no-deps` uit de vaste commit.
+Deze repo heeft geen kopie van de validator of van de manifest- en checklist-schema's; de contractkopieën zijn
+afzonderlijk gepind en wijzigen bij deze overname niet.
+
+De nieuwe pin neemt ADR-0023 van de bron mee: `accounts`, de uitgebreidere woordenlijst voor accountnamen,
+variant B (een geheim van de Hub in een Custom App-env alleen onder een geheimnaam zonder accountnaam),
+`vault_ref_not_allowed` ook in `validate` en `NIET GEVALIDEERD (echte Hub)` in het checklist-schema.
+
+Vóór de eerste repowijziging is `deploy/manifest/home-control-hub.manifest.yaml` met de oude pin gemeten en daarna
+met de nieuwe pin, beide met dezelfde CI-opdracht `jl-manifest validate --strict`. Beide geven exitcode 0,
+0 fouten en dezelfde geaccepteerde waarschuwing `digest_pending_release` op `image.digest`:
+"Eigen image zonder digest: de release-CI vult die in; installeren vereist de digest." Er zijn geen
+controlelijsten in deze repo. Het manifest is byte-ongewijzigd; geen bewijsstatus verhoogd. Het
+Node-RED-beveiligingsprofiel hoort bij S-P3-360 en is bij deze overname niet aangepast.
