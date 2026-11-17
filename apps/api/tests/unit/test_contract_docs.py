@@ -19,12 +19,12 @@ from tests.conftest import REPO_ROOT
 
 PV2 = REPO_ROOT / "docs" / "platform-v2"
 #: vaste bron-commit van ai-server-manager (branch ccr-c133d7a0-kuz1cv) waarop de kopieën zijn gemaakt
-BRON_COMMIT = "0a7143bc0a94ed5317a9655fa785e73a1fb07ba1"
+BRON_COMMIT = "e88a290c9ad5fef4acf498d05ad3414395a4fcb5"
 #: sha256 van de bronbestanden op die commit; een nieuwe kopie overnemen is een stap van de orkestratie (nooit lokaal
 #: aanpassen, ook niet om een link te repareren). Dezelfde pins staan in CONTRACT_HERKOMST.json (tools/contract_kopie.py)
 KOPIEEN = {
-    "PLATFORM_CONTRACTEN.md": "15b30cf17f91b606451ef9c41f02327076ef76ce655ee94e40e3538106962310",
-    "CONTRACT_1.3_CONFORMITEIT.md": "f0a2352ddb27088ae668013501c62a1eaaf879efe742a2d4422ffe8d33b43466",
+    "PLATFORM_CONTRACTEN.md": "4712dd62c837c2f2594fa4152a925464f6f7481e898473660f09607cc113c511",
+    "CONTRACT_1.3_CONFORMITEIT.md": "b5ebba073a8fe8beb715d58e6760feae38e33ad445956d107e64840133dd7924",
     # historie (contract 1.3 C1.3-ALG-01: "mag als historie blijven staan"), zelfde bron-commit
     "CONTRACT_1.2_CONFORMITEIT.md": "634941340afd2d9a55846076ab468ea4aacddb32dd8be6a7b92dd113661d39a4",
 }
@@ -79,6 +79,7 @@ NIET_GEVALIDEERD_WAARDEN = {
     "NIET GEVALIDEERD (hardware)",
     "NIET GEVALIDEERD (account)",
     "NIET GEVALIDEERD (Mac/Xcode)",
+    "NIET GEVALIDEERD (echte Hub)",  # aanvulling C-12 (C12-6)
 }
 VALIDATION = {
     "Sim-getest",
@@ -157,6 +158,21 @@ def test_evidence_follows_section_11() -> None:
         if "Niet getest" in parts:
             assert item["status"] == "Niet gestart", f"{ident}: 'Niet getest' alleen bij 'Niet gestart'"
             assert parts == ["Niet getest"] or set(parts) - {"Niet getest"} <= NIET_GEVALIDEERD_WAARDEN, ident
+
+
+def test_vaste_lijst_is_de_tabel_van_paragraaf_11() -> None:
+    """De vaste lijst volgt het contract: een waarde erbij of eraf zonder contracttekst is rood (C12-6: echte Hub)."""
+    tekst = (PV2 / "PLATFORM_CONTRACTEN.md").read_text(encoding="utf-8")
+    begin = tekst.index("## 11. Bewijs en Excel")
+    p11 = tekst[begin : tekst.index("## 12.", begin)]
+    in_tabel: set[str] = set()
+    for ruw in p11.splitlines():
+        regel = ruw.strip()
+        if regel.startswith("| `"):
+            in_tabel.update(re.findall(r"`([^`]+)`", regel.split(" | ")[0]))
+    vast = VALIDATION | VALIDATION_TEST
+    assert in_tabel == vast, f"verschil met contract §11: {sorted(in_tabel ^ vast)}"
+    assert "NIET GEVALIDEERD (echte Hub)" in NIET_GEVALIDEERD_WAARDEN
 
 
 def test_niet_gevalideerd_in_blokkade_staat_ook_in_validatie() -> None:

@@ -12,7 +12,10 @@ Versie: `contracts 1.3` · Peildatum 2026-11-10 · Eigenaar: `lvos04/ai-server-m
   `CONTRACT_1.3_CONFORMITEIT.md`. Keuzes en motivering: `ai-server-manager:docs/adr/ADR-0027-contract-1-3.md` (1.3),
   `ai-server-manager:docs/adr/ADR-0028-review-contract-1-3.md` (correcties uit de review van 1.3),
   `ai-server-manager:docs/adr/ADR-0011-contract-1-2.md` en `ai-server-manager:docs/adr/ADR-0012-review-contract-1-2.md`
-  (1.2). Invoer van 1.3: `ai-server-manager:docs/platform-v2/CONTRACT_1.3_KANDIDATEN.md` (groepen A01–A36).
+  (1.2). Aanvulling C-12 (manifeststandaard, blijft 1.3):
+  `ai-server-manager:docs/adr/ADR-0031-contract-1-3-aanvulling-c12.md`, uitgewerkt in
+  `appstore-en-fork:docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md`.
+  Invoer van 1.3: `ai-server-manager:docs/platform-v2/CONTRACT_1.3_KANDIDATEN.md` (groepen A01–A36).
 - Dit document maakt de pakketvoorstellen (`01_ARCHITECTUUR/02`, `03`, `07`, `08`) concreet zodat alle repos samenwerken.
   Het zegt **niets** over de echte NAS: alle NAS-gegevens (D01–D18) zijn onbekend tot de gebruiker ze in de
   onboarding-wizard invult of de wizard ze via de TrueNAS-API meet. Voorbeeldwaarden (IP-adressen, poolnamen zoals in
@@ -151,6 +154,39 @@ tegenstrijdigheden met bestaande code, het B03-plan en het contract zelf op en k
 - RV13. Besluit 3 (§1.1): de overstap van MediaGuard naar de nieuwe publieke repo is gemeten uitgevoerd (repo publiek,
   archief privé). Of het GHCR-pakket `mediaguard-core` aan de nieuwe repo gekoppeld en publiek is, kon de review niet
   lezen (geen leesrecht op pakketten): dat blijft open (§1.2), en tot dan geen nieuwe MediaGuard-release.
+
+### Aanvulling C-12 (2026-11-17, blijft `contracts 1.3`; ADR-0031)
+
+Besluit C-12 van de gebruiker (2026-11-11, optie 1: een voorziening zonder geheim in het formulier) en
+`appstore-en-fork:docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md` besluit 9, met in
+dezelfde ronde vier open contractmeldingen (C12-3 tot en met C12-6) en de statusregel van §11 (C12-7). De versie blijft
+`contracts 1.3` en de versieregel blijft letterlijk gelijk (reden: ADR-0031); de kopieën worden opnieuw overgenomen
+(nieuwe bron-commit). De regels W2 en W3 van ADR-0016 zijn al gebouwd (S-P2-520); bestaande manifesten valideren daarmee
+gelijk (gemeten in appstore-en-fork, S-P2-520). Het veld `accounts` (W1) volgt in S-P3-490. Na de review van de bron
+(R-MANIFEST, R-VEILIG, R-TECH) zijn C12-2 en C12-3 vóór de kopieën aangescherpt en is C12-7 erbij gekomen.
+- C12-1. §9: optioneel veld `accounts` voor een beheerder of dienstaccount, met twee aanmaakwijzen (`eerste_gebruik`
+  voor de beheerder, `door_beheerder` voor een dienstaccount); het manifest bevat nooit een waarde.
+- C12-2. §9: wachtwoord, wachtwoordhash, geheime sleutel of gebruikerslijst in manifest of omgevingswaarde wordt
+  geweigerd (`account_gegevens_verboden`); een geheim dat de Hub maakt is nooit de aanmelding van een beheerder of
+  dienstaccount (niet te accepteren); het wachtwoord of token van een dienstaccount is minstens 32 willekeurige tekens,
+  ook in de vorm `gebruiker:wachtwoord` (ADR-0016 besluit 3); EX47 noemt de accountgegevens. Een kluisverwijzing of
+  geheim van de Hub onder een accountnaam is een fout, nooit een waarschuwing; de woordenlijst van de standaard krijgt
+  `INIT`, `LOGIN`, `BASIC_AUTH` en de aanmeldnamen van een app erbij (bouw: appstore-en-fork, C1.3-ASF-15).
+- C12-3. §3.1 (met §3.2 en §8): een tweede uitzondering op "geen geheimen in het formulier": een geheim dat de Hub
+  maakt, als vault-verwijzing in een omgevingsvariabele van een Custom App (besluit van de gebruiker 2026-11-11 bij
+  S-P2-500; `appstore-en-fork:docs/adr/ADR-0015-vault-verwijzing-geheimen-in-de-vertaling.md`). Nooit voor een beheerder
+  of dienstaccount. C-12 zelf verandert §3.1 niet; deze uitzondering komt uit S-P2-500 en gaat mee in dezelfde ronde.
+  Een manifest bevat nooit een kluisverwijzing; alleen de Hub en, bij het uitvoeren, de executor vullen haar in, alleen
+  voor de `app_id` van het doel van de actie en nooit onder een accountnaam (C1.3-ASM-24).
+- C12-4. §8: wat de preview van een gebonden diff minimaal toont: elk gezet veld, door de maskeerregel van
+  `ai-server-manager:docs/adr/ADR-0030-policy-engine-approvals-executor.md` besluit 32; `command` en `entrypoint` bij
+  een installatie `501` tot er een installatiescherm is (melding R-VEILIG bij S-P2-040).
+- C12-5. §9: een controlelijst (`kind: checklist`) staat nooit naast een installeerbaar manifest van hetzelfde
+  I-document: één weg per document (melding bij S-P3-400; zo dwingt jelly-leon-platform het al af).
+- C12-6. §11: nieuwe validatiewaarde `NIET GEVALIDEERD (echte Hub)` (melding uit jelly-leon bij S-G1-17).
+- C12-7. §11: de statusregel volgt het besluit van de gebruiker van 2026-11-11: rest alleen de test op de echte NAS,
+  hardware of een echt account, dan blijft het `Bezig` met `alleen NAS-test nodig` en `NIET GEVALIDEERD (…)`;
+  `Geblokkeerd` alleen als het werk zonder NAS, hardware of account niet verder kan worden gebouwd.
 
 ## Eerdere wijzigingen
 
@@ -537,6 +573,20 @@ Regels:
   de logs).
 - Uitzondering op "geen geheimen in het formulier": het **eenmalige enrollment-token** (`HUB_ENROLLMENT_TOKEN`) mag als
   omgevingsvariabele in de Custom App staan; het vervalt na 60 min of na eerste gebruik en is daarna waardeloos.
+- Tweede uitzondering (aanvulling C-12; besluit van de gebruiker 2026-11-11, S-P2-500;
+  `appstore-en-fork:docs/adr/ADR-0015-vault-verwijzing-geheimen-in-de-vertaling.md`): een geheim dat de Hub maakt
+  (`source: generated` + `secret: true`, punt (a) hieronder) mag via `custom_app.env[].value_from` als
+  omgevingsvariabele in het formulier van een Custom App komen. Een manifest bevat nooit een kluisverwijzing: het noemt
+  alleen de parameter; een kluisverwijzing in een manifest wordt geweigerd (`vault_ref_not_allowed`; de verwijzing zet
+  alleen de vertaling, ADR-0015 besluit 5). Alleen de Hub en, bij het uitvoeren, de executor vullen een kluisverwijzing
+  `vault://app/<app_id>/<parameter>` in, alleen voor de `app_id` van het doel van de ondertekende actie: nooit voor een
+  andere app en nooit onder een accountnaam (§9); anders weigeren ze de actie. Vertaling, preview, goedkeuring,
+  verzoekhash, idempotentie-opslag, audit, log en evidence bevatten nooit de waarde, hooguit de verwijzing; de waarde
+  gaat alleen mee bij `app.create`/`app.update` (onderdeel van de R2-actie; plekken en grenzen: ADR-0015 besluit 1 tot
+  en met 5). Dit geldt alleen voor zo'n geheim van de Hub: nooit voor een geheim van de gebruiker, nooit als letterlijke
+  waarde of via een gewone parameter, en nooit voor de aanmelding van een beheerder of dienstaccount
+  (`account_gegevens_verboden`, §9). Hoe TrueNAS zo'n ingevulde waarde in het formulier toont of bewaart, is NIET
+  GEVALIDEERD (echte NAS).
 - De Hub bewaart van de tokens en codes die hij **zelf uitgeeft** **alleen hashes** (SHA-256); een geheim wordt precies
   één keer getoond/teruggegeven (`Cache-Control: no-store`). Credentials van andere apps die de Hub zelf gebruikt,
   staan versleuteld in zijn vault (§3.10).
@@ -547,7 +597,8 @@ Regels:
     (onderdeel van de R2-actie). Ze staan nooit in een manifest, preview-diff, auditdetail, log of evidence (alleen
     "gegenereerd" met datum). Het manifest markeert zo'n parameter met `source: generated` en `secret: true` (§9). Bij een
     handmatige installatie vult de gebruiker ze zelf in TrueNAS in (een geheim van de gebruiker, zoals het registry-token
-    van §2.1). De Hub leest de app-configuratie nooit terug (de configuratie kan geheimen bevatten).
+    van §2.1). De Hub leest de app-configuratie nooit terug (de configuratie kan geheimen bevatten). Een Custom App
+    krijgt zo'n geheim van de Hub alleen volgens de tweede uitzondering hierboven (aanvulling C-12).
   - (b) **Geheimen die een dienst voor de Hub aanmaakt** (OIDC-`client_secret` van de Hub-client, B13-002): §4.4 blijft
     gelden — geen geheimen via Hub-connector, items of events. Tot een eigen ADR in P2 een eenmalige, versleutelde
     overdracht vastlegt, kopieert de beheerder het geheim zelf uit Authentik naar de Hub-UI (vault; alleen de laatste
@@ -557,7 +608,7 @@ Regels:
 
 1. **Via de API geïnstalleerd** (normaal vanaf P2): de Hub maakt een enrollment-token voor `app_id` en geeft bij
    `app.create`/`app.update` alleen deze env mee: `HUB_URL`, `HUB_KEY_FINGERPRINT` (niet geheim) en
-   `HUB_ENROLLMENT_TOKEN` (de enige, kortlevende uitzondering op "geen geheimen in het formulier", §3.1).
+   `HUB_ENROLLMENT_TOKEN` (de kortlevende uitzondering op "geen geheimen in het formulier", §3.1).
 2. **Handmatig geïnstalleerd**: de beheerder maakt in de Hub-UI óf een enrollment-token en vult `HUB_URL` +
    `HUB_ENROLLMENT_TOKEN` (+ `HUB_KEY_FINGERPRINT`) in het formulier van de Custom App in (**aanbevolen**: geen
    wedloop), óf een **koppelcode** die hij op de statuspagina van de dienst invoert (§3.7).
@@ -1250,8 +1301,8 @@ aanroepen zonder D09.
   het beheer van het noodaccount (incl. `100.64.0.0/10` toestaan) zijn **geen** `action_id`'s: ze lopen alleen via
   beheerdersroutes van de Hub (admin + audit) en de AI kan ze niet voorstellen of uitvoeren (03_RISICO_AUTONOMIE: geen
   wijzigingen in beveiligingsbeleid of privileges door de AI; geheimen roteren is R2). Alleen het meegeven van
-  `HUB_*`-env en van door de Hub gegenereerde catalogusgeheimen (§3.1) bij `app.install`/`app.update` loopt mee in die
-  (R2-)actie.
+  `HUB_*`-env en van door de Hub gegenereerde geheimen (§3.1: in de `values` van een catalogusapp, of volgens de tweede
+  uitzondering als omgevingsvariabele van een Custom App) bij `app.install`/`app.update` loopt mee in die (R2-)actie.
 - Blokkades (altijd, ook met goedkeuring): pool `DEGRADED`/onbekend of backup-gate rood → geen opslag-/massamedia-mutaties
   (EX11/EX12); boiler-schakelen (elke route; EX27); auto-delete van torrents/downloads/media/foto's/datasets; wijzigen van
   policy/rollen/privileges door AI; betaalde acties; elke rechtstreekse schrijfactie in de database van Emby, Jelly Leon
@@ -1260,6 +1311,13 @@ aanroepen zonder D09.
 `Approval` (gebonden): `approval_id, request_id, preview_hash, resource_etag, policy_hash, risk_class, approved_by,
 approved_at, expires_at (≤ 15 min), one_time_nonce, backup_checkpoint_id, action_scope`. Wijzigt één gebonden veld
 (bv. app-digest na preview, EX19) → goedkeuring vervalt, nieuwe diff nodig. Nonce eenmalig → replay geweigerd (EX20).
+
+**Preview (gebonden diff; aanvulling C-12):** de preview die een mens goedkeurt, toont minimaal elk gezet veld van de
+voorgestelde wijziging (bij `app.install`/`app.update` elk gezet veld van de waarden, ook de eigen waarden van een
+catalogusapp), elk door dezelfde maskeerregel: een geheim staat er als `***` en van een omgevingsvariabele staat alleen
+de naam erin. De hele wijziging gaat door die regel; een gezet veld weglaten mag niet. Een installatie met `command` of
+`entrypoint` in de waarden weigert de Hub met `501 capability_unavailable` tot er een installatiescherm is dat ze veilig
+toont. De precieze regel staat in `ai-server-manager:docs/adr/ADR-0030-policy-engine-approvals-executor.md` besluit 32.
 
 **Back-upbevestiging:** `requires_backup: true` (uit `propose` of uit de tabel hieronder) ⇒ de Hub bindt in de
 `Approval` een `backup_checkpoint_id` van een B12-back-up van die app met status `geverifieerd`, niet ouder dan het RPO
@@ -1351,13 +1409,13 @@ Wijzigingen in 1.3 (validator en schema: appstore-en-fork):
   restrisico "zonder no-new-privileges kan een setuid-programma binnen de container root worden" (in
   `privilege_reason`).
 - **Gereserveerde namen:** een parameter- of `custom_app.env`-naam die met `HUB_` begint → fout `reserved_env` (§3.2).
-- **Geheime parameters die de Hub maakt** (§3.1 a): `source: generated` + `secret: true`; dan geen `secret_in_form`-fout,
-  en de waarde staat nooit in het manifest.
+- **Geheime parameters die de Hub maakt** (§3.1 a en de tweede uitzondering van §3.1): `source: generated` +
+  `secret: true`; dan geen `secret_in_form`-fout, en de waarde staat nooit in het manifest.
 - **`accepted_findings: [{code, reden_nl}]`** — alleen voor waarschuwingen uit een vaste lijst:
-  `backup_db_export_none`, `secret_in_form` (alleen bij een parameter met `source: generated` en `secret: true`) en
-  `digest_pending_release` (alleen vóór de eerste release van een eigen image). `--strict` faalt op elke andere
-  waarschuwing én op een geaccepteerde code die niet (meer) optreedt. Fouten zijn nooit te accepteren. Een losse
-  uitzonderingenlijst buiten het manifest vervalt.
+  `backup_db_export_none`, `secret_in_form` (alleen bij een parameter met `source: generated` en `secret: true`, nooit
+  onder een accountnaam) en `digest_pending_release` (alleen vóór de eerste release van een eigen image). `--strict`
+  faalt op elke andere waarschuwing én op een geaccepteerde code die niet (meer) optreedt. Fouten zijn nooit te
+  accepteren. Een losse uitzonderingenlijst buiten het manifest vervalt.
 - **`backup.db_export: stopped_snapshot`** (app stoppen + ZFS-snapshot van de dataset) voor apps zonder exportfunctie
   (bv. SQLite zonder export); de stilstand telt mee in `rto`.
 - **Documentsoort `kind: checklist`** (`install.method: none`) voor I-documenten zonder installatie (bv. I01, I02), met
@@ -1381,9 +1439,33 @@ Wijzigingen in 1.3 (validator en schema: appstore-en-fork):
   catalogusappnaam of de exacte image-repository, nooit op de appnaam; altijd een voorstel dat een beheerder bevestigt.
   Emby (§2.3) is zo'n item met `owner.soort: derde`.
 
+Aanvulling C-12 (blijft 1.3; validator en schema: appstore-en-fork, ADR-0016):
+- **`accounts: [{id, rol: beheerder|dienst, aanmaak: eerste_gebruik|door_beheerder, afnemer, rechten, controle,
+  beschrijving_nl}]`** (optioneel) voor een beheerder of dienstaccount van een app: het manifest verklaart alleen wat er
+  moet bestaan, nooit een waarde. De beheerder zet zijn account in de app (eerste-gebruik-venster, met een
+  `post_install_checks`-controle); een dienstaccount maakt hij daarna in de app met precies `rechten` en voert hij één
+  keer in bij `afnemer` (versleuteld, §3.10). Een wachtwoord, wachtwoordhash, geheime sleutel of gebruikerslijst in het
+  manifest of in een omgevingswaarde wordt geweigerd (`account_gegevens_verboden`). Een waarde onder een naam die een
+  geheim noemt, komt nooit letterlijk, via een gewone parameter of als naam/waarde-paar in het manifest of het
+  formulier (`secret_literal_forbidden`, `secret_in_form`). Een geheim dat de Hub maakt (`source: generated` +
+  `secret: true`) is nooit de aanmelding van een beheerder of dienstaccount (`account_gegevens_verboden`; niet te
+  accepteren). Het wachtwoord of token van een dienstaccount is minstens 32 willekeurige tekens uit een generator; de
+  afnemer weigert korter. Ook in de vorm `gebruiker:wachtwoord` telt dat voor het wachtwoord. Een kluisverwijzing of een
+  geheim van de Hub onder een accountnaam is een fout (`account_gegevens_verboden`, een weigering), nooit een
+  waarschuwing. Een accountnaam is een geheimnaam met een woord uit de vaste woordenlijst van de standaard (ADR-0016
+  W2), aangevuld met `INIT`, `LOGIN` en `BASIC_AUTH`, en met namen die de aanmelding bij de app zelf zijn, zoals
+  `*_INIT_PASSWORD`, `*_BASIC_AUTH_PASSWORD`, `JUPYTER_TOKEN` en de kale naam `PASSWORD`. De woordenlijst en de
+  validator bouwt `appstore-en-fork` (vervolg op ADR-0016 W2); de Hub en de executor toetsen dezelfde lijst opnieuw
+  vóór het invullen (`ai-server-manager`, S-P2-050).
+- **Eén weg per document.** Een controlelijst (`kind: checklist`) staat nooit naast een installeerbaar manifest
+  (`install.method` `custom_app` of `catalog_app`) van hetzelfde I-document: een I-document is óf een installatie met
+  een manifest, óf een controlelijst. Het eigen manifest van een dienst (`deploy/manifest/`), dat een I-document alleen
+  als verwijzing in `docs` noemt, maakt dat document geen installatie. Zo dwingt
+  `jelly-leon-platform:docs/adr/ADR-0027-controlelijsten-bestaande-apps.md` besluit 5 het al af.
+
 Weigeren vóór uitvoering (EX47): compose/YAML-installatie, `privileged`, Docker-socket, hostpad `/`, `/mnt` zonder
 dataset, `/etc`, `/var/run`, `/root`, host network zonder reden, `latest`, ontbrekende digest, GPU zonder D08-meting,
-`HUB_*` als parameter of env, een geheime waarde in een manifest.
+`HUB_*` als parameter of env, een geheime waarde of accountgegevens (`account_gegevens_verboden`) in een manifest.
 
 ## 10. Repo-indeling nieuwe Python-diensten
 
@@ -1434,9 +1516,12 @@ Elke repo houdt `docs/platform-v2/EVIDENCE.json` bij — een lijst met objecten:
   overzicht (nooit stil weglaten).
 - `status` ∈ Excel-lijst: Werkpakketten/Fasen `Niet gestart|Bezig|Gereed|Geblokkeerd|N.v.t.`; Testmatrix
   `Niet gestart|Bezig|Geslaagd|Mislukt|Geblokkeerd|N.v.t.`; Besluiten `Open|Ingevuld|Getest|Geblokkeerd|N.v.t.`.
-- **Regel (gekozen door gebruiker):** code + CI + simulator-E2E geslaagd ⇒ `status: Bezig` (of `Geblokkeerd` als echte
-  NAS/hardware/account nodig is). `Gereed`/`Geslaagd` alleen na echte acceptatie op de NAS — dat kan in deze
-  bouwomgeving niet en wordt dus **nooit** gezet.
+- **Regel (gekozen door gebruiker):** code + CI + simulator-E2E geslaagd ⇒ `status: Bezig`. Rest alleen nog de test op
+  de echte NAS, op echte hardware of met een echt account, dan blijft het `Bezig`, met in `opmerking` de aantekening
+  `alleen NAS-test nodig` en in `validatie` de passende `NIET GEVALIDEERD (…)` (besluit van de gebruiker 2026-11-11).
+  `Geblokkeerd` (met `NIET GEVALIDEERD (…)`) alleen voor werk dat zonder de echte NAS, hardware of het account niet
+  verder kan worden gebouwd. In beide gevallen staat in `blokkade` wat er nog nodig is. `Gereed`/`Geslaagd` alleen na
+  echte acceptatie op de NAS — dat kan in deze bouwomgeving niet en wordt dus **nooit** gezet.
 - **`validatie`** = één of meer waarden uit deze vaste lijst, gescheiden door `"; "` (bv.
   `Sim-getest; NIET GEVALIDEERD (echte NAS)`); toelichting hoort in `opmerking`. **Een lege `validatie` is nooit
   toegestaan.**
@@ -1447,6 +1532,7 @@ Elke repo houdt `docs/platform-v2/EVIDENCE.json` bij — een lijst met objecten:
   | `Sim-getest` / `Unit-getest` | werkpakketten, installatiestappen, contractpunten en reviews |
   | `Intel-iGPU-getest (ontwikkelmachine)` | **nieuw in 1.3:** functioneel bewijs en bovengrens op de iGPU van de ontwikkelmachine; zegt niets over de GPU's van de NAS, die blijven `NIET GEVALIDEERD (hardware)` |
   | `NIET GEVALIDEERD (echte NAS)` / `NIET GEVALIDEERD (hardware)` / `NIET GEVALIDEERD (account)` / `NIET GEVALIDEERD (Mac/Xcode)` | overal, aanvullend waar nodig |
+  | `NIET GEVALIDEERD (echte Hub)` | **aanvulling C-12:** overal, aanvullend waar nodig: de koppeling met de Hub is alleen met de Hub-simulator of met testsleutels beproefd, niet met een echte Hub (bv. de Hub-koppeling van de Jelly Leon-plugin) |
   | `Niet getest` | **nieuw in 1.3:** alleen bij status `Niet gestart` |
 
 - **Consistentie:** elke `NIET GEVALIDEERD (…)` die in `blokkade` staat, staat ook in `validatie`.
