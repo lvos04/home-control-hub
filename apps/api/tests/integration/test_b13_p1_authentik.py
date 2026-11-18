@@ -384,6 +384,8 @@ def test_regex_bij_andere_provider_blokkeert_hub_voorstel_niet(
     hub["redirect_uris"][0]["matching_mode"] = "strict"
     andere["pk"] = hub["pk"]
     assert _propose(c, h).status_code == 422
+    authentik_fake.applications.clear()
+    assert _propose(c, h).status_code == 422
     andere["pk"] = None
     assert _propose(c, h).status_code == 422
 

@@ -188,8 +188,10 @@ def build_hub_oidc_plan(
         or p.get("assigned_application_slug") == params.application_slug
         or (app_provider_pk is not None and p.get("pk") == app_provider_pk)
     ]
+    related_pks = {p["pk"] for p in related if "pk" in p}
     if (
         len(related) > 1
+        or sum(p.get("pk") in related_pks for p in providers) > 1
         or any(p.get("onvolledige_velden") for p in related)
         or any(
             p.get("assigned_application_slug") == params.application_slug and p.get("pk") != app_provider_pk
