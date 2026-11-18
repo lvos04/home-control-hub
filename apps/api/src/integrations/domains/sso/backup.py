@@ -331,21 +331,22 @@ def _compare_providers(before: dict[str, Any], after: dict[str, Any]) -> dict[st
     old_counts = Counter(p.get("pk") for p in old)
     current_counts = Counter(p.get("pk") for p in current)
     current_by_id = {p["pk"]: p for p in current if p.get("pk") is not None and current_counts[p["pk"]] == 1}
-    # Een onvolledige lijst kan afwezigheid niet bewijzen. Een betrouwbaar gelezen veld kan wel afwijken.
-    listing_complete = None not in current_counts and not any(
+    # Bewijs van afwezigheid vereist dat elke rij eenduidig in de index staat.
+    # Een veld van een eenduidig geïdentificeerde provider kan ook bij een onvolledige lijst afwijken.
+    listing_complete = len(current_by_id) == len(current) and not any(
         item["part"] == "providers" and item["reason"] != "providergegevens_onvolledig" for item in after["missing"]
     )
     incomplete = (
         not listing_complete
         or None in old_counts
-        or any(count > 1 for count in (*old_counts.values(), *current_counts.values()))
+        or any(count > 1 for count in old_counts.values())
         or any(p.get("onvolledige_velden") for p in (*old, *current))
     )
     missing, changed = [], []
     fields = ("name", "client_id", "client_type", "redirect_uris", "signing_key", "issuer_mode", "sub_mode")
     for earlier in old:
         pk, name = earlier.get("pk"), earlier.get("name")
-        if pk is None or name is None or old_counts[pk] != 1 or current_counts[pk] > 1:
+        if pk is None or name is None or old_counts[pk] != 1:
             continue
         now = current_by_id.get(pk)
         if now is None:

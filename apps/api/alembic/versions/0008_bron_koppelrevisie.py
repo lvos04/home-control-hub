@@ -28,9 +28,10 @@ def downgrade() -> None:
         raise BackupError("Terugmigratie van 0008 vereist een databaseverbinding om de koppelrevisies te beschermen")
     # Blokkeer nieuwe of gewijzigde koppelrevisies tot het einde van de migratie. Pg_dump kan de tabel wel lezen.
     op.execute("LOCK TABLE integration_source IN SHARE MODE")
-    if op.get_bind().scalar(sa.text("SELECT EXISTS (SELECT 1 FROM integration_source)")):
+    connection = op.get_bind()
+    if connection.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM integration_source)")):
         backup = context.config.attributes.get("backup_before_downgrade")
         if backup is None:
             raise BackupError("Gebruik 'integrations migrate --down' om de koppelrevisies vooraf te archiveren")
-        backup(revision)
+        backup(revision, connection)
     op.drop_column("integration_source", "link_revision")

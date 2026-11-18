@@ -10,11 +10,15 @@ import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from psycopg import ProgrammingError
+from psycopg.conninfo import make_conninfo
+from sqlalchemy import Connection, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from .config import Settings
 from .db import Database
@@ -55,9 +59,14 @@ def downgrade(settings: Settings, revision: str, backup_dir: Path | None = None)
     """Geef een gegevensverwijderende revisie toegang tot de gedeelde dumpvoorziening."""
     dump = None
 
-    def backup(current: str) -> None:
+    def backup(current: str, connection: Connection) -> None:
         nonlocal dump
-        dump = _write_backup(settings, current, backup_dir or settings.data_dir / "backups", "voor-terugmigratie")
+        snapshot = connection.scalar(text("SELECT pg_export_snapshot()"))
+        if snapshot is None:
+            raise BackupError("De terugmigratie kon geen databasesnapshot voor de dump delen")
+        dump = _write_backup(
+            settings, current, backup_dir or settings.data_dir / "backups", "voor-terugmigratie", snapshot=snapshot
+        )
 
     cfg = alembic_config(settings)
     cfg.attributes["backup_before_downgrade"] = backup
@@ -86,9 +95,22 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     return _write_backup(settings, current, backup_dir, "voor-upgrade", keep)
 
 
-def _write_backup(settings: Settings, current: str, backup_dir: Path, prefix: str, keep: int = 3) -> Path:
+def _write_backup(
+    settings: Settings, current: str, backup_dir: Path, prefix: str, keep: int = 3, *, snapshot: str | None = None
+) -> Path:
     if shutil.which("pg_dump") is None:
         raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
+    try:
+        # Dezelfde URL-uitleg als de migratie, inclusief dbname en Unix-sockets in de query.
+        url = make_url(settings.database_url)
+        args, parameters = url.get_dialect()().create_connect_args(url)
+        password = parameters.pop("password", None)
+        conninfo = make_conninfo(*args, **parameters)
+    except (ArgumentError, ProgrammingError, ValueError):
+        raise BackupError("De databaseverbinding voor pg_dump kon niet worden bepaald") from None
+    env = os.environ.copy()
+    if password is not None:
+        env["PGPASSWORD"] = str(password)
     try:
         backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
@@ -97,18 +119,14 @@ def _write_backup(settings: Settings, current: str, backup_dir: Path, prefix: st
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     target = backup_dir / f"{prefix}-{current}-{stamp}.dump"
     checksum = target.with_suffix(".dump.sha256")
-    parts = urlsplit(settings.database_url.replace("postgresql+psycopg://", "postgresql://"))
-    query = parse_qs(parts.query)
-    host = query.get("host", [parts.hostname or ""])[0]
-    port = query.get("port", [str(parts.port or "")])[0]
     try:
         with tempfile.TemporaryDirectory(dir=backup_dir) as directory:
             partial = Path(directory) / target.name
-            cmd = ["pg_dump", "-Fc", "-f", str(partial), "-h", host, "-U", parts.username or "hch"]
-            if port:
-                cmd.extend(("-p", port))
-            cmd.append((parts.path or "/hch").lstrip("/"))
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603 (vaste argumenten)
+            cmd = ["pg_dump", "-Fc", "--no-password", "-f", str(partial), "--dbname", conninfo]
+            if snapshot is not None:
+                # PostgreSQL weigert import van de snapshot op een andere database of server.
+                cmd.extend(("--snapshot", snapshot))
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)  # noqa: S603
             if result.returncode != 0 or not partial.is_file() or partial.stat().st_size == 0:
                 raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
             os.chmod(partial, 0o600)

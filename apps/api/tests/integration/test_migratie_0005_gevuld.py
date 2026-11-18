@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -119,8 +120,16 @@ def _differences(before: Meting, after: Meting) -> list[str]:
     return sorted(t for t in before if after.get(t) != before[t])
 
 
-def test_terugmigratie_0008_archiveert_de_koppelrevisies(vorige_versie: Settings, tmp_path: Path) -> None:
+@pytest.mark.parametrize("databasenaam_in_query", [False, True], ids=["url-pad", "dbname"])
+def test_terugmigratie_0008_archiveert_de_koppelrevisies(
+    vorige_versie: Settings, tmp_path: Path, databasenaam_in_query: bool
+) -> None:
     eng = create_engine(vorige_versie.database_url)
+    if databasenaam_in_query:
+        url = make_url(vorige_versie.database_url)
+        assert url.database is not None
+        query_url = url.update_query_dict({"dbname": url.database}).set(database="")
+        vorige_versie = replace(vorige_versie, database_url=query_url.render_as_string(hide_password=False))
     try:
         _fill(eng)
         upgrade(vorige_versie, "0008")

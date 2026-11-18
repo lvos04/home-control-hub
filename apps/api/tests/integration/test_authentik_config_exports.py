@@ -314,7 +314,7 @@ def test_opruimen_begrenst_exports_van_vervallen_koppelrevisies(
     assert _export_check(client, admin)["detail"]["export_id"] == str(exports[-1])
 
 
-@pytest.mark.parametrize("onvolledig", ["ander", "zelfde", "dubbel"])
+@pytest.mark.parametrize("onvolledig", ["ander", "zelfde", "dubbel", "dubbel_id", "dubbel_id_onvolledig"])
 def test_herstelcheck_onderscheidt_bevestigde_en_onbekende_providervelden(
     paired_client: Any, auth: Any, authentik_fake: AuthentikFake, onvolledig: str
 ) -> None:
@@ -329,8 +329,12 @@ def test_herstelcheck_onderscheidt_bevestigde_en_onbekende_providervelden(
         immich.pop("authorization_flow")
     elif onvolledig == "zelfde":
         hub.pop("redirect_uris")
-    else:
+    elif onvolledig == "dubbel":
         authentik_fake.providers.append({**hub, "client_id": "dubbele-testclient"})
+    else:
+        hub["pk"] = immich["pk"]
+        if onvolledig == "dubbel_id_onvolledig":
+            hub.pop("authorization_flow")
 
     antwoord = client.post(f"{BASE}/authentik/restore-check", json={"export_id": export["id"]}, headers=idem(admin))
     assert antwoord.status_code == 200
@@ -340,8 +344,9 @@ def test_herstelcheck_onderscheidt_bevestigde_en_onbekende_providervelden(
         alarmen = session.scalar(
             select(func.count()).select_from(SsoAnomaly).where(SsoAnomaly.rule_id == "herstel_afwijking")
         )
-    if onvolledig == "dubbel":
+    if onvolledig.startswith("dubbel"):
         assert data["outcome"] == providers["status"] == "onbekend"
+        assert not providers["detail"].get("missing")
         assert alarmen == 0
     else:
         assert data["outcome"] == providers["status"] == "afwijking"

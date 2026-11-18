@@ -586,9 +586,12 @@ schermlezer en telefoon.
   Exportformaat 2 legt vast dat verplichte providervelden vóór normalisatie zijn gecontroleerd. Een lege redirectlijst
   in formaat 1 bewijst onvoldoende voor herstel. De oorspronkelijke exportinhoud en hash blijven behouden. Een exacte
   herhaling geeft het oorspronkelijke exportantwoord. De detailroute geeft 404 nadat de export is opgeruimd.
-- De terugmigratie van `0008` archiveert bestaande koppelrevisies met SHA-256 en weigert een onbeschermde
-  schemawijziging. Een geverifieerde terugzetting levert dezelfde revisies en herstelbasis op. De herstelcheck
-  behoudt een bevestigde providerafwijking en het alarm bij een gedeeltelijk onvolledige lezing.
+- De terugmigratie van `0008` gebruikt de verbindingsparameters van de migratie en deelt haar databasesnapshot
+  met `pg_dump`. De gevulde proef herstelt hetzelfde schema, dezelfde rijen en dezelfde herstelbasis uit de dump
+  met SHA-256. De lokale proeven omvatten TCP en Unix-sockets, met de databasenaam in het URL-pad of als `dbname`.
+  De herstelcheck leidt een verwijdering af uit een volledige lijst met unieke provider-ID's. Bij een dubbel ID
+  blijft afwezigheid onbekend. Een bevestigde wijziging bij een eenduidige provider geeft een alarm, ook bij
+  gedeeltelijk onvolledige gegevens.
 - Een nieuw Hub-voorstel krijgt 422 als de naam ongeldig is of de openbare preview wijzigingen moet afschermen.
   De simulator controleert het aantal voorstelrijen en koppelt bij een geldig voorstel de zichtbare diff, verzoeken
   en het terugzetrecept aan de opgeslagen previewhash.
