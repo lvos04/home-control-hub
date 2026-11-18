@@ -585,8 +585,12 @@ schermlezer en telefoon.
   een gewijzigd archief of een ontbrekend of verwisseld controlebestand. De proef vergelijkt de rijen uit de
   geverifieerde dump met die van vóór de upgrade.
 - De upgradecontrole en het bewaarbeleid gebruiken dezelfde actuele toets op volledigheid. De upgradecontrole kiest
-  een verse export van de gemeten Authentik-versie. Periodiek onderhoud beschermt per versie de laatste bruikbare
-  export van de huidige koppeling. Vervallen koppelingen vallen onder de gewone bewaarlimiet.
+  een verse export van de gemeten Authentik-versie. Periodiek onderhoud bewaart de nieuwste 30 exports over alle
+  koppelrevisies samen. Alleen de huidige koppeling krijgt extra bescherming voor de laatste bruikbare export per
+  Authentik-versie. Voor vervallen revisies geldt geen vaste bewaartijd. Hun exports zijn leesbaar zolang ze
+  bewaard zijn. Vervolgpunt: bepalen of de gezamenlijke aantalsgrens volstaat voor het terugzoeken van vervallen
+  revisies. De onderhoudsproeven verlagen de grens om te controleren welke exports vervallen en welke bruikbare
+  exports van de huidige koppeling buiten de grens bewaard blijven.
   Exportformaat 2 legt vast dat verplichte providervelden vóór normalisatie zijn gecontroleerd. Een lege redirectlijst
   in formaat 1 bewijst onvoldoende voor herstel. De oorspronkelijke exportinhoud en hash blijven behouden. Een exacte
   herhaling geeft het oorspronkelijke exportantwoord. De detailroute geeft 404 nadat de export is opgeruimd.
@@ -599,6 +603,10 @@ schermlezer en telefoon.
 - Een nieuw Hub-voorstel krijgt 422 als de naam ongeldig is of de openbare preview wijzigingen moet afschermen.
   De simulator controleert het aantal voorstelrijen en koppelt bij een geldig voorstel de zichtbare diff, verzoeken
   en het terugzetrecept aan de opgeslagen previewhash.
+- Met nagebootste Authentik-uitval toetst de zelftest de noodregistratie en de voorwaarden voor noodtoegang,
+  waaronder weigering van een adres buiten het geconfigureerde bereik. De gevulde migratieproef controleert
+  behoud van de registratie bij migratie heen, terug en opnieuw heen. De feitelijke noodlogin via LAN en de
+  bronadrescontrole met Authentik uit zijn onbeproefd (ADR-0033 besluit 5 en O3).
 - De cataloguscontrole blijft onbekend tot de dienst de Hub-route kan gebruiken en de koppeling is getoetst.
   De upgrade blijft geblokkeerd.
   Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,

@@ -28,10 +28,10 @@ Elke export legt een willekeurige *koppelrevisie* van de bron vast. Die revisie 
 Authentik-bron in de Hub (opslaan van de bron, ander of verwijderd adres, nieuw token) en keert nooit terug. Gevolgen:
 
 - De gate en de herstelcontrole gebruiken alleen een export van de **huidige** koppeling. Een export van vóór zo'n
-  wijziging blijft **leesbaar** (lijst en detail), maar geldt niet als bewijs: de gate geeft dan `fout` zonder
-  export-ID en de herstelcontrole geeft `onbekend`.
-- Exports van vóór deze functie hebben geen revisie. Ze blijven ook leesbaar en tellen op dezelfde manier niet als
-  bewijs.
+  wijziging blijft leesbaar zolang die bewaard is (lijst en detail). Met alleen zo'n export geeft de gate `fout`
+  zonder export-ID en de herstelcontrole geeft `onbekend`.
+- Exports van vóór deze functie hebben geen revisie. Ook deze exports zijn leesbaar zolang ze bewaard zijn en vallen
+  buiten de herstelbasis.
 - `onbekend` bij de herstelcontrole met de deelcontrole *herkomst* betekent: deze export hoort niet aantoonbaar bij
   de huidige koppeling. Er is dan niets vergeleken en niets bevestigd; dit is geen afwijking en geen alarm.
 - Maak daarom **vóór elke Authentik-wijziging die je wilt beoordelen** (upgrade, herstel, verhuizing, nieuw token of
@@ -39,8 +39,10 @@ Authentik-bron in de Hub (opslaan van de bron, ander of verwijderd adres, nieuw 
   toestand van vóór de wijziging niet bevestigen.
 - Stel de bron daarna niet opnieuw in (ook niet met hetzelfde token): dat maakt de export onbruikbaar als bewijs en
   vraagt een nieuwe.
-- Het onderhoud bewaart de nieuwste 30 exports, plus de laatste bruikbare export per Authentik-versie van de
-  huidige koppeling. Exports van vervallen koppelingen vallen onder de gewone grens van 30.
+- Periodiek onderhoud bewaart de nieuwste 30 exports over alle koppelrevisies samen, ook die zonder revisie.
+  Alleen de huidige koppeling krijgt extra bescherming: de laatste bruikbare export per Authentik-versie
+  blijft ook buiten die 30 bewaard. Voor exports van vervallen revisies geldt geen vaste bewaartijd.
+  Vervolgpunt: bepalen of de gezamenlijke aantalsgrens volstaat voor het terugzoeken van vervallen revisies.
 - Een herhaalde exportaanvraag met dezelfde idempotentiesleutel geeft tijdens de bewaartermijn van die sleutel
   het oorspronkelijke antwoord. De detailroute toont of de export nu nog beschikbaar is en geeft na opruiming 404.
 
