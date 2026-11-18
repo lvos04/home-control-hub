@@ -68,8 +68,10 @@ def sha256_text(value: str) -> str:
 
 # ------------------------------------------------------------------ whitelists per objectsoort
 def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
+    # Onverwachte objecten niet naar tekst omzetten: die kunnen onbekende of geheime velden bevatten.
+    scalars = {k: v for k, v in p.items() if v is None or isinstance(v, str | int | bool)}
     out = _pick(
-        p,
+        scalars,
         (
             "pk",
             "name",
@@ -91,14 +93,20 @@ def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
         [
             {"matching_mode": _s(u.get("matching_mode")), "url": _s(u.get("url"))}
             for u in uris
-            if isinstance(u, dict) and u.get("redirect_uri_type", "authorization") == "authorization"
+            if isinstance(u, dict)
+            and isinstance(u.get("matching_mode"), str)
+            and isinstance(u.get("url"), str)
+            and u.get("redirect_uri_type", "authorization") == "authorization"
         ]
         if isinstance(uris, list)
         else []
     )
-    out["property_mappings"] = sorted(str(x) for x in p.get("property_mappings") or [])
+    mappings = p.get("property_mappings")
+    out["property_mappings"] = (
+        sorted(str(x) for x in mappings if type(x) in (str, int)) if isinstance(mappings, list) else []
+    )
     if isinstance(p.get("grant_types"), list):
-        out["grant_types"] = sorted(str(x) for x in p["grant_types"])
+        out["grant_types"] = sorted(x for x in p["grant_types"] if isinstance(x, str))
     return out
 
 

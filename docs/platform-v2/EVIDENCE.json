@@ -391,13 +391,13 @@
  },
  {
   "id": "C1.3-HCH-15",
-  "status": "Niet gestart",
-  "validatie": "Niet getest",
-  "bewijs": "nog niets gebouwd (fase P2)",
-  "blokkade": "",
-  "opmerking": "P2: catalogusbeschikbaarheid via catalogus.lezen (Hub-route bestaat nog niet), apply van sso.oidc.hub.register en sso.sessions.revoke alleen met een ondertekend ExecutionRequest, client_secret nooit via connector/items/events. Tot dan blijft de upgradegate 'catalogusversie onbekend' en geeft apply 501.",
+  "status": "Bezig",
+  "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py::test_sso_apply_verifies_but_stays_closed; apps/api/tests/integration/test_migratie_0005_gevuld.py::test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006",
+  "blokkade": "Uitvoering en automatische geheimoverdracht wachten op ADR-0033 O1/O2 en gezamenlijke ketenproeven. De catalogusroute is nog niet vastgelegd. D17 staat open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
+  "opmerking": "Voorbereiding: verificatie van ondertekende SSO-verzoeken, omkeerbare behoudende migratie, verplichte geverifieerde HTTPS met doelbinding en filtering van providerantwoorden. Na verificatie blijft apply 501. De catalogusversie blijft onbekend.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-18"
  },
  {
   "id": "REVIEW-home-control-hub-contract-1.3",

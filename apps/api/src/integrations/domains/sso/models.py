@@ -264,8 +264,7 @@ class SsoGroupRoleMapping(Timestamps, Base):
 class SsoProposal(Base):
     """B13-002/005: voorstel (preview/diff/preview_hash) voor een wijziging in Authentik.
 
-    In deze versie kan een voorstel **niet** worden toegepast: de database staat voor ``apply_status`` alleen
-    'nog_niet_toepasbaar' toe (toepassen vereist een door de Hub ondertekend ExecutionRequest, contract §8, fase P2).
+    Tijdens de voorbereiding staat de database uitsluitend de uitvoerstand 'nog_niet_toepasbaar' toe.
     SSO-wijzigingen zijn nooit R0/R1.
     """
 
@@ -289,7 +288,7 @@ class SsoProposal(Base):
     __table_args__ = (
         CheckConstraint("risk_claim IN ('R2','R3')", name="risk_at_least_r2"),
         CheckConstraint(_in("status", PROPOSAL_STATUSES), name="status"),
-        CheckConstraint("apply_status = 'nog_niet_toepasbaar'", name="apply_not_available"),
+        CheckConstraint("apply_status IN ('nog_niet_toepasbaar')", name="apply_status"),
         CheckConstraint("expires_at > created_at", name="expiry"),
         Index("ix_sso_proposal_created_at", "created_at"),
     )

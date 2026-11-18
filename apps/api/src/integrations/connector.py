@@ -5,8 +5,8 @@
   P2 (B11-005): ook ``automation.flows.restore`` — flows van Node-RED terugzetten naar een momentopname (R2).
 - ``apply`` (P2, B11-005): alleen ``automation.flows.restore`` en alleen met een door de Hub **ondertekend**
   ``ExecutionRequest`` (contract §8) met een menselijke goedkeuring; deze dienst controleert alles zelf opnieuw
-  (``domains/automation/restore.py``). Voor de Authentik-acties blijft ``apply`` eerlijk
-  ``501 capability_unavailable``. Er wordt nooit iets gesimuleerd of stil uitgevoerd.
+  (``domains/automation/restore.py``). Authentik-verzoeken worden lokaal geverifieerd. Na verificatie volgt
+  ``501 capability_unavailable`` zolang de uitvoeringsvoorwaarden ontbreken.
 - ``rollback`` geeft ``501 capability_unavailable``: terugdraaien van een herstel is een nieuw voorstel naar de
   momentopname ``voor_herstel`` (met een nieuwe goedkeuring), geen aparte route.
 - Een NUL-teken of een losse surrogaat in ``propose`` of ``apply`` (ook in een sleutel die met ``_sa`` begint), en een
@@ -40,6 +40,7 @@ from .domains.automation.models import (
 from .domains.energy.router import coverage_payload as energy_coverage
 from .domains.sso import proposals as sso_proposals
 from .domains.sso import service as sso_service
+from .domains.sso import verification as sso_verification
 from .domains.sso.authentik_router import ProposeIn, anomaly_dict, validate_parameters
 from .domains.sso.backup import export_meta
 from .domains.sso.mapping import coverage as sso_coverage
@@ -379,13 +380,13 @@ def _policy_keys(request: Request) -> list[Any]:
 
 @router.post(
     "/apply",
-    summary="Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); nu alleen flows terugzetten",
+    summary="Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); Authentik-uitvoering geblokkeerd",
     responses={
         200: {"description": "Uitgevoerd en met readback bevestigd"},
         403: {"description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"},
         409: {
             "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd, voorstel_verlopen of "
-            "flowregister_bezig (Retry-After; er is niets gewijzigd)"
+            "backup_checkpoint_ontbreekt of flowregister_bezig (Retry-After; er is niets gewijzigd)"
         },
         422: {
             "description": "ongeldig_verzoek, parameters_ongeldig of validation_error (NUL-teken of losse surrogaat; "
@@ -408,7 +409,8 @@ def apply(
     proposal = body.get("proposal")
     action_id = proposal.get("action_id") if isinstance(proposal, dict) else None
     if isinstance(action_id, str) and action_id in sso_proposals.ACTIONS:
-        # de Authentik-acties hebben nog geen uitvoerpad: eerlijk 501, er wordt geen nonce opgemaakt
+        # De blokkade gaat vóór het claimen van nonces, idempotentieopslag en elke Authentik-aanroep.
+        sso_verification.verify(session, body, action_id, _policy_keys(request), utcnow())
         raise ApiError(
             501,
             "capability_unavailable",

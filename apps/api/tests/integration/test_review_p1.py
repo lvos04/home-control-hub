@@ -256,7 +256,10 @@ def test_apply_never_executes_even_with_a_signed_looking_request(
     for who in (h, service):
         for url in ("/connector/v1/apply", "/connector/v1/rollback"):
             r = c.post(url, json=request_like, headers=idem(who))  # per wijziging een nieuwe JWT (zoals de Hub)
-            assert r.status_code == 501 and r.json()["code"] == "capability_unavailable", (url, r.text)
+            expected = (
+                (422, "execution_request_ongeldig") if url.endswith("/apply") else (501, "capability_unavailable")
+            )
+            assert (r.status_code, r.json()["code"]) == expected, (url, r.text)
         # zonder action_id (alleen een voorstel-id) is het geen uitvoeringsverzoek: geweigerd op de vorm
         los = {**request_like, "proposal": {"proposal_id": p["proposal_id"], "preview_hash": p["preview_hash"]}}
         r = c.post("/connector/v1/apply", json=los, headers=idem(who))

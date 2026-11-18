@@ -1300,7 +1300,7 @@
             "description": "forbidden — handtekening, geldigheid, eigen lijst, risicoklasse of goedkeuring"
           },
           "409": {
-            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd, voorstel_verlopen of flowregister_bezig (Retry-After; er is niets gewijzigd)"
+            "description": "nonce_al_gebruikt, goedkeuring_past_niet, resource_gewijzigd, voorstel_verlopen of backup_checkpoint_ontbreekt of flowregister_bezig (Retry-After; er is niets gewijzigd)"
           },
           "422": {
             "description": "ongeldig_verzoek, parameters_ongeldig of validation_error (NUL-teken of losse surrogaat; er wordt geen nonce verbruikt)"
@@ -1318,7 +1318,7 @@
             "description": "node_red_unavailable — er is niets gewijzigd"
           }
         },
-        "summary": "Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); nu alleen flows terugzetten",
+        "summary": "Uitvoeren: alleen met een door de Hub ondertekend ExecutionRequest (§8); Authentik-uitvoering geblokkeerd",
         "tags": [
           "connector"
         ]

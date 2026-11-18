@@ -3,9 +3,8 @@
 Stroom: Hub/admin → ``POST /connector/v1/propose`` → deze dienst leest Authentik (alleen GET), bouwt een plan met
 diff, exacte verzoeken, ``resource_etag`` en ``preview_hash`` en bewaart het als ``sso_proposal``.
 
-**Toepassen kan in deze versie niet.** Contract §8 eist een door de Hub ondertekend ``ExecutionRequest`` (policy-engine,
-gebonden goedkeuring, nonce); die keten bestaat pas in fase P2. Daarom: ``apply_status = nog_niet_toepasbaar`` (in de
-database afgedwongen) en ``/connector/v1/apply`` geeft eerlijk ``501``. Er wordt nooit iets naar Authentik geschreven.
+**Toepassen blijft geblokkeerd.** De connector controleert de ondertekening en gebonden goedkeuring
+(§8). Zonder uitvoeringsvoorwaarden blijft de stand ``nog_niet_toepasbaar``.
 """
 
 from __future__ import annotations
@@ -53,8 +52,8 @@ ACTIONS: dict[str, ActionSpec] = {
 }
 
 APPLY_UNAVAILABLE_NL = (
-    "Toepassen is in deze versie niet beschikbaar: het vereist een door de Hub ondertekend ExecutionRequest "
-    "(contract §8) en die keten komt in fase P2. Er is niets in Authentik gewijzigd."
+    "Toepassen blijft geblokkeerd totdat de contractvoorwaarden voor Authentik-uitvoering zijn ingevuld. "
+    "Er is niets in Authentik gewijzigd."
 )
 
 

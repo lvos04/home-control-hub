@@ -259,7 +259,7 @@ def test_upgrade_of_a_filled_0004_database_loses_nothing_and_can_go_back(
         # dezelfde opdracht als de image bij het starten: back-up vooraf, dan migreren
         backups = tmp_path / "backups"
         assert cmd_migrate(settings, str(backups), None) == 0
-        assert _revision(eng) == head_revision(settings) == "0005"
+        assert _revision(eng) == head_revision(settings)
         assert _differences(voor, _measure(eng, columns)) == [], "upgrade 0004 → 0005"
         with eng.connect() as c:  # een geweigerd verzoek van vóór 0005 heeft nu een reden (en is niet weg)
             rows = c.execute(text("SELECT status, rejected_reason FROM automation_action_request")).all()
@@ -275,7 +275,7 @@ def test_upgrade_of_a_filled_0004_database_loses_nothing_and_can_go_back(
         assert _differences(voor, _measure(eng, columns)) == [], "terug 0005 → 0004"
         assert _columns(eng) == columns, "na terug staat precies het schema van 0004 er weer"
         assert cmd_migrate(settings, str(backups), None) == 0
-        assert _revision(eng) == "0005"
+        assert _revision(eng) == head_revision(settings)
         assert _differences(voor, _measure(eng, columns)) == [], "opnieuw 0004 → 0005"
 
         # de back-up van vóór de upgrade is een volledige terugweg
@@ -319,7 +319,7 @@ def test_down_and_up_again_with_b11_data_keeps_every_row(vorige_versie: Settings
         aantallen = {t: n for t, (n, _) in _measure(eng, _columns(eng)).items()}
         downgrade(settings, VORIGE)
         upgrade(settings)
-        assert _revision(eng) == "0005"
+        assert _revision(eng) == head_revision(settings)
         assert {t: n for t, (n, _) in _measure(eng, _columns(eng)).items()} == aantallen
         with eng.connect() as c:
             status = c.execute(text("SELECT status FROM automation_flow WHERE id = :f"), {"f": ids["flow2"]})
@@ -401,5 +401,60 @@ def test_the_comparison_sees_a_lost_row(vorige_versie: Settings, tmp_path: Path)
         assert cmd_migrate(settings, None, None) == 0
         assert _revision(eng) == "9999"
         assert _differences(voor, _measure(eng, columns)) == ["sso_recovery_method"]
+    finally:
+        eng.dispose()
+
+
+def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: Settings) -> None:
+    settings = vorige_versie
+    eng = create_engine(settings.database_url)
+
+    def check_names() -> set[str]:
+        with eng.connect() as c:
+            return set(
+                c.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint WHERE conrelid = 'sso_proposal'::regclass AND contype = 'c'"
+                    )
+                ).scalars()
+            )
+
+    try:
+        _fill(eng)
+        upgrade(settings, "0005")
+        with eng.begin() as c:
+            for action_id in ("sso.oidc.hub.register", "sso.sessions.revoke"):
+                c.execute(
+                    text(
+                        "INSERT INTO sso_proposal (id, action_id, target, parameters, preview, preview_hash, "
+                        "resource_etag, risk_claim, authentik_version, status, apply_status, created_by, created_at, "
+                        "expires_at, trace_id) VALUES (gen_random_uuid(), :action_id, '{}', '{}', '{}', repeat('1', 64), "
+                        "repeat('2', 64), 'R2', '2026.8.5', 'voorstel', 'nog_niet_toepasbaar', 'proef', now(), "
+                        "now() + interval '1 hour', gen_random_uuid())"
+                    ),
+                    {"action_id": action_id},
+                )
+        columns = _columns(eng)
+        before = _measure(eng, columns)
+        _filled_enough(before)
+        assert before["sso_proposal"][0] == 2
+        old_checks = check_names()
+        assert "ck_sso_proposal_apply_not_available" in old_checks
+        for revision in ("0006", "0005", "0006"):
+            if revision == "0005":
+                downgrade(settings, revision)
+            else:
+                upgrade(settings, revision)
+            assert _revision(eng) == revision
+            assert _columns(eng) == columns
+            assert _differences(before, _measure(eng, columns)) == []
+            if revision == "0006":
+                assert check_names() == (
+                    old_checks - {"ck_sso_proposal_apply_not_available"} | {"ck_sso_proposal_apply_status"}
+                )
+            else:
+                assert check_names() == old_checks
+            with pytest.raises(IntegrityError), eng.begin() as c:
+                c.execute(text("UPDATE sso_proposal SET apply_status = 'toegepast'"))
     finally:
         eng.dispose()

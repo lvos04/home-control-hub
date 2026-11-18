@@ -420,6 +420,11 @@ class AuthentikFake:
         if sub == "/authenticators/admin/all/":
             user = next((u for u in self.users.values() if str(u["pk"]) == q.get("user")), None)
             return httpx.Response(200, json=self.devices.get(user["username"], []) if user else [])
+        provider = re.fullmatch(r"/providers/oauth2/([0-9]+)/", sub)
+        if provider:
+            row = next((p for p in self._providers(q) if p["pk"] == int(provider[1])), None)
+            return httpx.Response(200, json=row) if row is not None else httpx.Response(404)
+
         lists = {
             "/core/users/": self._users,
             "/core/groups/": self._groups,

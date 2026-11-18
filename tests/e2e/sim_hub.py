@@ -743,6 +743,7 @@ def _build_app() -> Any:
             resource_etag=body["resource_etag"],
             risk_class=body.get("risk_class", "R2"),
             approved_by=body.get("approved_by", "beheerder-1"),
+            approval_overrides={"backup_checkpoint_id": body.get("backup_checkpoint_id")},
         )
 
     @api.post("/sim/outage")

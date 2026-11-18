@@ -161,15 +161,30 @@ def test_05b_b13_authentik_over_http(stack: Stack) -> None:
         headers=_idem(h),
     )
     assert p.status_code == 201 and p.json()["apply_status"] == "nog_niet_toepasbaar", p.text
-    # Toepassen kan alleen met een door de Hub ondertekend ExecutionRequest (B11-005); voor SSO bestaat dat nog niet.
+    # Ook bij geblokkeerde Authentik-uitvoering moet een verzoek aan de vorm van een ExecutionRequest voldoen.
     apply_url = f"{stack.hch}/connector/v1/apply"
     zonder_sleutel = httpx.post(apply_url, json={"proposal_id": p.json()["proposal_id"]}, headers=h)
     assert zonder_sleutel.status_code == 400 and zonder_sleutel.json()["code"] == "idempotency_key_required"
     los = httpx.post(apply_url, json={"proposal_id": p.json()["proposal_id"]}, headers=_idem(h))
     assert los.status_code == 422 and los.json()["code"] == "execution_request_ongeldig", los.text
     a = httpx.post(apply_url, json={"proposal": {"action_id": "sso.oidc.hub.register"}}, headers=_idem(h))
-    assert a.status_code == 501 and a.json()["code"] == "capability_unavailable", a.text
-    assert a.json()["details"]["reden"] == "nog_niet_toepasbaar"
+    assert a.status_code == 422 and a.json()["code"] == "execution_request_ongeldig", a.text
+    view = p.json()
+    signed = httpx.post(
+        f"{stack.hub}/sim/execution-request",
+        json={
+            "action_id": view["action_id"],
+            "target": view["target"],
+            "parameters": view["parameters"],
+            "preview_hash": f"sha256:{view['preview_hash']}",
+            "resource_etag": f"sha256:{view['resource_etag']}",
+            "backup_checkpoint_id": str(uuid.uuid4()),
+        },
+    )
+    assert signed.status_code == 200
+    blocked = httpx.post(apply_url, json=signed.json(), headers=_idem(stack.service()))
+    assert blocked.status_code == 501 and blocked.json()["code"] == "capability_unavailable"
+    assert blocked.json()["details"]["reden"] == "nog_niet_toepasbaar"
     assert httpx.get(f"{stack.authentik}/sim/writes").json() == []  # nooit naar Authentik geschreven
     exp = httpx.post(f"{base}/authentik/config-exports", headers=_idem(h)).json()
     assert exp["complete"] is True

@@ -559,3 +559,22 @@ een echte NAS, met een echte Authentik of met echte accounts.
 Een echte NAS (Custom App-formulier, Host-header en bron-IP achter de portpublicatie, ZFS-ACL's van de dataset op
 `hub-link.json`), een echte Authentik (`issuer`/`sub` in `sso.access.*`), een echte browser op het LAN, een echte
 schermlezer en telefoon.
+
+## S-P2-330 — Voorbereiding Authentik-uitvoering
+
+- De connector controleert een Authentik-uitvoeringsverzoek met de gepinde policy-sleutels en toetst de geldigheidsduur,
+  het parameterschema, de lokale minimumrisicoklasse en de binding van de goedkeuring aan het opgeslagen voorstel.
+  De policy-hash moet overeenkomen tussen verzoek en goedkeuring. De controle leest uitsluitend lokale gegevens.
+  Een geldig verzoek krijgt `501 capability_unavailable` met reden `nog_niet_toepasbaar`. De weigering claimt geen
+  uitvoeringsnonce en schrijft geen idempotentieantwoord. De gewone JWT-hergebruikcontrole blijft van kracht.
+- De transportadapter koppelt de bron en het gevraagde doel aan de vooraf bevestigde HTTPS-instantie, provider en
+  client. Hij haalt het beheercredential pas na de TLS-handshake op, gebruikt diezelfde verbinding voor de vaste
+  providerroute en volgt geen redirects. Het antwoord gaat door `clean_provider`. De adapter is afzonderlijk
+  beproefd met nep-Authentik en heeft alleen teruglezen als methode. De connector roept hem nog niet aan.
+- Migratie `0006_sso_apply_status.py` vervangt de oude databasevoorwaarde. De enige toegestane uitvoerstand in dit
+  deel is `nog_niet_toepasbaar`. De gevulde controle vergelijkt de bestaande gegevens bij omhoog, terug en opnieuw
+  omhoog, inclusief beide soorten SSO-voorstel, de lokale noodtoegang en kluisrijen.
+- De cataloguscontrole blijft onbekend tot het contract de Hub-route vastlegt. De upgrade blijft geblokkeerd.
+  Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,
+  toetsing aan het actuele beleid, live precondities en de gezamenlijke vervolgproeven. Echte Authentik en NAS blijven
+  NIET GEVALIDEERD.

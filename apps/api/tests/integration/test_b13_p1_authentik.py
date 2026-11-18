@@ -133,9 +133,9 @@ def test_hub_oidc_proposal_is_preview_only(
     assert authentik_fake.writes == []  # er is niets naar Authentik geschreven
     again = _propose(c, h, key=key, risk_claim="R0", reason="Hub-login via Authentik")
     assert again.json()["proposal_id"] == p["proposal_id"] and again.headers.get("Idempotent-Replay") == "true"
-    # toepassen kan (nog) niet: eerlijk 501 voor deze actie, vóórdat er iets van het verzoek wordt verbruikt
+    # Een ongetekend verzoek faalt op vorm, vóórdat een nonce wordt verbruikt.
     a = c.post("/connector/v1/apply", json={"proposal": {"action_id": "sso.oidc.hub.register"}}, headers=idem(h))
-    assert a.status_code == 501 and a.json()["details"]["reden"] == "nog_niet_toepasbaar"
+    assert a.status_code == 422 and a.json()["code"] == "execution_request_ongeldig"
     # een los voorstel-id is geen uitvoeringsverzoek: geweigerd op de vorm, er gebeurt niets
     a = c.post("/connector/v1/apply", json={"proposal_id": p["proposal_id"]}, headers=idem(h))
     assert a.status_code == 422 and a.json()["code"] == "execution_request_ongeldig"
@@ -560,3 +560,91 @@ def test_retention_of_events_and_snapshots(paired_client: Any, auth: Any, authen
         s.commit()
         assert s.execute(text("SELECT count(*) FROM sso_auth_event WHERE authentik_pk='oud'")).scalar() == 0
         assert s.execute(text("SELECT count(*) FROM sso_authentik_snapshot WHERE kind='rechten'")).scalar() == 1
+
+
+@pytest.mark.parametrize(
+    ("verschil", "status", "code"),
+    [
+        ("geldig", 501, "capability_unavailable"),
+        ("ongetekend", 422, "execution_request_ongeldig"),
+        ("signatuur", 403, "forbidden"),
+        ("verlopen", 403, "forbidden"),
+        ("risico", 403, "forbidden"),
+        ("goedkeuring", 403, "forbidden"),
+        ("backup", 409, "backup_checkpoint_ontbreekt"),
+        ("doel", 409, "goedkeuring_past_niet"),
+        ("etag", 409, "goedkeuring_past_niet"),
+        ("diff", 409, "goedkeuring_past_niet"),
+        ("beleid", 409, "goedkeuring_past_niet"),
+        ("geheime_parameter", 422, "validation_error"),
+        ("sessies", 501, "capability_unavailable"),
+    ],
+)
+def test_sso_apply_verifies_but_stays_closed(
+    paired_client: Any,
+    auth: Any,
+    fake_hub: FakeHub,
+    authentik_fake: AuthentikFake,
+    verschil: str,
+    status: int,
+    code: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from tests.integration.test_review_p1 import _all_rows_text
+
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    _hub_mappings(c, h)
+    authentik_fake.add_hub_app()
+    authentik_fake.providers[-1]["name"] = "Hub (OIDC)"
+    if verschil == "sessies":
+        p = _propose(c, h, action_id="sso.sessions.revoke", parameters={"all_users": True})
+    else:
+        p = _propose(c, h)
+    assert p.status_code == 201
+    view = p.json()
+    assert view["target"] and view["preview_hash"]
+    target, params = dict(view["target"]), dict(view["parameters"])
+    kwargs: dict[str, Any] = {"approval_overrides": {"backup_checkpoint_id": str(uuid.uuid4())}}
+    if verschil == "backup":
+        kwargs["approval_overrides"]["backup_checkpoint_id"] = None
+    elif verschil == "goedkeuring":
+        kwargs["approved_by"] = None
+    elif verschil == "risico":
+        kwargs["risk_class"] = "R1"
+    elif verschil == "doel":
+        target["system"] = "ander"
+    elif verschil == "beleid":
+        kwargs["approval_overrides"]["policy_hash"] = "sha256:" + "9" * 64
+    elif verschil == "verlopen":
+        kwargs["now"] = datetime.now(UTC) - timedelta(hours=1)
+    elif verschil == "geheime_parameter":
+        params["client_secret"] = CLIENT_SECRET
+    req = fake_hub.sim.execution_request(
+        action_id=view["action_id"],
+        target=target,
+        parameters=params,
+        preview_hash="sha256:" + ("f" * 64 if verschil == "diff" else view["preview_hash"]),
+        resource_etag="sha256:" + ("f" * 64 if verschil == "etag" else view["resource_etag"]),
+        **kwargs,
+    )
+    if verschil == "ongetekend":
+        del req["signature"]
+    elif verschil == "signatuur":
+        req["signature"] = ""
+    before = _all_rows_text(c)
+    calls = list(authentik_fake.calls)
+    r = c.post("/connector/v1/apply", json=req, headers=idem(h))
+    assert (r.status_code, r.json()["code"]) == (status, code)
+    if status == 501:
+        assert r.json()["details"]["reden"] == "nog_niet_toepasbaar"
+    assert authentik_fake.calls == calls
+    assert authentik_fake.writes == []
+    after = _all_rows_text(c)
+    # De buitenste dienst-/gebruikersauthenticatie registreert haar JWT-jti volgens §4.6.
+    assert after.pop("jwt_jti_use") != before.pop("jwt_jti_use")
+    assert after == before
+    assert before["sso_proposal"] and before["audit_event"] and before["outbox_event"] and before["idempotency_record"]
+    assert not any(CLIENT_SECRET in item for item in (r.text, str(before), caplog.text))
