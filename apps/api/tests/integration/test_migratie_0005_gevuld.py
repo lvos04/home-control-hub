@@ -15,6 +15,7 @@ Een upgrade op de echte NAS (vorige image + dataset-snapshot) is NIET GEVALIDEER
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -437,13 +438,38 @@ def test_the_comparison_sees_a_lost_row(vorige_versie: Settings, tmp_path: Path)
         eng.dispose()
 
 
+def test_terugzetten_controleert_het_gekozen_archief(tmp_path: Path) -> None:
+    eerste, tweede = (tmp_path / name for name in ("eerste.dump", "tweede.dump"))
+    for dump in (eerste, tweede):
+        dump.write_bytes(dump.stem.encode())
+        digest = hashlib.sha256(dump.stem.encode()).hexdigest()
+        dump.with_suffix(".dump.sha256").write_text(f"{digest}  {dump.name}\n", encoding="ascii")
+        assert _checksum_ok(dump)
+    controle = tweede.with_suffix(".dump.sha256")
+    geldig = controle.read_text(encoding="ascii")
+    eerste_regel = eerste.with_suffix(".dump.sha256").read_text(encoding="ascii")
+    for ongeldig in (None, eerste_regel, geldig + eerste_regel, geldig.replace(tweede.name, eerste.name)):
+        if ongeldig is None:
+            controle.unlink()
+        else:
+            controle.write_text(ongeldig, encoding="ascii")
+        assert not _checksum_ok(tweede)
+        with pytest.raises(AssertionError, match="de SHA-256"):
+            _restore(tweede, "niet-aangesloten")
+    controle.write_text(geldig, encoding="ascii")
+    tweede.write_bytes(b"beschadigd")
+    with pytest.raises(AssertionError, match="de SHA-256"):
+        _restore(tweede, "niet-aangesloten")
+
+
 def _checksum_ok(dump: Path) -> bool:
-    check = subprocess.run(  # noqa: S603 - vaste opdracht voor de gedocumenteerde terugzetcontrole
-        ["sha256sum", "--check", "--status", dump.with_suffix(".dump.sha256").name],  # noqa: S607
-        cwd=dump.parent,
-        check=False,
-    )
-    return check.returncode == 0
+    try:
+        recorded = dump.with_suffix(".dump.sha256").read_text(encoding="ascii")
+        with dump.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    except (OSError, UnicodeError):
+        return False
+    return recorded == f"{digest}  {dump.name}\n"
 
 
 def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: Settings) -> None:

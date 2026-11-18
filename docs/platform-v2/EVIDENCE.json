@@ -395,7 +395,7 @@
   "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py; apps/api/tests/integration/test_migratie_0005_gevuld.py",
   "blokkade": "Uitvoering wacht op een vertrouwde bron voor actuele provider-/clientbinding, actueel beleid en ketenproeven. Geheimoverdracht wacht op ADR-0033 O1/O2. De catalogusroute en D17 staan open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
-  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Gebonden TLS, providerfiltering en lekcontrole in lokale proeven. Bestaande schema- en rijgegevens behouden, met SHA-256-controle voor terugzetten. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend.",
+  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Lokale proeven toetsen HEAD en GET apart, filteren ook eerder opgeslagen providergegevens en weigeren onvolledige exports als herstelbasis. De terugzetcontrole bindt de bestandsnaam en SHA-256 aan de gekozen dump. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-18"
  },

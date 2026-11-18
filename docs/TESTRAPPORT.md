@@ -569,13 +569,17 @@ schermlezer en telefoon.
 - De simulator beproeft de vaste providerroute op geverifieerde HTTPS met een bevestigd IP-adres en
   certificaatvingerafdruk. De adapter controleert op dezelfde verbinding eerst de route zonder beheercredential en
   vraagt een onafhankelijke, actuele provider-/clientbinding. Zonder zo'n controle blijft de lezing gesloten.
-  TLS-sleutelregistratie staat uit. De leesfilter markeert onvolledige providergegevens. Een onvolledige redirect
-  blijft meetellen als afwijking en onvolledige providergegevens blokkeren het voorstel. De proeven toetsen ook
-  gevulde succes- en foutopvang, export, audit en events.
+  Een redirect op HEAD stopt vóór het ophalen van de beheercredential. Als alleen GET een redirect geeft, heeft
+  uitsluitend de bevestigde server het verzoek ontvangen. De lezing stopt zonder vervolgverzoek.
+  TLS-sleutelregistratie staat uit. De leesfilter markeert ontbrekende verplichte velden en onveilige waarden,
+  ook in eerder opgeslagen exports en voorstelpreviews. Onvolledige gegevens blokkeren het voorstel als ze de
+  doelprovider of een mogelijk identiteitsconflict raken. De proeven toetsen ook gevulde succes- en foutopvang,
+  ruwe HTTP-koppen, export, audit en events.
 - Migratie `0006_sso_apply_status.py` behoudt de bestaande databasevoorwaarde. Revisie 0007 herstelt die voorwaarde
   op databases die de eerdere 0006 al uitvoerden. De gevulde proef vergelijkt rijen en constraintdefinities bij
   omhoog, terug en opnieuw omhoog. De back-up krijgt vóór de migratie een SHA-256-bestand. De terugzetproef weigert
-  een gewijzigde archiefkopie en vergelijkt de rijen uit de geverifieerde dump met die van vóór de upgrade.
+  een gewijzigd archief of een ontbrekend of verwisseld controlebestand. De proef vergelijkt de rijen uit de
+  geverifieerde dump met die van vóór de upgrade.
 - De cataloguscontrole blijft onbekend tot het contract de Hub-route vastlegt. De upgrade blijft geblokkeerd.
   Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,
   toetsing aan het actuele beleid, live precondities en de gezamenlijke vervolgproeven. Echte Authentik en NAS blijven
