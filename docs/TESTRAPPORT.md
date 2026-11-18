@@ -580,7 +580,17 @@ schermlezer en telefoon.
   omhoog, terug en opnieuw omhoog. De back-up krijgt vóór de migratie een SHA-256-bestand. De terugzetproef weigert
   een gewijzigd archief of een ontbrekend of verwisseld controlebestand. De proef vergelijkt de rijen uit de
   geverifieerde dump met die van vóór de upgrade.
-- De cataloguscontrole blijft onbekend tot het contract de Hub-route vastlegt. De upgrade blijft geblokkeerd.
+- De upgradecontrole en het bewaarbeleid gebruiken dezelfde actuele toets op volledigheid. De upgradecontrole kiest
+  een verse export van de gemeten Authentik-versie en periodiek onderhoud bewaart de laatste bruikbare export.
+  Exportformaat 2 legt vast dat verplichte providervelden vóór normalisatie zijn gecontroleerd. Een lege redirectlijst
+  in formaat 1 bewijst onvoldoende voor herstel. De oorspronkelijke exportinhoud en hash blijven behouden. Een herhaalde
+  aanmaak van een inmiddels verwijderde export houdt de oorspronkelijke verwijzingen en geeft
+  `available: false` en `complete: false`.
+- Een nieuw Hub-voorstel krijgt 422 als de naam ongeldig is of de openbare preview wijzigingen moet afschermen.
+  De simulator controleert het aantal voorstelrijen en koppelt bij een geldig voorstel de zichtbare diff, verzoeken
+  en het terugzetrecept aan de opgeslagen previewhash.
+- De cataloguscontrole blijft onbekend tot de dienst de Hub-route kan gebruiken en de koppeling is getoetst.
+  De upgrade blijft geblokkeerd.
   Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,
   toetsing aan het actuele beleid, live precondities en de gezamenlijke vervolgproeven. Echte Authentik en NAS blijven
   NIET GEVALIDEERD.

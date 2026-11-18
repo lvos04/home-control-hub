@@ -393,9 +393,9 @@
   "id": "C1.3-HCH-15",
   "status": "Bezig",
   "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
-  "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py; apps/api/tests/integration/test_migratie_0005_gevuld.py",
-  "blokkade": "Uitvoering wacht op een vertrouwde bron voor actuele provider-/clientbinding, actueel beleid en ketenproeven. Geheimoverdracht wacht op ADR-0033 O1/O2. De catalogusroute en D17 staan open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
-  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Lokale proeven toetsen HEAD en GET apart, filteren ook eerder opgeslagen providergegevens en weigeren onvolledige exports als herstelbasis. De terugzetcontrole bindt de bestandsnaam en SHA-256 aan de gekozen dump. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend.",
+  "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py; apps/api/tests/integration/test_authentik_config_exports.py; apps/api/tests/integration/test_migratie_0005_gevuld.py",
+  "blokkade": "Uitvoering wacht op een vertrouwde bron voor actuele provider-/clientbinding, actueel beleid en ketenproeven. Geheimoverdracht wacht op ADR-0033 O1/O2. Catalogusinterop en D17 staan open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
+  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Lokale proeven toetsen HEAD en GET apart. De terugzetcontrole bindt de bestandsnaam en SHA-256 aan de gekozen dump. De upgradegate kiest een verse, bruikbare export van de huidige versie en het onderhoud behoudt de laatst bruikbare export. Een oudere lege redirectlijst zonder validatieherkomst telt niet als herstelbasis. Een herhaling bevestigt geen verwijderde export als volledig. Ongeldige Hub-voorstellen worden vóór opslag geweigerd. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-18"
  },

@@ -230,6 +230,7 @@ def public_hub_preview(preview: dict[str, Any]) -> dict[str, Any]:
         "diff": [],
         "requests": [],
         "rollback_recipe": [],
+        "changes": 0,
         "warnings": [
             *preview.get("warnings", []),
             {
@@ -279,6 +280,16 @@ def create_proposal(
         raise ApiError(
             422, "onbekende_actie", "Onbekende action_id; zie /connector/v1/discover.", {"action_id": action_id}
         )
+    if action_id == HUB_OIDC_ACTION:
+        for field in ("application_name", "provider_name"):
+            name = parameters[field]
+            if not name.strip() or not name.isprintable():
+                raise ApiError(
+                    422,
+                    "validation_error",
+                    "De parameters van het voorstel zijn ongeldig.",
+                    {"fouten": [{"veld": field, "probleem": "Gebruik een zichtbare, niet-lege naam."}]},
+                )
     client = authentik_client(request, session)
     try:
         plan = PLANNERS[action_id](client, session, parameters)
@@ -291,13 +302,16 @@ def create_proposal(
             "Er kan (nog) geen voorstel gemaakt worden; los eerst de blokkades op.",
             {"blockers": plan.blockers, "resource_etag": plan.resource_etag},
         )
+    preview = plan.preview()
+    if action_id == HUB_OIDC_ACTION and public_hub_preview(preview) is not preview:
+        raise ApiError(422, "voorstel_geblokkeerd", "De preview bevat onvolledige of ongeldige providergegevens.")
     now = utcnow()
     row = SsoProposal(
         id=uuid.uuid4(),
         action_id=action_id,
         target=plan.target,
         parameters=plan.parameters,
-        preview=plan.preview(),
+        preview=preview,
         preview_hash=plan.preview_hash,
         resource_etag=plan.resource_etag,
         risk_claim=spec.risk_class,

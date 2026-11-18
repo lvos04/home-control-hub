@@ -80,6 +80,34 @@ def _service(fake_hub: FakeHub) -> dict[str, str]:
     return fake_hub.service_auth()
 
 
+@pytest.mark.parametrize(
+    "parameters",
+    [{"provider_name": "   "}, {"application_name": "   "}, {"redirect_uris": [REDIRECT + "/met spatie"]}],
+)
+def test_nieuw_hub_voorstel_met_onveilige_preview_wordt_niet_opgeslagen(
+    paired_client: Any, auth: Any, parameters: dict[str, Any]
+) -> None:
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    _hub_mappings(c, h)
+    geldig = _propose(c, h)
+    assert geldig.status_code == 201
+    preview = geldig.json()
+    assert preview["changes"] > 0
+    with c.app.state.db.sessions() as session:
+        rij = session.get(SsoProposal, uuid.UUID(preview["proposal_id"]))
+        assert preview["preview_hash"] == rij.preview_hash
+        for veld in ("diff", "requests", "rollback_recipe"):
+            assert preview[veld] and preview[veld] == rij.preview[veld]
+        aantal = session.execute(text("SELECT count(*) FROM sso_proposal")).scalar_one()
+    events = _outbox(c)
+    geweigerd = _propose(c, h, parameters={"redirect_uris": [REDIRECT], **parameters})
+    assert geweigerd.status_code == 422
+    assert _outbox(c) == events
+    with c.app.state.db.sessions() as session:
+        assert session.execute(text("SELECT count(*) FROM sso_proposal")).scalar_one() == aantal
+
+
 # ------------------------------------------------------------------ detectie
 def test_detect_needs_configuration_and_reports_least_privilege(
     paired_client: Any, auth: Any, authentik_fake: AuthentikFake
