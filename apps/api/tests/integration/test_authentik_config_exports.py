@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from copy import deepcopy
 from datetime import timedelta
 from typing import Any
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
 from integrations.domains.sso import authaudit
-from integrations.domains.sso.models import SsoAuthentikSnapshot
+from integrations.domains.sso.models import SsoAnomaly, SsoAuthentikSnapshot
 from tests.conftest import idem
 from tests.fakes.authentik_fake import AuthentikFake
 from tests.integration.test_b13_p1_authentik import BASE, _outbox, _source
@@ -196,3 +198,89 @@ def test_upgradegate_gebruikt_alleen_een_export_van_de_ingestelde_bron(paired_cl
     assert _export_check(client, admin)["detail"]["export_id"] is None
     nieuw = _export(client, admin)
     assert _export_check(client, admin)["detail"]["export_id"] == nieuw["id"]
+
+
+SOURCE = "/integrations/v1/sources/authentik"
+
+
+def _herkoppel(client: Any, admin: Any, fake: AuthentikFake) -> None:
+    huidig = client.get(SOURCE, headers=admin).json()["runtime"]
+    antwoord = client.put(
+        SOURCE,
+        json={"base_url": huidig["base_url"], "enabled": True, "credential": fake.token},
+        headers=idem(admin, **{"If-Match": huidig["etag"]}),
+    )
+    assert antwoord.status_code == 200
+
+
+def test_upgradegate_weigert_een_export_van_de_vorige_installatie_op_hetzelfde_adres(
+    paired_client: Any, auth: Any, fake_hub: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, admin = paired_client, auth("admin")
+    oud, vervanger = fake_hub.authentik, AuthentikFake(host=fake_hub.authentik.host, token=secrets.token_urlsafe(24))
+    bronnen = {"actief": oud}
+    monkeypatch.setattr(
+        client.app.state, "http_transport", httpx.MockTransport(lambda verzoek: bronnen["actief"].handle(verzoek))
+    )
+    _source(client, admin)
+    export = _export(client, admin)
+    assert _export_check(client, admin)["detail"]["export_id"] == export["id"]
+    bronnen["actief"] = vervanger
+    _herkoppel(client, admin, vervanger)
+    controle = _export_check(client, admin)
+    assert controle["status"] == "fout" and controle["detail"]["export_id"] is None
+    nieuw = _export(client, admin)
+    assert _export_check(client, admin)["detail"]["export_id"] == nieuw["id"]
+
+
+@pytest.mark.parametrize("situatie", ["eigen", "herkoppeld", "zonder_herkomst"])
+def test_herstelcheck_toetst_eerst_de_herkomst(
+    paired_client: Any, auth: Any, fake_hub: Any, monkeypatch: pytest.MonkeyPatch, situatie: str
+) -> None:
+    client, admin = paired_client, auth("admin")
+    oud, vervanger = fake_hub.authentik, AuthentikFake(host=fake_hub.authentik.host, token=secrets.token_urlsafe(24))
+    bronnen = {"actief": oud}
+    monkeypatch.setattr(
+        client.app.state, "http_transport", httpx.MockTransport(lambda verzoek: bronnen["actief"].handle(verzoek))
+    )
+    _source(client, admin)
+    export = _export(client, admin)
+    if situatie == "herkoppeld":
+        bronnen["actief"] = vervanger
+        _herkoppel(client, admin, vervanger)
+    if situatie == "zonder_herkomst":
+        with client.app.state.db.sessions() as session:
+            rij = session.get(SsoAuthentikSnapshot, uuid.UUID(export["id"]))
+            inhoud = deepcopy(rij.content)
+            inhoud.pop("source")
+            rij.content = inhoud
+            session.commit()
+    antwoord = client.post(f"{BASE}/authentik/restore-check", json={"export_id": export["id"]}, headers=idem(admin))
+    assert antwoord.status_code == 200
+    uitkomst = antwoord.json()["outcome"]
+    with client.app.state.db.sessions() as session:
+        assert session.scalar(select(func.count()).select_from(SsoAnomaly)) == 0
+    if situatie == "eigen":
+        assert uitkomst == "ok"
+    else:
+        assert uitkomst == "onbekend" and [c["name"] for c in antwoord.json()["checks"]] == ["herkomst"]
+
+
+def test_opruimen_houdt_de_nieuwste_rechtenkaarten(
+    paired_client: Any, auth: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    monkeypatch.setitem(authaudit.KEEP_SNAPSHOTS, "rechten", 2)
+    with client.app.state.db.sessions() as session:
+        ids = [
+            authaudit.store_snapshot(
+                session, "rechten", {"rights": {}}, True, version, ("service", "t"), str(uuid.uuid4())
+            ).id
+            for version in ("2026.8.4", "2026.8.5", "2026.8.5")
+        ]
+        session.commit()
+        authaudit.purge_old_events(session)
+        session.commit()
+        bewaard = set(session.scalars(select(SsoAuthentikSnapshot.id).where(SsoAuthentikSnapshot.kind == "rechten")))
+    assert bewaard == set(ids[1:])

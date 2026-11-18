@@ -5,6 +5,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from sqlalchemy.orm import Session
+
+from ...models import IntegrationSource, VaultSecret
+from .authentik.client import SOURCE_ID
 from .authentik.reader import clean_provider, incomplete_provider_details
 from .models import SsoAuthentikSnapshot
 
@@ -38,6 +42,14 @@ def export_is_complete(row: SsoAuthentikSnapshot, content: dict[str, Any] | None
     return row.complete and not (export_content(row) if content is None else content).get("missing")
 
 
-def source_id(base_url: str) -> str:
-    """Welke Authentik-bron een export beschrijft: een hash van het ingestelde adres, zodat geen adres wordt opgeslagen."""
-    return hashlib.sha256(base_url.rstrip("/").encode()).hexdigest()
+def source_binding(session: Session) -> str | None:
+    """Welke koppeling met Authentik een export beschrijft: het ingestelde adres plus de revisie van het opgeslagen
+    token. Een nieuw token (ook voor een vervangende installatie op hetzelfde adres) of een nieuw adres geeft een
+    andere waarde, dus een export van vóór de herkoppeling telt niet als bewijs van continuïteit. Alleen niet-geheime
+    gegevens in de hash; ``None`` zolang er geen koppeling is."""
+    source = session.get(IntegrationSource, SOURCE_ID)
+    secret = session.get(VaultSecret, source.credential_ref) if source is not None and source.credential_ref else None
+    if source is None or not source.base_url or secret is None:
+        return None
+    raw = f"{source.base_url.rstrip('/')}|{source.credential_ref}|{secret.created_at.isoformat()}|{secret.version}"
+    return hashlib.sha256(raw.encode()).hexdigest()

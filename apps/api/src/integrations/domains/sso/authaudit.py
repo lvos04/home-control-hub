@@ -196,7 +196,7 @@ def ingest(session: Session, raw_events: list[dict[str, Any]]) -> list[SsoAuthEv
 KEEP_SNAPSHOTS = {"rechten": 100, "config_export": 30}
 
 
-def _usable_snapshot_ids(session: Session, kind: str) -> list[uuid.UUID]:
+def _usable_snapshot_ids(session: Session, kind: str = "config_export") -> list[uuid.UUID]:
     """De nieuwste volledige momentopname per versie en per Authentik-bron: de upgradegate kiest daaruit, dus mag
     het onderhoud er geen verwijderen, ook niet als er daarna veel nieuwere (onvolledige of andere) rijen kwamen."""
     stmt = (
@@ -207,10 +207,9 @@ def _usable_snapshot_ids(session: Session, kind: str) -> list[uuid.UUID]:
     newest: dict[tuple[str | None, Any], uuid.UUID] = {}
     with session.scalars(stmt.execution_options(yield_per=1)) as rows:
         for row in rows:
-            if kind == "config_export" and not export_is_complete(row):
+            if not export_is_complete(row):
                 continue
-            key = (row.authentik_version, export_content(row).get("source") if kind == "config_export" else None)
-            newest.setdefault(key, row.id)
+            newest.setdefault((row.authentik_version, export_content(row).get("source")), row.id)
     return list(newest.values())
 
 
@@ -230,7 +229,12 @@ def purge_old_events(session: Session) -> int:
         stmt = delete(SsoAuthentikSnapshot).where(
             SsoAuthentikSnapshot.kind == kind, SsoAuthentikSnapshot.id.not_in(keep_ids)
         )
-        protected = _usable_snapshot_ids(session, kind)
+        # Alleen configuratie-exports worden per versie en bron beschermd; van de rechtenkaarten blijft de nieuwste.
+        if kind == "config_export":
+            protected = _usable_snapshot_ids(session, kind)
+        else:
+            newest = latest_snapshot(session, kind)
+            protected = [newest.id] if newest is not None else []
         if protected:
             stmt = stmt.where(SsoAuthentikSnapshot.id.not_in(protected))
         removed += int(getattr(session.execute(stmt), "rowcount", 0) or 0)

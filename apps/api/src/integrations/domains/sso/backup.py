@@ -26,7 +26,7 @@ from .authaudit import ADMIN_ROLES, Actor, latest_snapshot, store_snapshot
 from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
 from .authentik.reader import ALL_PARTS, read_devices, read_flow_export, read_state, read_version
-from .config_exports import EXPORT_FORMAT, export_content, export_is_complete, source_id
+from .config_exports import EXPORT_FORMAT, export_content, export_is_complete, source_binding
 from .models import SsoAuthentikSnapshot, SsoGroupRoleMapping
 
 EXPORT_MAX_AGE = timedelta(hours=24)
@@ -50,12 +50,15 @@ def _admin_usernames(state_users: list[dict[str, Any]], groups: list[dict[str, A
 
 
 def build_export(client: AuthentikClient, session: Session) -> tuple[dict[str, Any], bool, str | None]:
+    binding = source_binding(
+        session
+    )  # vóór het lezen: een koppeling die tijdens het lezen wijzigt, geeft een afgekeurde export
     caps = read_version(client)
     state = read_state(client, ALL_PARTS, caps=caps)
     content: dict[str, Any] = {
         "format": EXPORT_FORMAT,
         "authentik_version": state.version,
-        "source": source_id(client.base_url),
+        "source": binding,
         "compat": caps.to_dict(),
         "parts": dict(state.parts),
         "missing": list(state.missing),
@@ -212,15 +215,16 @@ def upgrade_gate(
             http_status=ready,
         )
     )
+    binding = source_binding(session)
     export = (
         latest_snapshot(
             session,
             "config_export",
             version=str(current),
             taken_since=utcnow() - EXPORT_MAX_AGE,
-            source=source_id(client.base_url),
+            source=binding,
         )
-        if current is not None
+        if current is not None and binding is not None
         else None
     )
     checks.append(
@@ -323,6 +327,21 @@ def _names(rows: list[dict[str, Any]] | None, key: str) -> set[str]:
 def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, session: Session) -> dict[str, Any]:
     """Vergelijkt een export (van vóór herstel/upgrade) met de huidige toestand: rechten, 2FA, clients, sleutels."""
     before = export_content(snapshot)
+    binding = source_binding(session)
+    if binding is None or before.get("source") != binding:
+        # De herkomst eerst: een export van een andere koppeling of zonder herkomst bewijst niets over deze installatie.
+        return {
+            "export_id": str(snapshot.id),
+            "outcome": "onbekend",
+            "checks": [
+                _check(
+                    "herkomst",
+                    "onbekend",
+                    "Deze export hoort niet aantoonbaar bij de huidige koppeling met Authentik; maak eerst een eigen export.",
+                )
+            ],
+            "observed_at": iso(utcnow()),
+        }
     bparts: dict[str, Any] = before.get("parts", {})
     checks: list[dict[str, Any]] = []
     try:
