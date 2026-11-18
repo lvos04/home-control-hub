@@ -322,6 +322,56 @@ def _names(rows: list[dict[str, Any]] | None, key: str) -> set[str]:
     return {str(r.get(key)) for r in rows or []}
 
 
+def _compare_providers(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    old = before.get("parts", {}).get("providers")
+    current = after.get("parts", {}).get("providers")
+    if old is None or current is None:
+        return _check("providers", "onbekend", "Onderdeel 'providers' ontbreekt in de export of nu.", part="providers")
+
+    old_counts = Counter(p.get("pk") for p in old)
+    current_counts = Counter(p.get("pk") for p in current)
+    current_by_id = {p["pk"]: p for p in current if p.get("pk") is not None and current_counts[p["pk"]] == 1}
+    # Een onvolledige lijst kan afwezigheid niet bewijzen. Een betrouwbaar gelezen veld kan wel afwijken.
+    listing_complete = None not in current_counts and not any(
+        item["part"] == "providers" and item["reason"] != "providergegevens_onvolledig" for item in after["missing"]
+    )
+    incomplete = (
+        not listing_complete
+        or None in old_counts
+        or any(count > 1 for count in (*old_counts.values(), *current_counts.values()))
+        or any(p.get("onvolledige_velden") for p in (*old, *current))
+    )
+    missing, changed = [], []
+    fields = ("name", "client_id", "client_type", "redirect_uris", "signing_key", "issuer_mode", "sub_mode")
+    for earlier in old:
+        pk, name = earlier.get("pk"), earlier.get("name")
+        if pk is None or name is None or old_counts[pk] != 1 or current_counts[pk] > 1:
+            continue
+        now = current_by_id.get(pk)
+        if now is None:
+            if listing_complete:
+                missing.append(name)
+            continue
+        unverified = set(earlier.get("onvolledige_velden", ())) | set(now.get("onvolledige_velden", ()))
+        changed_fields = []
+        for field in fields:
+            if field in unverified or (field in earlier) != (field in now):
+                incomplete = True
+            elif earlier.get(field) != now.get(field):
+                changed_fields.append(field)
+        if changed_fields:
+            changed.append({"key": name, "fields": changed_fields})
+
+    if missing or changed:
+        message = f"{len(missing)} ontbreken, {len(changed)} gewijzigd."
+        if incomplete:
+            message += " Een deel van de providergegevens is onbekend."
+        return _check("providers", "afwijking", message, missing=missing, changed=changed)
+    if incomplete:
+        return _check("providers", "onbekend", "Providergegevens zijn onvolledig of niet eenduidig.")
+    return _check("providers", "ok", "OAuth2/OIDC-providers ongewijzigd.", missing=[], changed=[])
+
+
 def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, session: Session) -> dict[str, Any]:
     """Vergelijkt een export (van vóór herstel/upgrade) met de huidige toestand: rechten, 2FA, clients, sleutels."""
     before = export_content(snapshot)
@@ -373,9 +423,6 @@ def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, sessi
         if b is None or a is None:
             checks.append(_check(name, "onbekend", f"Onderdeel '{part}' ontbreekt in de export of nu.", part=part))
             return
-        if part == "providers" and any(row.get("onvolledige_velden") for row in (*b, *a)):
-            checks.append(_check(name, "onbekend", "Providergegevens zijn onvolledig."))
-            return
         amap = {str(x.get(key)): x for x in a}
         missing, changed = [], []
         for x in b:
@@ -395,13 +442,7 @@ def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, sessi
             )
         )
 
-    compare(
-        "providers",
-        "providers",
-        "name",
-        ("client_id", "client_type", "redirect_uris", "signing_key", "issuer_mode", "sub_mode"),
-        "OAuth2/OIDC-providers ongewijzigd.",
-    )
+    checks.append(_compare_providers(before, after_content))
     compare("applicaties", "applications", "slug", ("provider", "policy_engine_mode"), "Applicaties ongewijzigd.")
     compare("groepen", "groups", "name", ("is_superuser", "members"), "Groepen, superuservlag en leden ongewijzigd.")
     compare(

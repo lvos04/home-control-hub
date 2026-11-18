@@ -34,7 +34,16 @@ def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) ->
     from .migrations import BackupError, downgrade, pre_upgrade_backup, revision_known, upgrade
 
     if down:
-        downgrade(settings, down)
+        try:
+            dump = downgrade(settings, down, Path(backup_dir) if backup_dir else None)
+        except BackupError as exc:
+            print(
+                f"FOUT: terugmigratie geweigerd: {exc}. De database is ongewijzigd.",
+                file=sys.stderr,
+            )
+            return 3
+        if dump:
+            print(f"back-up vóór terugmigratie: {dump}")
         print(f"teruggezet naar {down}")
         return 0
     db = Database(settings.database_url)
@@ -126,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="ontbrekende geheimen aanmaken in <data>/secrets")
     m = sub.add_parser("migrate", help="databasemigraties uitvoeren")
-    m.add_argument("--backup-dir", help="pg_dump vóór openstaande migraties naar deze map")
+    m.add_argument("--backup-dir", help="map voor de databasedump vóór migratie of terugmigratie")
     m.add_argument("--down", help="terug naar deze revisie (bv. base)")
     a = sub.add_parser("api", help="API + statuspagina starten")
     a.add_argument("--host", default="0.0.0.0")  # noqa: S104 - in de container; poort via het formulier

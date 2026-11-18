@@ -26,13 +26,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 from integrations.cli import cmd_migrate
 from integrations.config import Settings
-from integrations.migrations import alembic_dir, downgrade, head_revision, upgrade
+from integrations.migrations import BackupError, alembic_config, alembic_dir, downgrade, head_revision, upgrade
 from tests.conftest import ADMIN_DB_URL, recreate_database
 
 DB = "hch_test_migratie_0005"
@@ -116,6 +117,38 @@ def _measure(eng: Engine, columns: dict[str, list[str]]) -> Meting:
 
 def _differences(before: Meting, after: Meting) -> list[str]:
     return sorted(t for t in before if after.get(t) != before[t])
+
+
+def test_terugmigratie_0008_archiveert_de_koppelrevisies(vorige_versie: Settings, tmp_path: Path) -> None:
+    eng = create_engine(vorige_versie.database_url)
+    try:
+        _fill(eng)
+        upgrade(vorige_versie, "0008")
+        kolommen = _columns(eng)
+        voor = _measure(eng, kolommen)
+        assert voor["integration_source"][0] > 0
+
+        with pytest.raises(BackupError, match="koppelrevisies vooraf te archiveren"):
+            command.downgrade(alembic_config(vorige_versie), "0007")
+        bezet_pad = tmp_path / "geen_map"
+        bezet_pad.touch()
+        assert cmd_migrate(vorige_versie, str(bezet_pad), "0007") == 3
+        assert _revision(eng) == "0008"
+        assert _columns(eng) == kolommen and _measure(eng, kolommen) == voor
+
+        assert cmd_migrate(vorige_versie, None, "0007") == 0
+        assert _revision(eng) == "0007"
+        (dump,) = (vorige_versie.data_dir / "backups").glob("voor-terugmigratie-0008-*.dump")
+        herstelde_url = recreate_database(DB_TERUG)
+        _restore(dump, herstelde_url)
+        hersteld = create_engine(herstelde_url)
+        try:
+            assert _revision(hersteld) == "0008"
+            assert _columns(hersteld) == kolommen and _measure(hersteld, kolommen) == voor
+        finally:
+            hersteld.dispose()
+    finally:
+        eng.dispose()
 
 
 def _revision(eng: Engine) -> str:

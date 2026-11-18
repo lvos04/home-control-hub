@@ -34,6 +34,15 @@ Authentik-bron in de Hub (opslaan van de bron, ander of verwijderd adres, nieuw 
   toestand van vóór de wijziging niet bevestigen.
 - Stel de bron daarna niet opnieuw in (ook niet met hetzelfde token): dat maakt de export onbruikbaar als bewijs en
   vraagt een nieuwe.
+- Het onderhoud bewaart de nieuwste 30 exports, plus de laatste bruikbare export per Authentik-versie van de
+  huidige koppeling. Exports van vervallen koppelingen vallen onder de gewone grens van 30.
+- Een herhaalde exportaanvraag met dezelfde idempotentiesleutel geeft tijdens de bewaartermijn van die sleutel
+  het oorspronkelijke antwoord. De detailroute toont of de export nu nog beschikbaar is en geeft na opruiming 404.
+
+Bij een terugmigratie van de Hub-database over revisie `0008` archiveert `integrations migrate --down` de koppelrevisies
+vóór de schemawijziging. De dump en de bijbehorende SHA-256 staan in de map van `--backup-dir` of in de map
+`backups` onder de datamap. Mislukt de back-up, dan stopt de terugmigratie. Herstel de geverifieerde dump op
+revisie `0008` om dezelfde koppelrevisie en herstelbasis terug te krijgen. Opnieuw upgraden maakt nieuwe koppelrevisies.
 
 ## Upgraden
 In de TrueNAS-web-UI: **Apps** → `authentik` → **Update** naar de versie uit de gate. Let op: catalogustreinen
@@ -42,7 +51,8 @@ versie zonder nieuwe gate.
 
 ## Na de upgrade of na een herstel
 1. **Herstelcontrole** tegen de export van vóór de upgrade: providers, applicaties, groepen + leden, superusers,
-   sleutels, flows en de 2FA-apparaten van beheerders.
+   sleutels, flows en de 2FA-apparaten van beheerders. Een betrouwbaar vastgestelde providerafwijking blijft
+   zichtbaar met een herstelalarm als andere providergegevens onvolledig zijn.
 2. Bij **afwijking**: niet verder gaan. Herstel de database/snapshot van vóór de upgrade (downgraden van Authentik
    kan niet). Overweeg daarna het voorstel **Sessies intrekken** (iedereen opnieuw inloggen).
 3. Werkt Authentik helemaal niet: gebruik de **noodtoegang** (lokaal noodaccount via LAN/VPN, zie

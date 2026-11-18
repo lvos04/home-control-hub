@@ -51,8 +51,18 @@ def upgrade(settings: Settings, revision: str = "head") -> None:
     command.upgrade(alembic_config(settings), revision)
 
 
-def downgrade(settings: Settings, revision: str) -> None:
-    command.downgrade(alembic_config(settings), revision)
+def downgrade(settings: Settings, revision: str, backup_dir: Path | None = None) -> Path | None:
+    """Geef een gegevensverwijderende revisie toegang tot de gedeelde dumpvoorziening."""
+    dump = None
+
+    def backup(current: str) -> None:
+        nonlocal dump
+        dump = _write_backup(settings, current, backup_dir or settings.data_dir / "backups", "voor-terugmigratie")
+
+    cfg = alembic_config(settings)
+    cfg.attributes["backup_before_downgrade"] = backup
+    command.downgrade(cfg, revision)
+    return dump
 
 
 def pending(settings: Settings, db: Database) -> bool:
@@ -73,6 +83,10 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     current = db.current_revision()
     if current is None or current == head_revision(settings):
         return None
+    return _write_backup(settings, current, backup_dir, "voor-upgrade", keep)
+
+
+def _write_backup(settings: Settings, current: str, backup_dir: Path, prefix: str, keep: int = 3) -> Path:
     if shutil.which("pg_dump") is None:
         raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
     try:
@@ -81,7 +95,7 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     except OSError as exc:
         raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    target = backup_dir / f"voor-upgrade-{current}-{stamp}.dump"
+    target = backup_dir / f"{prefix}-{current}-{stamp}.dump"
     checksum = target.with_suffix(".dump.sha256")
     parts = urlsplit(settings.database_url.replace("postgresql+psycopg://", "postgresql://"))
     query = parse_qs(parts.query)
@@ -114,7 +128,7 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
-        dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
+        dumps = sorted(backup_dir.glob(f"{prefix}-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
         for old in dumps[:-keep]:
             if old != target:
                 old.unlink(missing_ok=True)

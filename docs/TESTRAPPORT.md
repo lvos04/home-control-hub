@@ -581,11 +581,14 @@ schermlezer en telefoon.
   een gewijzigd archief of een ontbrekend of verwisseld controlebestand. De proef vergelijkt de rijen uit de
   geverifieerde dump met die van vóór de upgrade.
 - De upgradecontrole en het bewaarbeleid gebruiken dezelfde actuele toets op volledigheid. De upgradecontrole kiest
-  een verse export van de gemeten Authentik-versie en periodiek onderhoud bewaart de laatste bruikbare export.
+  een verse export van de gemeten Authentik-versie. Periodiek onderhoud beschermt per versie de laatste bruikbare
+  export van de huidige koppeling. Vervallen koppelingen vallen onder de gewone bewaarlimiet.
   Exportformaat 2 legt vast dat verplichte providervelden vóór normalisatie zijn gecontroleerd. Een lege redirectlijst
-  in formaat 1 bewijst onvoldoende voor herstel. De oorspronkelijke exportinhoud en hash blijven behouden. Een herhaalde
-  aanmaak van een inmiddels verwijderde export houdt de oorspronkelijke verwijzingen en geeft
-  `available: false` en `complete: false`.
+  in formaat 1 bewijst onvoldoende voor herstel. De oorspronkelijke exportinhoud en hash blijven behouden. Een exacte
+  herhaling geeft het oorspronkelijke exportantwoord. De detailroute geeft 404 nadat de export is opgeruimd.
+- De terugmigratie van `0008` archiveert bestaande koppelrevisies met SHA-256 en weigert een onbeschermde
+  schemawijziging. Een geverifieerde terugzetting levert dezelfde revisies en herstelbasis op. De herstelcheck
+  behoudt een bevestigde providerafwijking en het alarm bij een gedeeltelijk onvolledige lezing.
 - Een nieuw Hub-voorstel krijgt 422 als de naam ongeldig is of de openbare preview wijzigingen moet afschermen.
   De simulator controleert het aantal voorstelrijen en koppelt bij een geldig voorstel de zichtbare diff, verzoeken
   en het terugzetrecept aan de opgeslagen previewhash.

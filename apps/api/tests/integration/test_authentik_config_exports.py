@@ -121,7 +121,7 @@ def test_oude_lege_redirectlijst_is_geen_bewijs_voor_een_herstelbasis(
 
 
 @pytest.mark.parametrize("volledig", [True, False])
-def test_herhaling_bevestigt_een_verwijderde_export_niet_opnieuw(
+def test_herhaling_geeft_het_oorspronkelijke_antwoord_ook_na_opruiming(
     paired_client: Any, auth: Any, authentik_fake: AuthentikFake, volledig: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, admin = paired_client, auth("admin")
@@ -142,9 +142,7 @@ def test_herhaling_bevestigt_een_verwijderde_export_niet_opnieuw(
     assert client.get(f"{EXPORTS}/{gemaakt['id']}", headers=admin).status_code == 404
     replay = client.post(EXPORTS, headers=idem(admin, key=sleutel))
     assert replay.status_code == 201 and replay.headers["Idempotent-Replay"] == "true"
-    assert replay.json()["complete"] is False and replay.json()["available"] is False
-    for veld in ("id", "evidence_id", "content_sha256"):
-        assert replay.json()[veld] == gemaakt[veld]
+    assert replay.json() == gemaakt
     assert _outbox(client) == events
     with client.app.state.db.sessions() as session:
         assert session.scalar(select(func.count()).select_from(SsoAuthentikSnapshot)) == 1
@@ -290,6 +288,67 @@ def _zet_bron(client: Any, admin: Any, **velden: Any) -> None:
     huidig = client.get(SOURCE, headers=admin).json()["runtime"]
     antwoord = client.put(SOURCE, json=velden, headers=idem(admin, **{"If-Match": huidig["etag"]}))
     assert antwoord.status_code == 200
+
+
+def test_opruimen_begrenst_exports_van_vervallen_koppelrevisies(
+    paired_client: Any, auth: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    adres = client.get(SOURCE, headers=admin).json()["runtime"]["base_url"]
+    monkeypatch.setitem(authaudit.KEEP_SNAPSHOTS, "config_export", 3)
+    exports = []
+    for _ in range(5):
+        _zet_bron(client, admin, base_url=adres, enabled=True)
+        gemaakt = _export(client, admin)
+        assert gemaakt["complete"]
+        exports.append(uuid.UUID(gemaakt["id"]))
+
+    with client.app.state.db.sessions() as session:
+        authaudit.purge_old_events(session)
+        session.commit()
+        bewaard = set(
+            session.scalars(select(SsoAuthentikSnapshot.id).where(SsoAuthentikSnapshot.kind == "config_export"))
+        )
+    assert bewaard == set(exports[-3:])
+    assert _export_check(client, admin)["detail"]["export_id"] == str(exports[-1])
+
+
+@pytest.mark.parametrize("onvolledig", ["ander", "zelfde", "dubbel"])
+def test_herstelcheck_onderscheidt_bevestigde_en_onbekende_providervelden(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, onvolledig: str
+) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    authentik_fake.add_hub_app()
+    export = _export(client, admin)
+    assert export["complete"]
+    immich, hub = authentik_fake.providers
+    hub["client_id"] = "gewijzigde-testclient"
+    if onvolledig == "ander":
+        immich.pop("authorization_flow")
+    elif onvolledig == "zelfde":
+        hub.pop("redirect_uris")
+    else:
+        authentik_fake.providers.append({**hub, "client_id": "dubbele-testclient"})
+
+    antwoord = client.post(f"{BASE}/authentik/restore-check", json={"export_id": export["id"]}, headers=idem(admin))
+    assert antwoord.status_code == 200
+    data = antwoord.json()
+    providers = next(check for check in data["checks"] if check["name"] == "providers")
+    with client.app.state.db.sessions() as session:
+        alarmen = session.scalar(
+            select(func.count()).select_from(SsoAnomaly).where(SsoAnomaly.rule_id == "herstel_afwijking")
+        )
+    if onvolledig == "dubbel":
+        assert data["outcome"] == providers["status"] == "onbekend"
+        assert alarmen == 0
+    else:
+        assert data["outcome"] == providers["status"] == "afwijking"
+        assert providers["detail"]["missing"] == []
+        assert providers["detail"]["changed"] == [{"key": "Hub", "fields": ["client_id"]}]
+        assert alarmen == 1
+    assert not authentik_fake.writes
 
 
 def test_oude_koppeling_komt_niet_terug_na_verwijderen_en_opnieuw_instellen(paired_client: Any, auth: Any) -> None:

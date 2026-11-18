@@ -761,13 +761,7 @@ def create_config_export(
         )
         return 201, meta, {}
 
-    def present_replay(saved: dict[str, Any]) -> dict[str, Any]:
-        row = session.get(SsoAuthentikSnapshot, uuid.UUID(saved["id"]))
-        if row is None or row.kind != "config_export":
-            return {**saved, "complete": False, "available": False}
-        return {**saved, **backup.export_meta(row), "available": True}
-
-    return run_idempotent(request, session, principal, key, {"export": True}, action, present_replay=present_replay)
+    return run_idempotent(request, session, principal, key, {"export": True}, action)
 
 
 @router.get("/authentik/config-exports", summary="Configuratie-exports (alleen metadata)")

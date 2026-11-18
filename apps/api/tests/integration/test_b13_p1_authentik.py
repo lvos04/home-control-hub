@@ -354,7 +354,8 @@ def test_oude_providergegevens_worden_veilig_gelezen(
     assert replay.headers["Idempotent-Replay"] == "true" and markering not in replay.text
     assert replay.json()["preview_hash"] == voorstel.json()["preview_hash"]
     replay = c.post(f"{BASE}/authentik/config-exports", headers=idem(h, key=export_key))
-    assert replay.headers["Idempotent-Replay"] == "true" and replay.json()["complete"] is False
+    assert replay.status_code == 201 and replay.headers["Idempotent-Replay"] == "true"
+    assert replay.json() == export.json() and markering not in replay.text
     gate = c.post(f"{BASE}/authentik/upgrade-gate", json={"target_version": "2026.8.5"}, headers=idem(h)).json()
     assert next(ch["status"] for ch in gate["checks"] if ch["name"] == "configuratie_export") == "fout"
     herstel = c.post(f"{BASE}/authentik/restore-check", json={"export_id": eid}, headers=idem(h))

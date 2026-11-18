@@ -30,10 +30,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from ... import audit, events
-from ...models import ServiceState
+from ...models import IntegrationSource, ServiceState
 from ...timeutil import ensure_aware, iso, utcnow
 from .authentik import compat
-from .authentik.client import AuthentikClient, AuthentikError
+from .authentik.client import SOURCE_ID, AuthentikClient, AuthentikError
 from .authentik.reader import read_state, read_version
 from .catalog import APP_BY_ID
 from .config_exports import export_content, export_is_complete
@@ -196,25 +196,34 @@ def ingest(session: Session, raw_events: list[dict[str, Any]]) -> list[SsoAuthEv
 KEEP_SNAPSHOTS = {"rechten": 100, "config_export": 30}
 
 
-def _usable_snapshot_ids(session: Session, kind: str = "config_export") -> list[uuid.UUID]:
-    """De nieuwste volledige momentopname per versie en per Authentik-bron: de upgradegate kiest daaruit, dus mag
-    het onderhoud er geen verwijderen, ook niet als er daarna veel nieuwere (onvolledige of andere) rijen kwamen."""
+def _usable_snapshot_ids(session: Session) -> list[uuid.UUID]:
+    """Bescherm per versie de laatste bruikbare export van de huidige koppeling."""
+    source = session.scalar(
+        select(IntegrationSource.link_revision)
+        .where(IntegrationSource.source_id == SOURCE_ID, IntegrationSource.enabled)
+        .with_for_update(read=True)
+    )
+    if source is None:
+        return []
     stmt = (
         select(SsoAuthentikSnapshot)
-        .where(SsoAuthentikSnapshot.kind == kind, SsoAuthentikSnapshot.complete)
+        .where(
+            SsoAuthentikSnapshot.kind == "config_export",
+            SsoAuthentikSnapshot.complete,
+            SsoAuthentikSnapshot.content["source"].as_string() == source,
+        )
         .order_by(SsoAuthentikSnapshot.taken_at.desc(), SsoAuthentikSnapshot.id.desc())
     )
-    newest: dict[tuple[str | None, Any], uuid.UUID] = {}
+    newest: dict[str | None, uuid.UUID] = {}
     with session.scalars(stmt.execution_options(yield_per=1)) as rows:
         for row in rows:
-            if not export_is_complete(row):
-                continue
-            newest.setdefault((row.authentik_version, export_content(row).get("source")), row.id)
+            if row.authentik_version not in newest and export_is_complete(row):
+                newest[row.authentik_version] = row.id
     return list(newest.values())
 
 
 def purge_old_events(session: Session) -> int:
-    """Bewaartermijnen: events 30 dagen; van elke momentopname-soort alleen de nieuwste N (altijd ≥ 1 volledige)."""
+    """Bewaar events 30 dagen en momentopnamen tot hun bewaarlimiet, plus de bruikbare herstelbasis."""
     from sqlalchemy import delete
 
     res = session.execute(delete(SsoAuthEvent).where(SsoAuthEvent.created < utcnow() - RETENTION))
@@ -229,9 +238,9 @@ def purge_old_events(session: Session) -> int:
         stmt = delete(SsoAuthentikSnapshot).where(
             SsoAuthentikSnapshot.kind == kind, SsoAuthentikSnapshot.id.not_in(keep_ids)
         )
-        # Alleen configuratie-exports worden per versie en bron beschermd; van de rechtenkaarten blijft de nieuwste.
+        # Exports van vervallen koppelingen tellen alleen mee voor de gewone bewaarlimiet.
         if kind == "config_export":
-            protected = _usable_snapshot_ids(session, kind)
+            protected = _usable_snapshot_ids(session)
         else:
             newest = latest_snapshot(session, kind)
             protected = [newest.id] if newest is not None else []
