@@ -346,6 +346,9 @@ def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, sessi
         if b is None or a is None:
             checks.append(_check(name, "onbekend", f"Onderdeel '{part}' ontbreekt in de export of nu.", part=part))
             return
+        if part == "providers" and any(row.get("onvolledige_velden") for row in (*b, *a)):
+            checks.append(_check(name, "onbekend", "Providergegevens zijn onvolledig."))
+            return
         amap = {str(x.get(key)): x for x in a}
         missing, changed = [], []
         for x in b:

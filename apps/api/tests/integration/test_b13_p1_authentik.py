@@ -209,6 +209,59 @@ def test_hub_client_check_is_read_only(paired_client: Any, auth: Any, authentik_
     assert c.get(f"{BASE}/oidc/hub/check", headers=auth("viewer")).status_code == 403
 
 
+def test_een_onvolledige_redirect_blijft_zichtbaar(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake
+) -> None:
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    authentik_fake.add_hub_app("hub", redirect=REDIRECT)
+    authentik_fake.providers[-1]["redirect_uris"].append({"matching_mode": "strict"})
+    response = c.get(f"{BASE}/oidc/hub/check", params={"slug": "hub", "redirect_uri": [REDIRECT]}, headers=h)
+    assert response.status_code == 200
+    checks = {item["name"]: item for item in response.json()["checks"]}
+    assert checks["redirect_uris"]["status"] == "afwijking"
+    assert checks["redirect_uris"]["detail"]["count"] == 2
+    assert checks["redirect_uris_verwacht"]["status"] == "afwijking"
+
+
+def test_providerwaarden_komen_niet_in_voorstel_of_export(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, caplog: pytest.LogCaptureFixture
+) -> None:
+    from tests.integration.test_review_p1 import _all_rows_text
+    from tests.unit.test_authentik_execution_transport import _controleer_opvang
+
+    c, h = paired_client, auth("admin")
+    caplog.set_level("INFO")
+    _source(c, h)
+    _hub_mappings(c, h)
+    authentik_fake.add_hub_app("hub", redirect=REDIRECT)
+    provider = authentik_fake.providers[-1]
+    provider["name"] = "Hub (OIDC)"
+    assert _propose(c, h).status_code == 201
+    provider["client_type"] = "ongeldige-keuze"
+    provider["grant_types"] = ["authorization_code", CLIENT_SECRET]
+    provider["property_mappings"].append(CLIENT_SECRET)
+    provider["redirect_uris"].append({"matching_mode": "strict", "url": f"https://voorbeeld.invalid/{CLIENT_SECRET}"})
+    authentik_fake.providers[0]["name"] = CLIENT_SECRET
+
+    voorstel = _propose(c, h)
+    assert voorstel.status_code == 422
+    assert {item["code"] for item in voorstel.json()["details"]["blockers"]} == {"providergegevens_onvolledig"}
+    export = c.post(f"{BASE}/authentik/config-exports", headers=idem(h))
+    assert export.status_code == 201
+    assert export.json()["complete"] is False
+    inhoud = c.get(f"{BASE}/authentik/config-exports/{export.json()['id']}", headers=h)
+    assert inhoud.status_code == 200
+    rows = _all_rows_text(c)
+    assert all(rows[table] for table in ("sso_proposal", "sso_authentik_snapshot", "audit_event", "outbox_event"))
+    for response in (voorstel, export, inhoud):
+        _controleer_opvang(response.text, CLIENT_SECRET, DEFAULT_TOKEN)
+        _controleer_opvang(str(response.headers.multi_items()), CLIENT_SECRET, DEFAULT_TOKEN)
+    for table in ("sso_proposal", "sso_authentik_snapshot", "audit_event", "outbox_event"):
+        _controleer_opvang(rows[table], CLIENT_SECRET, DEFAULT_TOKEN)
+    _controleer_opvang(caplog.text, CLIENT_SECRET, DEFAULT_TOKEN)
+
+
 def test_sessions_revoke_proposal(paired_client: Any, auth: Any, authentik_fake: AuthentikFake) -> None:
     c, h = paired_client, auth("admin")
     _source(c, h)

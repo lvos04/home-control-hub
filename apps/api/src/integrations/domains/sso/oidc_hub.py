@@ -177,6 +177,9 @@ def build_hub_oidc_plan(
     scopes = state.parts["scope_mappings"]
     keys = state.parts["signing_keys"]
     providers = state.parts["providers"]
+    if any(provider.get("onvolledige_velden") for provider in providers):
+        _block(plan, "providergegevens_onvolledig", "Authentik gaf onvolledige of onverwachte providergegevens.")
+        return plan
     apps = state.parts["applications"]
     groups = {g["name"]: g for g in state.parts["groups"]}
 
@@ -475,7 +478,10 @@ def check_hub_client(
     if prov is None:
         add("provider", "afwijking", "De applicatie heeft geen OAuth2/OIDC-provider.")
         return {"slug": slug, "outcome": "afwijking", "checks": checks}
-    add("provider", "ok", "OAuth2/OIDC-provider gekoppeld.", name=prov.get("name"))
+    if prov.get("onvolledige_velden"):
+        add("provider", "onbekend", "OAuth2/OIDC-provider gekoppeld, met onvolledige gegevens.")
+    else:
+        add("provider", "ok", "OAuth2/OIDC-provider gekoppeld.", name=prov.get("name"))
     add(
         "client_type",
         "ok" if prov.get("client_type") == "confidential" else "afwijking",

@@ -38,6 +38,7 @@ REASONS_NL = {
     "https_verplicht": "Voor uitvoering is een HTTPS-verbinding met Authentik verplicht.",
     "tls_ongeverifieerd": "Het TLS-certificaat of de servernaam van Authentik kon niet worden geverifieerd.",
     "authentik_doel_ongeldig": "Het Authentik-doel past niet bij de vooraf bevestigde instantie, provider en client.",
+    "authentik_binding_onbevestigd": "De actuele Authentik-provider kon niet veilig aan de client worden gebonden.",
     "ongeldig_adres": "Het adres van Authentik is ongeldig.",
     "onbereikbaar": "Authentik is niet bereikbaar.",
     "timeout": "Authentik antwoordde niet op tijd.",

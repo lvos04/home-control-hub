@@ -393,9 +393,9 @@
   "id": "C1.3-HCH-15",
   "status": "Bezig",
   "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
-  "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py::test_sso_apply_verifies_but_stays_closed; apps/api/tests/integration/test_migratie_0005_gevuld.py::test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006",
-  "blokkade": "Uitvoering en automatische geheimoverdracht wachten op ADR-0033 O1/O2 en gezamenlijke ketenproeven. De catalogusroute is nog niet vastgelegd. D17 staat open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
-  "opmerking": "Voorbereiding: verificatie van ondertekende SSO-verzoeken, omkeerbare behoudende migratie, verplichte geverifieerde HTTPS met doelbinding en filtering van providerantwoorden. Na verificatie blijft apply 501. De catalogusversie blijft onbekend.",
+  "bewijs": "docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py; apps/api/tests/integration/test_migratie_0005_gevuld.py",
+  "blokkade": "Uitvoering wacht op een vertrouwde bron voor actuele provider-/clientbinding, actueel beleid en ketenproeven. Geheimoverdracht wacht op ADR-0033 O1/O2. De catalogusroute en D17 staan open. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
+  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Gebonden TLS, providerfiltering en lekcontrole in lokale proeven. Bestaande schema- en rijgegevens behouden, met SHA-256-controle voor terugzetten. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-18"
  },

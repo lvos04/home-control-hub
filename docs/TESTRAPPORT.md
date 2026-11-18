@@ -562,18 +562,20 @@ schermlezer en telefoon.
 
 ## S-P2-330 — Voorbereiding Authentik-uitvoering
 
-- De connector controleert een Authentik-uitvoeringsverzoek met de gepinde policy-sleutels en toetst de geldigheidsduur,
-  het parameterschema, de lokale minimumrisicoklasse en de binding van de goedkeuring aan het opgeslagen voorstel.
-  De policy-hash moet overeenkomen tussen verzoek en goedkeuring. De controle leest uitsluitend lokale gegevens.
-  Een geldig verzoek krijgt `501 capability_unavailable` met reden `nog_niet_toepasbaar`. De weigering claimt geen
-  uitvoeringsnonce en schrijft geen idempotentieantwoord. De gewone JWT-hergebruikcontrole blijft van kracht.
-- De transportadapter koppelt de bron en het gevraagde doel aan de vooraf bevestigde HTTPS-instantie, provider en
-  client. Hij haalt het beheercredential pas na de TLS-handshake op, gebruikt diezelfde verbinding voor de vaste
-  providerroute en volgt geen redirects. Het antwoord gaat door `clean_provider`. De adapter is afzonderlijk
-  beproefd met nep-Authentik en heeft alleen teruglezen als methode. De connector roept hem nog niet aan.
-- Migratie `0006_sso_apply_status.py` vervangt de oude databasevoorwaarde. De enige toegestane uitvoerstand in dit
-  deel is `nog_niet_toepasbaar`. De gevulde controle vergelijkt de bestaande gegevens bij omhoog, terug en opnieuw
-  omhoog, inclusief beide soorten SSO-voorstel, de lokale noodtoegang en kluisrijen.
+- De connector controleert de handtekening, geldigheid, parameters en binding aan het opgeslagen voorstel. Hij
+  draagt de effectieve risicoklasse over aan de goedkeuringscontrole, leest beide nonce-sleutels en eist alleen voor
+  registratie een bevestigd herstelpunt. Een geldig verzoek krijgt `501 capability_unavailable` met reden
+  `nog_niet_toepasbaar`, zonder claims in het uitvoeringsregister. De JWT-hergebruikcontrole blijft van kracht.
+- De simulator beproeft de vaste providerroute op geverifieerde HTTPS met een bevestigd IP-adres en
+  certificaatvingerafdruk. De adapter controleert op dezelfde verbinding eerst de route zonder beheercredential en
+  vraagt een onafhankelijke, actuele provider-/clientbinding. Zonder zo'n controle blijft de lezing gesloten.
+  TLS-sleutelregistratie staat uit. De leesfilter markeert onvolledige providergegevens. Een onvolledige redirect
+  blijft meetellen als afwijking en onvolledige providergegevens blokkeren het voorstel. De proeven toetsen ook
+  gevulde succes- en foutopvang, export, audit en events.
+- Migratie `0006_sso_apply_status.py` behoudt de bestaande databasevoorwaarde. Revisie 0007 herstelt die voorwaarde
+  op databases die de eerdere 0006 al uitvoerden. De gevulde proef vergelijkt rijen en constraintdefinities bij
+  omhoog, terug en opnieuw omhoog. De back-up krijgt vóór de migratie een SHA-256-bestand. De terugzetproef weigert
+  een gewijzigde archiefkopie en vergelijkt de rijen uit de geverifieerde dump met die van vóór de upgrade.
 - De cataloguscontrole blijft onbekend tot het contract de Hub-route vastlegt. De upgrade blijft geblokkeerd.
   Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,
   toetsing aan het actuele beleid, live precondities en de gezamenlijke vervolgproeven. Echte Authentik en NAS blijven

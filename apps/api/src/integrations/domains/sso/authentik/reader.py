@@ -7,11 +7,15 @@ time-out, te veel pagina's), dan staat het in ``missing`` en is de toestand ``co
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote_from_bytes, unquote, urlsplit
 
+from ....redact import redact_text
 from ....timeutil import iso, utcnow
 from . import compat
 from .client import AuthentikClient, AuthentikError
@@ -48,6 +52,26 @@ PART_PATHS = {
     "outposts": ("/outposts/instances/", {}),
 }
 
+PROVIDER_CHOICES = {
+    "client_type": {"confidential", "public"},
+    "sub_mode": {"hashed_user_id", "user_id", "user_uuid", "user_username", "user_email", "user_upn"},
+    "issuer_mode": {"global", "per_provider"},
+}
+GRANT_TYPES = {
+    "authorization_code",
+    "client_credentials",
+    "refresh_token",
+    "implicit",
+    "hybrid",
+    "password",
+    "urn:ietf:params:oauth:grant-type:device_code",
+    "urn:ietf:params:oauth:grant-type:token-exchange",
+}
+UUID_TEXT = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+DURATION = re.compile(r"(?:(?:weeks|days|hours|minutes|seconds|milliseconds|microseconds)=[0-9]+[,; ]*)+")
+SLUG = re.compile(r"[a-zA-Z0-9_-]+")
+AUTH_HEADER = re.compile(r"(?i)\bauthorization\s*:|\bbasic\s+[A-Za-z0-9+/]{8,}={0,2}\b")
+
 
 def _s(value: Any) -> Any:
     """Korte, veilige scalaire waarde (strings ingekort)."""
@@ -67,46 +91,138 @@ def sha256_text(value: str) -> str:
 
 
 # ------------------------------------------------------------------ whitelists per objectsoort
+def _protected_provider_values(p: dict[str, Any]) -> set[str]:
+    secret = p.get("client_secret")
+    if not isinstance(secret, str) or not secret:
+        return set()
+    raw = secret.encode("utf-8", errors="surrogatepass")
+    return {
+        secret,
+        quote_from_bytes(raw, safe=""),
+        raw.hex(),
+        hashlib.sha256(raw).hexdigest(),
+        base64.b64encode(raw).decode("ascii"),
+        json.dumps(secret)[1:-1],
+    }
+
+
+def _plain_provider_text(value: Any, protected: set[str]) -> bool:
+    if not isinstance(value, str) or len(value) > MAX_STR or not value.isprintable():
+        return False
+    decoded = unquote(value)
+    return (
+        redact_text(decoded) == decoded
+        and AUTH_HEADER.search(decoded) is None
+        and not any(secret in value or secret in decoded for secret in protected)
+    )
+
+
+def _safe_redirect(value: str) -> bool:
+    try:
+        url = urlsplit(value)
+        return (
+            url.scheme in {"https", "http"}
+            and url.hostname is not None
+            and url.port != 0
+            and url.username is None
+            and url.password is None
+            and not url.fragment
+            and "\\" not in value
+            and not any(char.isspace() for char in value)
+        )
+    except ValueError:
+        return False
+
+
 def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
-    # Onverwachte objecten niet naar tekst omzetten: die kunnen onbekende of geheime velden bevatten.
-    scalars = {k: v for k, v in p.items() if v is None or isinstance(v, str | int | bool)}
-    out = _pick(
-        scalars,
-        (
-            "pk",
-            "name",
-            "client_id",
-            "client_type",
-            "authorization_flow",
-            "invalidation_flow",
-            "signing_key",
-            "sub_mode",
-            "issuer_mode",
-            "include_claims_in_id_token",
-            "access_code_validity",
-            "access_token_validity",
-            "assigned_application_slug",
-        ),
-    )
+    protected = _protected_provider_values(p)
+    out: dict[str, Any] = {}
+    invalid: set[str] = set()
+    for key in ("name", "client_id", "assigned_application_slug"):
+        if key in p:
+            value = p[key]
+            if (key == "assigned_application_slug" and value in (None, "")) or (
+                _plain_provider_text(value, protected) and (key != "assigned_application_slug" or SLUG.fullmatch(value))
+            ):
+                out[key] = value
+            else:
+                invalid.add(key)
+    for key, allowed in PROVIDER_CHOICES.items():
+        if key in p:
+            value = p[key]
+            if isinstance(value, str) and value in allowed and _plain_provider_text(value, protected):
+                out[key] = value
+            else:
+                invalid.add(key)
+    for key in (
+        "authorization_flow",
+        "invalidation_flow",
+        "signing_key",
+        "access_code_validity",
+        "access_token_validity",
+    ):
+        if key in p:
+            value = p[key]
+            allows_null = key in ("authorization_flow", "invalidation_flow", "signing_key")
+            pattern = UUID_TEXT if allows_null else DURATION
+            if (value is None and allows_null) or (_plain_provider_text(value, protected) and pattern.fullmatch(value)):
+                out[key] = value
+            else:
+                invalid.add(key)
+    for key, expected in (("pk", int), ("include_claims_in_id_token", bool)):
+        if key in p:
+            if type(p[key]) is expected and (key != "pk" or p[key] > 0):
+                out[key] = p[key]
+            else:
+                invalid.add(key)
+
     uris = p.get("redirect_uris")
-    out["redirect_uris"] = (
-        [
-            {"matching_mode": _s(u.get("matching_mode")), "url": _s(u.get("url"))}
-            for u in uris
-            if isinstance(u, dict)
-            and isinstance(u.get("matching_mode"), str)
-            and isinstance(u.get("url"), str)
-            and u.get("redirect_uri_type", "authorization") == "authorization"
-        ]
-        if isinstance(uris, list)
-        else []
-    )
-    mappings = p.get("property_mappings")
-    out["property_mappings"] = (
-        sorted(str(x) for x in mappings if type(x) in (str, int)) if isinstance(mappings, list) else []
-    )
-    if isinstance(p.get("grant_types"), list):
-        out["grant_types"] = sorted(x for x in p["grant_types"] if isinstance(x, str))
+    out["redirect_uris"] = redirects = []
+    if isinstance(uris, list):
+        for uri in uris:
+            if isinstance(uri, dict):
+                kind = uri.get("redirect_uri_type", "authorization")
+                mode, url = uri.get("matching_mode"), uri.get("url")
+                if kind == "logout":
+                    continue
+                if (
+                    kind == "authorization"
+                    and mode == "strict"
+                    and isinstance(url, str)
+                    and _plain_provider_text(url, protected)
+                    and _safe_redirect(url)
+                ):
+                    redirects.append({"matching_mode": "strict", "url": url})
+                    continue
+            # Houd het aantal zichtbaar zonder onverwachte of reguliere expressiewaarden over te nemen.
+            invalid.add("redirect_uris")
+            redirects.append({"matching_mode": "onbekend", "url": ""})
+    elif "redirect_uris" in p:
+        invalid.add("redirect_uris")
+
+    for key in ("property_mappings", "grant_types"):
+        if key not in p:
+            continue
+        values = p[key]
+        if not isinstance(values, list):
+            invalid.add(key)
+            continue
+        kept = []
+        for value in values:
+            if key == "property_mappings" and type(value) is int and value > 0:
+                value = str(value)
+            if _plain_provider_text(value, protected) and (
+                (UUID_TEXT.fullmatch(value) or re.fullmatch(r"[1-9][0-9]*", value))
+                if key == "property_mappings"
+                else value in GRANT_TYPES
+            ):
+                kept.append(value)
+            else:
+                invalid.add(key)
+        out[key] = sorted(kept)
+    out.setdefault("property_mappings", [])
+    if invalid:
+        out["onvolledige_velden"] = sorted(invalid)
     return out
 
 
@@ -361,6 +477,8 @@ def read_state(
             state.missing.append({"part": part, "reason": exc.reason, "http_status": exc.http_status})
             continue
         state.parts[part] = [CLEANERS[part](r) for r in rows]
+        if part == "providers" and any(row.get("onvolledige_velden") for row in state.parts[part]):
+            state.missing.append({"part": part, "reason": "providergegevens_onvolledig"})
         if not complete:
             state.missing.append({"part": part, "reason": "te_veel_paginas"})
     return state
