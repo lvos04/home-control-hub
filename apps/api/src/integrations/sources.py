@@ -239,6 +239,7 @@ def put_source(
         else:
             check_if_match(row.version, match)
             row.version += 1
+        row.link_revision = str(uuid.uuid4())  # elke put maakt eerder bewijs van deze koppeling ongeldig
         changed_url = row.base_url != base_url
         row.base_url = base_url
         row.enabled = body.enabled

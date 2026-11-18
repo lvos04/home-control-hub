@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .... import __version__
@@ -83,7 +84,10 @@ class AuthentikClient:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         max_bytes: int = MAX_BYTES,
+        link_revision: str | None = None,
     ) -> None:
+        #: revisie van de koppeling waaruit adres en token komen; bewijs dat via deze client is gelezen hoort daarbij
+        self.link_revision = link_revision
         self.base_url = base_url.rstrip("/")
         self._token = token
         self.settings = settings
@@ -219,7 +223,11 @@ def client_from_source(
     session: Session, settings: Settings, vault: Vault, transport: httpx.BaseTransport | None
 ) -> AuthentikClient:
     """Bouwt een client uit de bronconfiguratie (adres + token in de vault). Fail-closed bij ontbrekende delen."""
-    row = session.get(IntegrationSource, SOURCE_ID)
+    # Eén vergrendelende lezing van de bronrij: een gelijktijdige put_source wacht tot deze transactie klaar is, dus
+    # adres, token en revisie horen bij dezelfde koppeling.
+    row = session.scalar(
+        select(IntegrationSource).where(IntegrationSource.source_id == SOURCE_ID).with_for_update(read=True)
+    )
     if row is None or not row.base_url:
         raise AuthentikError("niet_geconfigureerd")
     if not row.enabled:
@@ -233,4 +241,4 @@ def client_from_source(
     token = vault.get(session, row.credential_ref)
     if not token:
         raise AuthentikError("geen_token")
-    return AuthentikClient(base, token, settings, transport=transport)
+    return AuthentikClient(base, token, settings, transport=transport, link_revision=row.link_revision)

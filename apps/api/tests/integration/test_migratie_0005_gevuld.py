@@ -505,7 +505,9 @@ def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: S
             else:
                 upgrade(settings, revision)
             assert _revision(eng) == revision
-            assert _columns(eng) == columns
+            # 0008 voegt alleen de koppelrevisie toe aan integration_source; de rest blijft gelijk
+            nieuw = {**columns, "integration_source": [*columns["integration_source"], "link_revision"]}
+            assert _columns(eng) == (nieuw if revision == head_revision(settings) else columns)
             assert _differences(before, _measure(eng, columns)) == []
             checks = _constraints(eng)
             if revision == "0005":

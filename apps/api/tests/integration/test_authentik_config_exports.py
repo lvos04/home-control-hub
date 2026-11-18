@@ -284,3 +284,42 @@ def test_opruimen_houdt_de_nieuwste_rechtenkaarten(
         session.commit()
         bewaard = set(session.scalars(select(SsoAuthentikSnapshot.id).where(SsoAuthentikSnapshot.kind == "rechten")))
     assert bewaard == set(ids[1:])
+
+
+def _zet_bron(client: Any, admin: Any, **velden: Any) -> None:
+    huidig = client.get(SOURCE, headers=admin).json()["runtime"]
+    antwoord = client.put(SOURCE, json=velden, headers=idem(admin, **{"If-Match": huidig["etag"]}))
+    assert antwoord.status_code == 200
+
+
+def test_oude_koppeling_komt_niet_terug_na_verwijderen_en_opnieuw_instellen(paired_client: Any, auth: Any) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    adres = client.get(SOURCE, headers=admin).json()["runtime"]["base_url"]
+    export = _export(client, admin)
+    assert _export_check(client, admin)["detail"]["export_id"] == export["id"]
+    _zet_bron(client, admin, base_url=None, enabled=False)  # de kluisrij blijft behouden
+    _zet_bron(client, admin, base_url=adres, enabled=True)
+    controle = _export_check(client, admin)
+    assert controle["status"] == "fout" and controle["detail"]["export_id"] is None
+    nieuw = _export(client, admin)
+    assert _export_check(client, admin)["detail"]["export_id"] == nieuw["id"]
+
+
+def test_export_krijgt_de_revisie_van_de_client_ook_als_de_bron_daarna_wijzigt(paired_client: Any, auth: Any) -> None:
+    from integrations.domains.sso import backup
+    from integrations.domains.sso.authentik.client import client_from_source
+
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    state = client.app.state
+    with state.db.sessions() as session:
+        gelezen = client_from_source(session, state.settings, state.vault, state.http_transport)
+        session.commit()
+    adres = client.get(SOURCE, headers=admin).json()["runtime"]["base_url"]
+    _zet_bron(client, admin, base_url=adres, enabled=True)  # overlappende wijziging na de lezing van de client
+    with state.db.sessions() as session:
+        rij = backup.create_export(session, gelezen, ("service", "test"), str(uuid.uuid4()))
+        session.commit()
+        assert rij.content["source"] == gelezen.link_revision
+    assert _export_check(client, admin)["detail"]["export_id"] is None

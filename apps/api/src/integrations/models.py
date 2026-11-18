@@ -121,6 +121,9 @@ class IntegrationSource(Timestamps, Base):
     last_probe_detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: Willekeurige, niet-geheime revisie van de koppeling: nieuw bij elke wijziging van de bron en nooit hersteld.
+    #: Bewijs (zoals een Authentik-export) dat bij een oude revisie hoort, geldt niet voor de huidige koppeling.
+    link_revision: Mapped[str] = mapped_column(String(36), nullable=False, default=lambda: str(uuid.uuid4()))
 
     __table_args__ = (
         CheckConstraint("domain IN ('network','automation','sso','energy')", name="domain"),
