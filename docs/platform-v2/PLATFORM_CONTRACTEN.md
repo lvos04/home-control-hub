@@ -1005,11 +1005,50 @@ het token zonder herinstallatie roteren of intrekken (§3.8).
   | Scope | Routes | Diensten (v1) |
   |---|---|---|
   | `inventaris.lezen` | `GET /api/v1/apps`, `GET /api/v1/apps/{id}` (gepagineerd over een momentopname, §5) | appstore-en-fork, jelly-leon-platform |
-  | `catalogus.lezen` | nieuwe route voor catalogusbeschikbaarheid (P2): `{train, app, version}` → `{beschikbaar: ja \| nee \| onbekend, gemeten_op}`, gemeten met de alleen-lezen TrueNAS-sleutel; zonder meting `onbekend` | home-control-hub, jelly-leon-platform |
+  | `catalogus.lezen` | `GET /api/v1/catalog/availability` (M3) | home-control-hub, jelly-leon-platform |
   | `besluiten.lezen` | `GET /connector/v1/items?type=decision` van de Hub | standaard **geen**; alleen een dienst die een besluit aantoonbaar nodig heeft (lijst per besluittype, met ADR) |
 
   Andere connector-itemtypes van de Hub (zoals `backup.self`) zijn alleen voor gebruikers (`viewer`+), niet voor diensten,
   tot een scope is vastgelegd.
+
+#### Catalogusbeschikbaarheid (M3)
+
+**2026-11-18 · BESLOTEN door regisseur.** Het bestaande pad en antwoord van de planner en zijn simulator zijn bindend
+voor S-P2-050b. Bron op jelly-leon-platform `418c591c4518893b5fa6f00f554cb6a524a6b74b`:
+`apps/api/src/lifecycle/hubread.py:24–35,167–197,267–283` (pad, methode, velden en verwerking) en
+`e2e/simulators/hub/hub_p2.py:268–279,333–344` (scope, foutformaat en alle antwoordvelden).
+
+- **Verzoek.** `GET /api/v1/catalog/availability?train=<train>&app=<app>&version=<version>` vereist een geldig
+  Bearer-service-token van een actieve dienst met `catalogus.lezen`. Elke queryparameter is precies één keer verplicht.
+  `train` is `stable`, `community` of `enterprise`. `app` moet volledig passen op `[a-z0-9][a-z0-9-]{0,62}`.
+  `version` is maximaal 64 tekens en moet volledig passen op `v?[0-9]+\.[0-9]+\.[0-9]+([.+_-][0-9A-Za-z.+_-]+)?`.
+  De Hub vergelijkt de drie waarden exact. Een body, extra parameters, vrije filters, zoektekst en versiebereiken
+  zijn verboden.
+- **Antwoord.** HTTP 200 met precies vijf verplichte JSON-velden. `train`, `app` en `version` zijn de ongewijzigde
+  strings uit de query. `beschikbaar` is `ja`, `nee` of `onbekend`. `gemeten_op` is voor `ja` en `nee` het
+  ISO-8601-tijdstip in UTC (`…Z`) van de bronmeting. Bij `onbekend` is `gemeten_op` `null`, zoals bij de simulator.
+  Brondata, configuratie en geheimen blijven buiten het antwoord.
+- **Betekenis en versheid.** `ja` vereist gemeten aanwezigheid van de exacte combinatie. `nee` vereist een geslaagde
+  meting waarvan de dekking aantoonbaar volledig is voor de gevraagde trein, app en versie. Bij een ontbrekende,
+  onvolledige, mislukte of ongeldige meting, een ontbrekende meetcapability of bronuitval geeft de Hub `onbekend`.
+  Een meting van meer dan 900 s oud of meer dan 120 s in de toekomst levert ook `onbekend` op (§6.2 en de
+  plannergrenzen hierboven). Lezen of uit een cache antwoorden ververst het tijdstip nooit. Alleen een verse `nee`
+  leidt in de planner tot `version_unavailable`. De vastgezette versie wordt nooit vervangen door een andere versie.
+- **Meetgrenzen.** De Hub leest uit één eigen, begrensde catalogusmomentopname die hij op de achtergrond met een
+  vaste alleen-lezen TrueNAS-capability opbouwt. Per Hub is hoogstens één catalogusmeting tegelijk toegestaan en starten
+  twee metingen minstens 300 s uit elkaar. Eén meetpoging duurt hoogstens 15 s, verwerkt maximaal 8 MiB aan
+  bronantwoord en bewaart ten hoogste 50.000 versiecombinaties. Bij overschrijding telt de meting als onvolledig.
+  Elk leesverzoek veroorzaakt nul bronaanroepen en plant nul metingen in. Per geregistreerde dienst zijn hoogstens
+  60 aanroepen per voortschrijdende 60 s toegestaan, ongeacht het gebruikte token of de gevraagde combinatie.
+- **Fouten.** Het antwoord volgt §5 (`code`, `message`, `details`, `trace_id`). `401 unauthorized` geldt bij
+  ontbrekende of ongeldige dienstauthenticatie, ook bij een gebruikerssessie zonder geldig service-token (§4.7).
+  `403 scope_ontbreekt` geldt voor een geldige dienst zonder scope en trekt het token niet in.
+  `422 validation_error` met `details.fouten[]` geldt bij ongeldige of onverwachte invoer. `429 rate_limited` geeft
+  `Retry-After` in hele seconden. Als de Hub zijn eigen meetvoorraad tijdelijk niet kan uitlezen, geeft hij
+  `503 dependency_unavailable` met `Retry-After`. De planner behandelt `404 not_found` bij een ontbrekende route,
+  `405 method_not_allowed` bij een geweigerde methode en `501 capability_unavailable` bij een ontbrekende functie
+  als `capability_unavailable`, net als 403 met `scope_ontbreekt`. Een onzekere versie bij een werkende route krijgt
+  HTTP 200 met `onbekend`.
 
 ### 4.5 Sleutelpinning, vingerafdruk en rotatie
 
