@@ -570,7 +570,10 @@ def test_retention_of_events_and_snapshots(paired_client: Any, auth: Any, authen
         ("signatuur", 403, "forbidden"),
         ("verlopen", 403, "forbidden"),
         ("risico", 403, "forbidden"),
+        ("hogere_beleidsklasse", 409, "goedkeuring_past_niet"),
+        ("passende_r3_goedkeuring", 501, "capability_unavailable"),
         ("goedkeuring", 403, "forbidden"),
+        ("gebruikte_goedkeuring", 409, "goedkeuring_al_gebruikt"),
         ("backup", 409, "backup_checkpoint_ontbreekt"),
         ("doel", 409, "goedkeuring_past_niet"),
         ("etag", 409, "goedkeuring_past_niet"),
@@ -578,6 +581,7 @@ def test_retention_of_events_and_snapshots(paired_client: Any, auth: Any, authen
         ("beleid", 409, "goedkeuring_past_niet"),
         ("geheime_parameter", 422, "validation_error"),
         ("sessies", 501, "capability_unavailable"),
+        ("sessies_metadata", 501, "capability_unavailable"),
     ],
 )
 def test_sso_apply_verifies_but_stays_closed(
@@ -599,21 +603,29 @@ def test_sso_apply_verifies_but_stays_closed(
     _hub_mappings(c, h)
     authentik_fake.add_hub_app()
     authentik_fake.providers[-1]["name"] = "Hub (OIDC)"
-    if verschil == "sessies":
+    if verschil in {"sessies", "sessies_metadata"}:
         p = _propose(c, h, action_id="sso.sessions.revoke", parameters={"all_users": True})
     else:
         p = _propose(c, h)
     assert p.status_code == 201
     view = p.json()
     assert view["target"] and view["preview_hash"]
+    if verschil == "sessies_metadata":
+        assert view["requires_backup"] is False
+    elif verschil == "geldig":
+        assert view["requires_backup"] is True
     target, params = dict(view["target"]), dict(view["parameters"])
     kwargs: dict[str, Any] = {"approval_overrides": {"backup_checkpoint_id": str(uuid.uuid4())}}
-    if verschil == "backup":
+    if verschil in {"backup", "sessies"}:
         kwargs["approval_overrides"]["backup_checkpoint_id"] = None
     elif verschil == "goedkeuring":
         kwargs["approved_by"] = None
     elif verschil == "risico":
         kwargs["risk_class"] = "R1"
+    elif verschil in {"hogere_beleidsklasse", "passende_r3_goedkeuring"}:
+        kwargs["risk_class"] = "R3"
+        if verschil == "hogere_beleidsklasse":
+            kwargs["approval_overrides"]["risk_class"] = "R2"
     elif verschil == "doel":
         target["system"] = "ander"
     elif verschil == "beleid":
@@ -634,6 +646,24 @@ def test_sso_apply_verifies_but_stays_closed(
         del req["signature"]
     elif verschil == "signatuur":
         req["signature"] = ""
+    elif verschil == "gebruikte_goedkeuring":
+        from integrations.domains.automation.models import AutomationExecutionNonce
+
+        # Sleutelindeling van de al bestaande automatiseringsreplayregistratie.
+        namespace = uuid.UUID("6f0f3f5e-7a55-5b0a-9d0b-0f1c2d3e4f50")
+        key = uuid.uuid5(namespace, "approval:" + req["approval"]["one_time_nonce"])
+        now = datetime.now(UTC)
+        with c.app.state.db.sessions() as session:
+            session.add(
+                AutomationExecutionNonce(
+                    nonce=key,
+                    action_id="automation.flows.restore",
+                    request_sha256="0" * 64,
+                    used_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                )
+            )
+            session.commit()
     before = _all_rows_text(c)
     calls = list(authentik_fake.calls)
     r = c.post("/connector/v1/apply", json=req, headers=idem(h))

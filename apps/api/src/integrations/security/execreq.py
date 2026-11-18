@@ -25,6 +25,7 @@ import base64
 import hashlib
 import json
 import re
+import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,8 @@ MAX_APPROVAL_SECONDS = 15 * 60
 MAX_REQUEST_SECONDS = 15 * 60
 CLOCK_SKEW = 30
 RISK_CLASSES = ("R0", "R1", "R2", "R3")
+# Een goedkeuring staat onder een afgeleide sleutel in hetzelfde register als het uitvoeringsverzoek.
+_APPROVAL_NS = uuid.UUID("6f0f3f5e-7a55-5b0a-9d0b-0f1c2d3e4f50")
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SHA_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -305,6 +308,10 @@ def check_envelope(request: Any, keys: Iterable[Ed25519PublicKey], *, now: datet
         raise _forbidden("verzoek_geldigheid_ongeldig", "Een uitvoeringsverzoek is hooguit 15 minuten geldig.")
 
 
+def approval_replay_key(one_time_nonce: str) -> uuid.UUID:
+    return uuid.uuid5(_APPROVAL_NS, "approval:" + one_time_nonce)
+
+
 def check_approval(
     request: Mapping[str, Any], *, min_risk_class: str, preview_hash: str, requires_backup: bool, now: datetime
 ) -> Mapping[str, Any]:
@@ -312,7 +319,8 @@ def check_approval(
     preview en dit beleid hoort (EX19). Geeft de goedkeuring terug of gooit :class:`Refusal`."""
     prop = request["proposal"]
     besluit = request["policy_decision"]
-    if not class_at_least(str(besluit["risk_class"]), min_risk_class):
+    effective_risk_class = str(besluit["risk_class"])
+    if not class_at_least(effective_risk_class, min_risk_class):
         raise _forbidden(
             "risicoklasse_te_laag",
             "De risicoklasse in het verzoek is lager dan de eigen herberekening; er is niets uitgevoerd.",
@@ -337,7 +345,7 @@ def check_approval(
         "resource_etag": approval.get("resource_etag") == prop.get("expected_version"),
         "action_scope": approval.get("action_scope")
         == action_scope(str(prop["action_id"]), prop["target"], prop["parameters"]),
-        "risk_class": class_at_least(str(approval.get("risk_class")), min_risk_class),
+        "risk_class": class_at_least(str(approval.get("risk_class")), effective_risk_class),
         "preview_hash": approval.get("preview_hash") == preview_hash,
     }
     anders = sorted(k for k, ok in gebonden.items() if not ok)

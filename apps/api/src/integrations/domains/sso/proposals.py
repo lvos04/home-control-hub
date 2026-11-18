@@ -39,15 +39,20 @@ class ActionSpec:
     title_nl: str
     task_id: str
     risk_class: str
+    requires_backup: bool
     apply_status: str = "nog_niet_toepasbaar"
 
 
 ACTIONS: dict[str, ActionSpec] = {
     HUB_OIDC_ACTION: ActionSpec(
-        HUB_OIDC_ACTION, "OIDC-provider en -applicatie voor de Hub in Authentik", "B13-002", "R2"
+        HUB_OIDC_ACTION, "OIDC-provider en -applicatie voor de Hub in Authentik", "B13-002", "R2", requires_backup=True
     ),
     SESSIONS_ACTION: ActionSpec(
-        SESSIONS_ACTION, "Authentik-sessies intrekken (na herstel/upgrade of lek)", "B13-005", "R2"
+        SESSIONS_ACTION,
+        "Authentik-sessies intrekken (na herstel/upgrade of lek)",
+        "B13-005",
+        "R2",
+        requires_backup=False,
     ),
 }
 
@@ -114,6 +119,7 @@ def _plan_sessions(client: AuthentikClient, _session: Session, parameters: dict[
         },
         parameters={"usernames": sorted(usernames), "all_users": everyone},
         authentik_version=str(caps.version),
+        requires_backup=ACTIONS[SESSIONS_ACTION].requires_backup,
     )
     rows: list[dict[str, Any]] = []
     if everyone:
@@ -192,6 +198,7 @@ def _require_verified(caps: Any) -> None:
 # ------------------------------------------------------------------ opslag en weergave
 def proposal_view(p: SsoProposal) -> dict[str, Any]:
     preview = p.preview or {}
+    spec = ACTIONS.get(p.action_id)
     return {
         "proposal_id": str(p.id),
         "action_id": p.action_id,
@@ -204,7 +211,7 @@ def proposal_view(p: SsoProposal) -> dict[str, Any]:
         "blast_radius": preview.get("blast_radius", {}),
         "risk_claim": p.risk_claim,
         "rollback_recipe": preview.get("rollback_recipe", []),
-        "requires_backup": True,
+        "requires_backup": spec.requires_backup if spec is not None else True,
         "changes": preview.get("changes", 0),
         "warnings": preview.get("warnings", []),
         "notes_nl": preview.get("notes_nl", []),

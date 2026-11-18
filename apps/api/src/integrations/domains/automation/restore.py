@@ -72,8 +72,6 @@ TASK_ID = "B11-005"
 MIN_RISK_CLASS = "R2"
 PROPOSAL_TTL = timedelta(minutes=15)
 TARGET: dict[str, str] = {"type": "source", "id": SOURCE_ID}
-#: een goedkeuring wordt onder een afgeleide sleutel in hetzelfde register bewaard als de nonce van het verzoek
-_APPROVAL_NS = uuid.UUID("6f0f3f5e-7a55-5b0a-9d0b-0f1c2d3e4f50")
 APPLY_STATUS = "vereist_execution_request"
 APPLY_STATUS_NL = (
     "Toepassen kan alleen met een door de Hub ondertekend uitvoeringsverzoek met een menselijke goedkeuring (R2)."
@@ -542,7 +540,7 @@ def apply(
             )
         )
     # 8: de goedkeuring is eenmalig
-    approval_nonce = uuid.uuid5(_APPROVAL_NS, "approval:" + str(approval["one_time_nonce"]))
+    approval_nonce = execreq.approval_replay_key(str(approval["one_time_nonce"]))
     approval_expires = execreq.parse_ts(approval["expires_at"]) or now
     if not _consume(session, approval_nonce, digest, approval_expires, now):
         return refused(

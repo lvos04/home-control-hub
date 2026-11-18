@@ -51,11 +51,18 @@ def verify(
     approval = body["approval"]
     preview_hash = approval["preview_hash"] if approval is not None else ""
     try:
-        execreq.check_approval(
-            body, min_risk_class=spec.risk_class, preview_hash=preview_hash, requires_backup=True, now=now
+        checked_approval = execreq.check_approval(
+            body,
+            min_risk_class=spec.risk_class,
+            preview_hash=preview_hash,
+            requires_backup=spec.requires_backup,
+            now=now,
         )
     except execreq.Refusal as exc:
         raise ApiError(exc.status, exc.code, exc.message, exc.details) from None
+    approval_nonce = execreq.approval_replay_key(str(checked_approval["one_time_nonce"]))
+    if session.get(AutomationExecutionNonce, approval_nonce) is not None:
+        raise ApiError(409, "goedkeuring_al_gebruikt", "Deze goedkeuring is al eerder gebruikt.")
 
     rows = session.scalars(
         select(SsoProposal)
