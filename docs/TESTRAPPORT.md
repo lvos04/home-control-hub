@@ -562,6 +562,10 @@ schermlezer en telefoon.
 
 ## S-P2-330 — Voorbereiding Authentik-uitvoering
 
+- De CI op commit `185d43fd64a4d51b1660f2508e56421c39b158b1` telde voor dit voorbereidende deel
+  1580 geslaagde API-tests en 20 dienst-E2E-tests. De Peil-test die een lokale checkout
+  vereist, is overgeslagen. De rendertoets tegen de gepinde referentie en de online Peil-vergelijking
+  zijn uitgevoerd. [GitHub Actions-ci-run 44362917348](https://github.com/lvos04/home-control-hub/actions/runs/44362917348)
 - De connector controleert de handtekening, geldigheid, parameters en binding aan het opgeslagen voorstel. Hij
   draagt de effectieve risicoklasse over aan de goedkeuringscontrole, leest beide nonce-sleutels en eist alleen voor
   registratie een bevestigd herstelpunt. Een geldig verzoek krijgt `501 capability_unavailable` met reden

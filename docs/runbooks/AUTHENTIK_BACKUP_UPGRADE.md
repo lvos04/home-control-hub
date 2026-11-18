@@ -1,7 +1,9 @@
 # Authentik: back-up, upgrade en herstelcontrole (B13-005)
 
-> **Verificatiestatus: NIET GEVALIDEERD (echte NAS/account).** Deze stappen zijn met een nep-Authentik getest
-> (Sim-getest). Geen terminal nodig; alles via de Hub-UI en de TrueNAS-web-UI.
+> **Verificatiestatus: NIET GEVALIDEERD (echte NAS/account).** De simulatorproeven dekken detectie,
+> configuratie-export, de controle op een door de Hub bevestigd back-upcheckpoint, de geblokkeerde upgradegate
+> en de herstelcontrole. De Authentik-upgrade, het databaseherstel en de stappen in de Hub-UI en TrueNAS-web-UI
+> moeten nog in de praktijk worden beproefd.
 
 Authentik wordt geïnstalleerd als **officiële TrueNAS-catalogusapp** (`authentik`, trein *community*). Laat de optie
 **Mount Docker Socket uit**. De echte back-up van Authentik is de **database** (in de datasets van die app); maak die
@@ -13,10 +15,13 @@ om na een herstel of upgrade te controleren of rechten, 2FA en clients weer klop
    schrijvende systeemrechten heeft. De uitkomst is hooguit `deels_gecontroleerd`: kijk in Authentik zelf na dat
    de rollen van het serviceaccount alleen `view`-rechten geven.
 2. **Configuratie-export maken**: moet *volledig* zijn (geen ontbrekende onderdelen).
-3. **Back-up van de Authentik-database** maken via het platform (de Hub bevestigt het checkpoint).
-4. **Pre-upgrade-gate** met de exacte doelversie (bv. de volgende release-lijn). Alleen doorgaan bij `ok_lokaal`
-   én akkoord van de Hub. Regels uit de officiële docs: **geen downgrade**, **geen release-lijn overslaan**, eerst de
-   nieuwste patch van je huidige lijn. Externe outposts moeten tegelijk mee.
+3. **Back-up van de Authentik-database** maken via het platform. De gate accepteert alleen een door de Hub
+   bevestigd back-upcheckpoint.
+4. **Pre-upgrade-gate** met de exacte stabiele doelversie. Deze versie geeft geen upgrade vrij.
+   Zolang de catalogusinterop met de Hub ontbreekt, blijft `catalogusversie` op `onbekend`. Daardoor blokkeert de
+   gate de upgrade ook bij een volledige, verse export, een bevestigd back-upcheckpoint en een geldige
+   registratie voor noodtoegang. De regels voor het upgradepad blijven gelden: **geen downgrade**,
+   **geen release-lijn overslaan**, eerst de nieuwste patch van je huidige lijn. Externe outposts moeten tegelijk mee.
 
 ## Een export hoort bij één koppeling
 Elke export legt een willekeurige *koppelrevisie* van de bron vast. Die revisie wordt nieuw bij elke wijziging van de
@@ -45,15 +50,17 @@ vóór de schemawijziging. De dump en de bijbehorende SHA-256 staan in de map va
 revisie `0008` om dezelfde koppelrevisie en herstelbasis terug te krijgen. Opnieuw upgraden maakt nieuwe koppelrevisies.
 
 ## Upgraden
-In de TrueNAS-web-UI: **Apps** → `authentik` → **Update** naar de versie uit de gate. Let op: catalogustreinen
-bieden vaak alleen de nieuwste versie aan; staat jouw doelversie er niet, upgrade dan niet "door" naar een verdere
-versie zonder nieuwe gate.
+Wacht met **Update** in de TrueNAS-web-UI totdat de catalogusinterop is getoetst en de gate de exacte doelversie
+vrijgeeft. Catalogustreinen bieden vaak alleen de nieuwste versie aan. Beoordeel een andere doelversie opnieuw
+met de gate.
 
 ## Na de upgrade of na een herstel
 1. **Herstelcontrole** tegen de export van vóór de upgrade: providers, applicaties, groepen + leden, superusers,
    sleutels, flows en de 2FA-apparaten van beheerders. Een betrouwbaar vastgestelde providerafwijking blijft
    zichtbaar met een herstelalarm als andere providergegevens onvolledig zijn.
 2. Bij **afwijking**: niet verder gaan. Herstel de database/snapshot van vóór de upgrade (downgraden van Authentik
-   kan niet). Overweeg daarna het voorstel **Sessies intrekken** (iedereen opnieuw inloggen).
-3. Werkt Authentik helemaal niet: gebruik de **noodtoegang** (lokaal noodaccount via LAN/VPN, zie
-   `NOODTOEGANG.md`); de Hub en deze dienst blijven bruikbaar zonder Authentik.
+   kan niet). **Sessies intrekken** is in deze versie alleen een voorstel.
+3. Als Authentik uitvalt, is het lokale noodaccount van de Hub bedoeld voor toegang **uitsluitend via LAN**.
+   De simulator toetst de registratie en de voorwaarden voor noodtoegang. De gevulde migratieproef controleert
+   het behoud van die registratie. De feitelijke noodlogin en de bronadrescontrole op de NAS moeten nog worden
+   beproefd. De afstemming van de netwerkinstellingen ligt bij de eigenaar van de noodlogin (ADR-0033 O3).
