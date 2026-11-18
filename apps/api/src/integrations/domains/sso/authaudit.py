@@ -36,6 +36,7 @@ from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
 from .authentik.reader import read_state, read_version
 from .catalog import APP_BY_ID
+from .config_exports import export_is_complete
 from .models import (
     SsoAdminAccount,
     SsoAnomaly,
@@ -205,7 +206,7 @@ def purge_old_events(session: Session) -> int:
         keep_ids = (
             select(SsoAuthentikSnapshot.id)
             .where(SsoAuthentikSnapshot.kind == kind)
-            .order_by(SsoAuthentikSnapshot.taken_at.desc())
+            .order_by(SsoAuthentikSnapshot.taken_at.desc(), SsoAuthentikSnapshot.id.desc())
             .limit(keep)
         )
         newest_complete = latest_snapshot(session, kind)
@@ -477,11 +478,26 @@ def diff_rights(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str,
     return changes
 
 
-def latest_snapshot(session: Session, kind: str, complete_only: bool = True) -> SsoAuthentikSnapshot | None:
+def latest_snapshot(
+    session: Session,
+    kind: str,
+    complete_only: bool = True,
+    *,
+    version: str | None = None,
+    taken_since: datetime | None = None,
+) -> SsoAuthentikSnapshot | None:
     stmt = select(SsoAuthentikSnapshot).where(SsoAuthentikSnapshot.kind == kind)
     if complete_only:
         stmt = stmt.where(SsoAuthentikSnapshot.complete)
-    return session.scalar(stmt.order_by(SsoAuthentikSnapshot.taken_at.desc()).limit(1))
+    if version is not None:
+        stmt = stmt.where(SsoAuthentikSnapshot.authentik_version == version)
+    if taken_since is not None:
+        stmt = stmt.where(SsoAuthentikSnapshot.taken_at >= taken_since)
+    stmt = stmt.order_by(SsoAuthentikSnapshot.taken_at.desc(), SsoAuthentikSnapshot.id.desc())
+    if kind != "config_export" or not complete_only:
+        return session.scalar(stmt.limit(1))
+    with session.scalars(stmt.execution_options(yield_per=1)) as rows:
+        return next((row for row in rows if export_is_complete(row)), None)
 
 
 def store_snapshot(

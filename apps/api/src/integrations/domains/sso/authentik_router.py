@@ -745,6 +745,7 @@ def create_config_export(
         except AuthentikError as exc:
             raise proposals.authentik_api_error(exc) from exc
         meta = backup.export_meta(row)
+        meta["available"] = True
         meta["evidence_id"] = _record(
             session,
             principal,
@@ -762,9 +763,9 @@ def create_config_export(
 
     def present_replay(saved: dict[str, Any]) -> dict[str, Any]:
         row = session.get(SsoAuthentikSnapshot, uuid.UUID(saved["id"]))
-        if row is None:
-            return saved
-        return {**saved, **backup.export_meta(row)}
+        if row is None or row.kind != "config_export":
+            return {**saved, "complete": False, "available": False}
+        return {**saved, **backup.export_meta(row), "available": True}
 
     return run_idempotent(request, session, principal, key, {"export": True}, action, present_replay=present_replay)
 
