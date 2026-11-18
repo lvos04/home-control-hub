@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from .authentik.reader import clean_provider, incomplete_provider_details
@@ -35,3 +36,8 @@ def export_content(row: SsoAuthentikSnapshot) -> dict[str, Any]:
 
 def export_is_complete(row: SsoAuthentikSnapshot, content: dict[str, Any] | None = None) -> bool:
     return row.complete and not (export_content(row) if content is None else content).get("missing")
+
+
+def source_id(base_url: str) -> str:
+    """Welke Authentik-bron een export beschrijft: een hash van het ingestelde adres, zodat geen adres wordt opgeslagen."""
+    return hashlib.sha256(base_url.rstrip("/").encode()).hexdigest()

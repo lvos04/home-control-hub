@@ -36,7 +36,7 @@ from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
 from .authentik.reader import read_state, read_version
 from .catalog import APP_BY_ID
-from .config_exports import export_is_complete
+from .config_exports import export_content, export_is_complete
 from .models import (
     SsoAdminAccount,
     SsoAnomaly,
@@ -196,6 +196,24 @@ def ingest(session: Session, raw_events: list[dict[str, Any]]) -> list[SsoAuthEv
 KEEP_SNAPSHOTS = {"rechten": 100, "config_export": 30}
 
 
+def _usable_snapshot_ids(session: Session, kind: str) -> list[uuid.UUID]:
+    """De nieuwste volledige momentopname per versie en per Authentik-bron: de upgradegate kiest daaruit, dus mag
+    het onderhoud er geen verwijderen, ook niet als er daarna veel nieuwere (onvolledige of andere) rijen kwamen."""
+    stmt = (
+        select(SsoAuthentikSnapshot)
+        .where(SsoAuthentikSnapshot.kind == kind, SsoAuthentikSnapshot.complete)
+        .order_by(SsoAuthentikSnapshot.taken_at.desc(), SsoAuthentikSnapshot.id.desc())
+    )
+    newest: dict[tuple[str | None, Any], uuid.UUID] = {}
+    with session.scalars(stmt.execution_options(yield_per=1)) as rows:
+        for row in rows:
+            if kind == "config_export" and not export_is_complete(row):
+                continue
+            key = (row.authentik_version, export_content(row).get("source") if kind == "config_export" else None)
+            newest.setdefault(key, row.id)
+    return list(newest.values())
+
+
 def purge_old_events(session: Session) -> int:
     """Bewaartermijnen: events 30 dagen; van elke momentopname-soort alleen de nieuwste N (altijd ≥ 1 volledige)."""
     from sqlalchemy import delete
@@ -209,12 +227,12 @@ def purge_old_events(session: Session) -> int:
             .order_by(SsoAuthentikSnapshot.taken_at.desc(), SsoAuthentikSnapshot.id.desc())
             .limit(keep)
         )
-        newest_complete = latest_snapshot(session, kind)
         stmt = delete(SsoAuthentikSnapshot).where(
             SsoAuthentikSnapshot.kind == kind, SsoAuthentikSnapshot.id.not_in(keep_ids)
         )
-        if newest_complete is not None:
-            stmt = stmt.where(SsoAuthentikSnapshot.id != newest_complete.id)
+        protected = _usable_snapshot_ids(session, kind)
+        if protected:
+            stmt = stmt.where(SsoAuthentikSnapshot.id.not_in(protected))
         removed += int(getattr(session.execute(stmt), "rowcount", 0) or 0)
     return removed
 
@@ -485,6 +503,7 @@ def latest_snapshot(
     *,
     version: str | None = None,
     taken_since: datetime | None = None,
+    source: str | None = None,
 ) -> SsoAuthentikSnapshot | None:
     stmt = select(SsoAuthentikSnapshot).where(SsoAuthentikSnapshot.kind == kind)
     if complete_only:
@@ -497,7 +516,14 @@ def latest_snapshot(
     if kind != "config_export" or not complete_only:
         return session.scalar(stmt.limit(1))
     with session.scalars(stmt.execution_options(yield_per=1)) as rows:
-        return next((row for row in rows if export_is_complete(row)), None)
+        return next(
+            (
+                row
+                for row in rows
+                if export_is_complete(row) and (source is None or export_content(row).get("source") == source)
+            ),
+            None,
+        )
 
 
 def store_snapshot(

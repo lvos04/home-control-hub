@@ -26,7 +26,7 @@ from .authaudit import ADMIN_ROLES, Actor, latest_snapshot, store_snapshot
 from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
 from .authentik.reader import ALL_PARTS, read_devices, read_flow_export, read_state, read_version
-from .config_exports import EXPORT_FORMAT, export_content, export_is_complete
+from .config_exports import EXPORT_FORMAT, export_content, export_is_complete, source_id
 from .models import SsoAuthentikSnapshot, SsoGroupRoleMapping
 
 EXPORT_MAX_AGE = timedelta(hours=24)
@@ -55,6 +55,7 @@ def build_export(client: AuthentikClient, session: Session) -> tuple[dict[str, A
     content: dict[str, Any] = {
         "format": EXPORT_FORMAT,
         "authentik_version": state.version,
+        "source": source_id(client.base_url),
         "compat": caps.to_dict(),
         "parts": dict(state.parts),
         "missing": list(state.missing),
@@ -212,7 +213,13 @@ def upgrade_gate(
         )
     )
     export = (
-        latest_snapshot(session, "config_export", version=str(current), taken_since=utcnow() - EXPORT_MAX_AGE)
+        latest_snapshot(
+            session,
+            "config_export",
+            version=str(current),
+            taken_since=utcnow() - EXPORT_MAX_AGE,
+            source=source_id(client.base_url),
+        )
         if current is not None
         else None
     )

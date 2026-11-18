@@ -146,3 +146,53 @@ def test_herhaling_bevestigt_een_verwijderde_export_niet_opnieuw(
     assert _outbox(client) == events
     with client.app.state.db.sessions() as session:
         assert session.scalar(select(func.count()).select_from(SsoAuthentikSnapshot)) == 1
+
+
+def test_opruimen_bewaart_per_versie_de_laatste_bruikbare_export(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    huidig = _export(client, admin)
+    authentik_fake.version = "2026.8.4"
+    ander = _export(client, admin)
+    authentik_fake.version = "2026.8.5"
+    monkeypatch.setitem(authaudit.KEEP_SNAPSHOTS, "config_export", 1)
+    with client.app.state.db.sessions() as session:
+        bron = session.get(SsoAuthentikSnapshot, uuid.UUID(huidig["id"]))
+        for _ in range(3):  # nieuwere rijen, onvolledig: tellen mee voor de bewaartermijn, niet als bruikbare export
+            authaudit.store_snapshot(
+                session,
+                bron.kind,
+                bron.content,
+                False,
+                bron.authentik_version,
+                ("service", bron.taken_by),
+                str(bron.trace_id),
+            )
+        session.commit()
+        authaudit.purge_old_events(session)
+        session.commit()
+    assert client.get(f"{EXPORTS}/{huidig['id']}", headers=admin).status_code == 200
+    assert client.get(f"{EXPORTS}/{ander['id']}", headers=admin).status_code == 200
+    assert _export_check(client, admin)["detail"]["export_id"] == huidig["id"]
+
+
+def test_upgradegate_gebruikt_alleen_een_export_van_de_ingestelde_bron(paired_client: Any, auth: Any) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    export = _export(client, admin)
+    assert _export_check(client, admin)["status"] == "ok"
+    for bron in ("een-andere-bron", None):  # een andere Authentik-instantie, of een export van vóór de bronvastlegging
+        with client.app.state.db.sessions() as session:
+            rij = session.get(SsoAuthentikSnapshot, uuid.UUID(export["id"]))
+            inhoud = deepcopy(rij.content)
+            inhoud.pop("source", None)
+            if bron:
+                inhoud["source"] = bron
+            rij.content = inhoud
+            session.commit()
+        assert _export_check(client, admin)["status"] == "fout"
+    assert _export_check(client, admin)["detail"]["export_id"] is None
+    nieuw = _export(client, admin)
+    assert _export_check(client, admin)["detail"]["export_id"] == nieuw["id"]
