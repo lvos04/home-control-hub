@@ -197,6 +197,9 @@ def _require_verified(caps: Any) -> None:
 
 
 # ------------------------------------------------------------------ opslag en weergave
+INCOMPLETE_PROVIDER_CODE = "providergegevens_onvolledig"
+
+
 def public_hub_preview(preview: dict[str, Any]) -> dict[str, Any]:
     """Valideer ook waarden die een oudere versie al in een voorstel of antwoord heeft opgeslagen."""
 
@@ -223,7 +226,11 @@ def public_hub_preview(preview: dict[str, Any]) -> dict[str, Any]:
         if path.startswith("/api/v3/providers/oauth2/"):
             safe &= re.fullmatch(r"/api/v3/providers/oauth2/(?:(?:[1-9][0-9]*|<pk na aanmaken>)/)?", path) is not None
             safe &= safe_fields(operation.get("body", {}))
-    if safe:
+    warnings = preview.get("warnings", [])
+    # Een eerder afgeschermde preview (detail van een bewaard voorstel, of een bewaard antwoord) blijft afgeschermd en
+    # telt dan ook 0 wijzigingen: beide routes geven zo hetzelfde, ook als het bewaarde antwoord al leeg was.
+    shielded = any(w.get("code") == INCOMPLETE_PROVIDER_CODE for w in warnings)
+    if safe and not shielded:
         return preview
     return {
         **preview,
@@ -231,10 +238,12 @@ def public_hub_preview(preview: dict[str, Any]) -> dict[str, Any]:
         "requests": [],
         "rollback_recipe": [],
         "changes": 0,
-        "warnings": [
-            *preview.get("warnings", []),
+        "warnings": warnings
+        if shielded
+        else [
+            *warnings,
             {
-                "code": "providergegevens_onvolledig",
+                "code": INCOMPLETE_PROVIDER_CODE,
                 "message_nl": "Deze preview is onvolledig. Maak een nieuw voorstel op basis van de actuele gegevens.",
             },
         ],
