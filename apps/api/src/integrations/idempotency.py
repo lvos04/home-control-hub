@@ -59,9 +59,10 @@ def idempotency_key(idempotency_key: str | None = Header(default=None, alias="Id
         raise ApiError(400, "idempotency_key_invalid", "Header 'Idempotency-Key' moet een UUID zijn.") from exc
 
 
-def _replay(record: IdempotencyRecord) -> JSONResponse:
+def _replay(record: IdempotencyRecord, present: Callable[[Any], Any] | None = None) -> JSONResponse:
     headers = {**(record.response_headers or {}), REPLAY_HEADER: "true"}
-    return JSONResponse(record.response_body, status_code=record.status_code, headers=headers)
+    body = present(record.response_body) if present is not None else record.response_body
+    return JSONResponse(body, status_code=record.status_code, headers=headers)
 
 
 #: melding bij invoer met tekst die niet op te slaan is (zelfde tekst als bij de veldcontroles van de flow-API)
@@ -169,6 +170,7 @@ def run_idempotent(
     action: Callable[[], Result],
     *,
     stored: Callable[[Any], Any] | None = None,
+    present_replay: Callable[[Any], Any] | None = None,
 ) -> JSONResponse:
     deep = too_deep(payload)
     if deep is not None:  # vóór jsonable_encoder (recursief): er gebeurt niets (R-VEILIG-2 van S-P2-320)
@@ -197,7 +199,7 @@ def run_idempotent(
                 "idempotency_key_reused",
                 "Deze Idempotency-Key is al gebruikt voor een ander verzoek; gebruik een nieuwe key.",
             )
-        return _replay(existing)
+        return _replay(existing, present_replay)
 
     try:
         status_code, body, headers = action()
@@ -229,7 +231,7 @@ def run_idempotent(
         winner = session.get(IdempotencyRecord, pk)
         if winner is None or winner.request_hash != req_hash:
             raise ApiError(422, "idempotency_key_reused", "Deze Idempotency-Key is al gebruikt voor een ander verzoek.")
-        return _replay(winner)
+        return _replay(winner, present_replay)
     session.commit()
     return JSONResponse(body_json, status_code=status_code, headers=headers)
 

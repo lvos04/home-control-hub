@@ -43,7 +43,7 @@ from .authentik.client import AuthentikError
 from .authentik.reader import detect, read_bindings, read_state, read_version
 from .models import SsoAnomaly, SsoAppSetting, SsoAuthentikSnapshot, SsoAuthEvent, SsoGroupRoleMapping, SsoProposal
 from .oidc_hub import ACTION_ID as HUB_OIDC_ACTION
-from .oidc_hub import check_https_url, check_hub_client
+from .oidc_hub import check_https_url, check_hub_client, sha256_obj
 
 router = APIRouter(prefix=f"{API_PREFIX}/sso", tags=["sso"], route_class=AuthFirstRoute)
 DETECT_KEY = "authentik_detect"
@@ -760,7 +760,13 @@ def create_config_export(
         )
         return 201, meta, {}
 
-    return run_idempotent(request, session, principal, key, {"export": True}, action)
+    def present_replay(saved: dict[str, Any]) -> dict[str, Any]:
+        row = session.get(SsoAuthentikSnapshot, uuid.UUID(saved["id"]))
+        if row is None:
+            return saved
+        return {**saved, **backup.export_meta(row)}
+
+    return run_idempotent(request, session, principal, key, {"export": True}, action, present_replay=present_replay)
 
 
 @router.get("/authentik/config-exports", summary="Configuratie-exports (alleen metadata)")
@@ -794,9 +800,9 @@ def get_config_export(
     row = session.get(SsoAuthentikSnapshot, export_id)
     if row is None or row.kind != "config_export":
         raise not_found("Export")
-    return JSONResponse(
-        {**backup.export_meta(row), "content": row.content}, headers={"ETag": f'"{row.content_sha256}"'}
-    )
+    content = backup.export_content(row)
+    etag_value = row.content_sha256 if content is row.content else sha256_obj(content)
+    return JSONResponse({**backup.export_meta(row, content), "content": content}, headers={"ETag": f'"{etag_value}"'})
 
 
 @router.post("/authentik/upgrade-gate", summary="Pre-upgrade-gate voor Authentik (nooit 'groen' op aannames)")
@@ -852,7 +858,7 @@ def restore_check(
         snap = session.get(SsoAuthentikSnapshot, body.export_id)
         if snap is None or snap.kind != "config_export":
             raise not_found("Export")
-        if not snap.complete:
+        if not backup.export_meta(snap)["complete"]:
             raise ApiError(
                 409, "export_onvolledig", "Deze export is onvolledig en is geen betrouwbare vergelijkingsbasis."
             )

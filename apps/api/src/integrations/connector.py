@@ -318,7 +318,15 @@ def propose(
             )
         return 201, view, {"ETag": f'"{view["preview_hash"]}"'}
 
-    return run_idempotent(request, session, principal, key, _fingerprint(body), action)
+    return run_idempotent(
+        request,
+        session,
+        principal,
+        key,
+        _fingerprint(body),
+        action,
+        present_replay=sso_proposals.public_hub_preview if body.action_id == sso_proposals.HUB_OIDC_ACTION else None,
+    )
 
 
 def _fingerprint(body: ProposeIn) -> dict[str, Any]:

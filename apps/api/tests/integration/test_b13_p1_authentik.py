@@ -20,6 +20,7 @@ import jwt
 import pytest
 from sqlalchemy import text
 
+from integrations.domains.sso.models import SsoAuthentikSnapshot, SsoProposal
 from tests.conftest import AUTHENTIK_URL, REPO_ROOT, FakeHub, HubKeys, idem
 from tests.fakes.authentik_fake import CLIENT_SECRET, DEFAULT_TOKEN, FLOW_PASSWORD, AuthentikFake
 
@@ -260,6 +261,131 @@ def test_providerwaarden_komen_niet_in_voorstel_of_export(
     for table in ("sso_proposal", "sso_authentik_snapshot", "audit_event", "outbox_event"):
         _controleer_opvang(rows[table], CLIENT_SECRET, DEFAULT_TOKEN)
     _controleer_opvang(caplog.text, CLIENT_SECRET, DEFAULT_TOKEN)
+
+
+def test_oude_providergegevens_worden_veilig_gelezen(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, fake_hub: FakeHub
+) -> None:
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    _hub_mappings(c, h)
+    authentik_fake.add_hub_app(redirect=REDIRECT)
+    authentik_fake.providers[-1].update(name="Hub (OIDC)", client_type="public")
+    voorstel_key, export_key = str(uuid.uuid4()), str(uuid.uuid4())
+    voorstel = _propose(c, h, key=voorstel_key)
+    export = c.post(f"{BASE}/authentik/config-exports", headers=idem(h, key=export_key))
+    assert voorstel.status_code == export.status_code == 201 and export.json()["complete"]
+    pid, eid = voorstel.json()["proposal_id"], export.json()["id"]
+
+    # Bewaar de vorm van oudere rijen die vóór de strengere leesvalidatie konden ontstaan.
+    markering = "ongeldige-oude-protocolkeuze"
+    with c.app.state.db.sessions() as session:
+        p = session.get(SsoProposal, uuid.UUID(pid))
+        e = session.get(SsoAuthentikSnapshot, uuid.UUID(eid))
+        preview, inhoud = p.preview, e.content
+        provider_diff = next(d for d in preview["diff"] if d["object"] == "oauth2_provider")
+        next(ch for ch in provider_diff["changes"] if ch["field"] == "client_type")["before"] = markering
+        next(r for r in preview["rollback_recipe"] if "client_type" in r.get("body", {}))["body"]["client_type"] = (
+            markering
+        )
+        provider = inhoud["parts"]["providers"][-1]
+        provider["grant_types"] = ["authorization_code", markering]
+        provider["property_mappings"].append(markering)
+        session.execute(
+            text("UPDATE sso_proposal SET preview = CAST(:preview AS jsonb) WHERE id = :id"),
+            {"preview": json.dumps(preview), "id": pid},
+        )
+        session.execute(
+            text("UPDATE sso_authentik_snapshot SET content = CAST(:content AS jsonb) WHERE id = :id"),
+            {"content": json.dumps(inhoud), "id": eid},
+        )
+        session.execute(
+            text("UPDATE idempotency_record SET response_body = CAST(:body AS jsonb) WHERE key = :key"),
+            {"body": json.dumps({**voorstel.json(), **preview}), "key": voorstel_key},
+        )
+        session.commit()
+
+    for path, credentials in (
+        (f"{BASE}/proposals/{pid}", h),
+        (f"{BASE}/proposals", h),
+        (f"/connector/v1/evidence/{pid}", _service(fake_hub)),
+    ):
+        response = c.get(path, headers=credentials)
+        assert response.status_code == 200 and markering not in response.text
+        assert voorstel.json()["preview_hash"] in response.text
+        assert "providergegevens_onvolledig" in response.text
+    detail = c.get(f"{BASE}/authentik/config-exports/{eid}", headers=h)
+    lijst = c.get(f"{BASE}/authentik/config-exports", headers=h)
+    assert detail.status_code == lijst.status_code == 200 and markering not in detail.text
+    for meta in (detail.json(), lijst.json()["items"][0]):
+        assert meta["complete"] is False and meta["content_sha256"] == export.json()["content_sha256"]
+        assert {"part": "providers", "reason": "providergegevens_onvolledig"} in meta["missing"]
+    assert detail.json()["content"]["parts"]["providers"][-1]["grant_types"] == ["authorization_code"]
+    assert detail.headers["ETag"] != f'"{export.json()["content_sha256"]}"'
+    replay = _propose(c, h, key=voorstel_key)
+    assert replay.headers["Idempotent-Replay"] == "true" and markering not in replay.text
+    assert replay.json()["preview_hash"] == voorstel.json()["preview_hash"]
+    replay = c.post(f"{BASE}/authentik/config-exports", headers=idem(h, key=export_key))
+    assert replay.headers["Idempotent-Replay"] == "true" and replay.json()["complete"] is False
+    gate = c.post(f"{BASE}/authentik/upgrade-gate", json={"target_version": "2026.8.5"}, headers=idem(h)).json()
+    assert next(ch["status"] for ch in gate["checks"] if ch["name"] == "configuratie_export") == "fout"
+    herstel = c.post(f"{BASE}/authentik/restore-check", json={"export_id": eid}, headers=idem(h))
+    assert herstel.status_code == 409 and herstel.json()["code"] == "export_onvolledig"
+    with c.app.state.db.sessions() as session:
+        assert markering in json.dumps(session.get(SsoProposal, uuid.UUID(pid)).preview)
+        assert markering in json.dumps(session.get(SsoAuthentikSnapshot, uuid.UUID(eid)).content)
+
+
+@pytest.mark.parametrize("veld", ["authorization_flow", "invalidation_flow", "redirect_uris"])
+def test_ontbrekend_verplicht_providerveld_blokkeert(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake, veld: str
+) -> None:
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    _hub_mappings(c, h)
+    authentik_fake.add_hub_app(redirect=REDIRECT)
+    provider = authentik_fake.providers[-1]
+    provider["name"] = "Hub (OIDC)"
+    assert _propose(c, h).status_code == 201
+    provider.pop(veld)
+
+    check = c.get(f"{BASE}/oidc/hub/check", params={"slug": "hub", "redirect_uri": [REDIRECT]}, headers=h)
+    assert check.status_code == 200 and check.json()["outcome"] in ("onbekend", "afwijking")
+    assert next(ch["status"] for ch in check.json()["checks"] if ch["name"] == "provider") == "onbekend"
+    voorstel = _propose(c, h)
+    assert (
+        voorstel.status_code == 422
+        and voorstel.json()["details"]["blockers"][0]["code"] == "providergegevens_onvolledig"
+    )
+    exp = c.post(f"{BASE}/authentik/config-exports", headers=idem(h))
+    assert exp.status_code == 201 and exp.json()["complete"] is False
+
+
+def test_regex_bij_andere_provider_blokkeert_hub_voorstel_niet(
+    paired_client: Any, auth: Any, authentik_fake: AuthentikFake
+) -> None:
+    c, h = paired_client, auth("admin")
+    _source(c, h)
+    _hub_mappings(c, h)
+    authentik_fake.add_hub_app(redirect=REDIRECT)
+    andere, hub = authentik_fake.providers[0], authentik_fake.providers[-1]
+    hub["name"] = "Hub (OIDC)"
+    basis = _propose(c, h)
+    assert basis.status_code == 201
+    andere["redirect_uris"][0]["matching_mode"] = "regex"
+    resultaat = _propose(c, h)
+    assert resultaat.status_code == 201
+    assert resultaat.json()["preview_hash"] == basis.json()["preview_hash"]
+    check_url = f"{BASE}/oidc/hub/check"
+    hub["redirect_uris"][0]["matching_mode"] = "regex"
+    check = c.get(check_url, params={"slug": "hub"}, headers=h).json()
+    assert next(ch["status"] for ch in check["checks"] if ch["name"] == "redirect_uris") == "afwijking"
+    assert _propose(c, h).status_code == 422
+    hub["redirect_uris"][0]["matching_mode"] = "strict"
+    andere["pk"] = hub["pk"]
+    assert _propose(c, h).status_code == 422
+    andere["pk"] = None
+    assert _propose(c, h).status_code == 422
 
 
 def test_sessions_revoke_proposal(paired_client: Any, auth: Any, authentik_fake: AuthentikFake) -> None:

@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .authentik import compat
-from .authentik.reader import AuthentikState
+from .authentik.reader import PROVIDER_IDENTITY, AuthentikState
 
 ACTION_ID = "sso.oidc.hub.register"
 HUB_APP_ID = "ai-server-manager"
@@ -177,11 +177,32 @@ def build_hub_oidc_plan(
     scopes = state.parts["scope_mappings"]
     keys = state.parts["signing_keys"]
     providers = state.parts["providers"]
-    if any(provider.get("onvolledige_velden") for provider in providers):
-        _block(plan, "providergegevens_onvolledig", "Authentik gaf onvolledige of onverwachte providergegevens.")
-        return plan
     apps = state.parts["applications"]
     groups = {g["name"]: g for g in state.parts["groups"]}
+    app = next((a for a in apps if a.get("slug") == params.application_slug), None)
+    app_provider_pk = app.get("provider") if app is not None else None
+    related = [
+        p
+        for p in providers
+        if p.get("name") == params.provider_name
+        or p.get("assigned_application_slug") == params.application_slug
+        or (app_provider_pk is not None and p.get("pk") == app_provider_pk)
+    ]
+    if (
+        len(related) > 1
+        or any(p.get("onvolledige_velden") for p in related)
+        or any(
+            p.get("assigned_application_slug") == params.application_slug and p.get("pk") != app_provider_pk
+            for p in related
+        )
+        or any(PROVIDER_IDENTITY.intersection(p.get("onvolledige_velden", ())) for p in providers)
+        or any(
+            m.get("part") in {"providers", "applications"} and m.get("reason") == "te_veel_paginas"
+            for m in state.missing
+        )
+    ):
+        _block(plan, "providergegevens_onvolledig", "Authentik gaf onvolledige of onverwachte providergegevens.")
+        return plan
 
     if params.application_slug in compat.RESERVED_APP_SLUGS:
         _block(plan, "slug_gereserveerd", "Deze slug is in Authentik gereserveerd (OAuth2-endpoints).")
@@ -241,8 +262,7 @@ def build_hub_oidc_plan(
         else:
             bound_groups.append(g)
 
-    app = next((a for a in apps if a.get("slug") == params.application_slug), None)
-    provider = next((p for p in providers if p.get("name") == params.provider_name), None)
+    provider = next((p for p in related if p.get("name") == params.provider_name), None)
     if app is not None:
         app_provider = next((p for p in providers if p.get("pk") == app.get("provider")), None)
         if app.get("provider") is not None and (

@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import socket
 import ssl
 from collections.abc import Iterator
 from dataclasses import replace
@@ -189,12 +190,13 @@ def _lekken(text: str, secret: str) -> set[str]:
     forms = {
         "waarde": secret,
         "url": quote(secret, safe=""),
+        "base64": base64.b64encode(secret.encode()).decode("ascii"),
         "hex": secret.encode().hex(),
         "sha256": hashlib.sha256(secret.encode()).hexdigest(),
         "json": json.dumps(secret)[1:-1],
     }
     hits = {label for label, form in forms.items() if form and (form in text or form in unquote(text))}
-    if re.search(r"""(?im)(?:^|[\s{,])["']?authorization["']?\s*:|\(\s*["']authorization["']\s*,""", text):
+    if re.search(r"""(?im)(?:^|[\s{,])["']?authorization["']?\s*:|\(\s*b?["']authorization["']\s*,""", text):
         hits.add("authorization")
     for token in re.findall(r"\bBasic\s+([A-Za-z0-9+/=]+)", text, re.IGNORECASE):
         try:
@@ -209,6 +211,66 @@ def _lekken(text: str, secret: str) -> set[str]:
 def _controleer_opvang(text: str, *secrets: str) -> None:
     assert text.strip(), "De opvang is leeg."
     assert not any(_lekken(text, secret) for secret in secrets), "De opvang bevat een beschermde waarde of kop."
+
+
+def test_lekdetector_herkent_http_koppen_in_beide_weergaven() -> None:
+    koppen = httpx.Headers({"Authorization": "openbare-proefwaarde"})
+    for weergave in (koppen.multi_items(), koppen.raw):
+        assert "authorization" in _lekken(str(weergave), CLIENT_SECRET)
+    gewone_kop = httpx.Headers({"X-Designation": "authorization"})
+    for weergave in (gewone_kop.multi_items(), gewone_kop.raw):
+        assert not _lekken(str(weergave), CLIENT_SECRET)
+
+
+def test_lekdetector_herkent_losse_base64_waarde() -> None:
+    vorm = base64.b64encode(CLIENT_SECRET.encode()).decode("ascii")
+    with pytest.raises(AssertionError, match="beschermde"):
+        _controleer_opvang(vorm, CLIENT_SECRET)
+
+
+def test_redirect_bij_get_wordt_geweigerd_zonder_vervolg(
+    tls_authentik: TlsAuthentik, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake, url, cert_path, heads = tls_authentik
+    monkeypatch.setattr(execution.certifi, "where", lambda: str(cert_path))
+    target = _confirmed(fake, url, cert_path)
+    path = f"/api/v3/providers/oauth2/{target.provider_pk}/"
+    handle = fake.handle
+    fake.fail[path] = 302
+
+    def with_location(request: httpx.Request) -> httpx.Response:
+        response = handle(request)
+        if response.status_code != 302:
+            return response
+        return httpx.Response(302, headers={"Location": location})
+
+    monkeypatch.setattr(fake, "handle", with_location)
+    credentials = []
+
+    def credential() -> str:
+        credentials.append(1)
+        return fake.token
+
+    with socket.socket() as ontvanger:
+        ontvanger.bind((LOOPBACK, 0))
+        ontvanger.listen()
+        location = f"https://{LOOPBACK}:{ontvanger.getsockname()[1]}/andere-ontvanger/"
+        with pytest.raises(AuthentikError) as error:
+            execution.read_provider(
+                url,
+                target,
+                target,
+                Settings(allow_loopback_hub=True),
+                credential,
+                confirm_binding=lambda *_: (target.provider_pk, target.client_id),
+            )
+        ontvanger.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            ontvanger.accept()
+    assert heads == [(path, False)] and len(credentials) == 1
+    assert fake.calls == [("GET", path, True)] and not fake.writes
+    assert error.value.http_status == 302 and location not in error.value.message_nl
+    assert error.value.reason == "redirect_bij_get"
 
 
 def test_bound_provider_filters_raw_values_and_ignores_upstream_error_bodies(

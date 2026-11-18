@@ -25,7 +25,15 @@ from . import service as recovery_service
 from .authaudit import ADMIN_ROLES, Actor, latest_snapshot, store_snapshot
 from .authentik import compat
 from .authentik.client import AuthentikClient, AuthentikError
-from .authentik.reader import ALL_PARTS, read_devices, read_flow_export, read_state, read_version
+from .authentik.reader import (
+    ALL_PARTS,
+    clean_provider,
+    incomplete_provider_details,
+    read_devices,
+    read_flow_export,
+    read_state,
+    read_version,
+)
 from .models import SsoAuthentikSnapshot, SsoGroupRoleMapping
 
 EXPORT_MAX_AGE = timedelta(hours=24)
@@ -112,15 +120,32 @@ def build_export(client: AuthentikClient, session: Session) -> tuple[dict[str, A
     return content, not content["missing"], state.version
 
 
-def export_meta(row: SsoAuthentikSnapshot) -> dict[str, Any]:
-    c = row.content or {}
+def export_content(row: SsoAuthentikSnapshot) -> dict[str, Any]:
+    """Projecteer opgeslagen providergegevens met dezelfde regels als een actuele export."""
+    content = row.content or {}
+    parts = content.get("parts", {})
+    rows = parts.get("providers")
+    if rows is None and not row.complete:
+        return content
+    providers = [clean_provider(p) for p in rows if isinstance(p, dict)] if isinstance(rows, list) else []
+    if providers == rows and not any(p.get("onvolledige_velden") for p in providers):
+        return content
+    missing = list(content.get("missing", []))
+    detail = incomplete_provider_details()
+    if detail not in missing:
+        missing.append(detail)
+    return {**content, "parts": {**parts, "providers": providers}, "missing": missing}
+
+
+def export_meta(row: SsoAuthentikSnapshot, content: dict[str, Any] | None = None) -> dict[str, Any]:
+    c = export_content(row) if content is None else content
     parts = c.get("parts", {})
     return {
         "id": str(row.id),
         "taken_at": iso(row.taken_at),
         "taken_by": row.taken_by,
         "authentik_version": row.authentik_version,
-        "complete": row.complete,
+        "complete": row.complete and not c.get("missing"),
         "content_sha256": row.content_sha256,
         "size_bytes": row.size_bytes,
         "counts": {k: len(v) for k, v in parts.items() if isinstance(v, list)},
@@ -213,12 +238,13 @@ def upgrade_gate(
     export = latest_snapshot(session, "config_export")
     fresh = export is not None and export.taken_at >= utcnow() - EXPORT_MAX_AGE
     same_version = export is not None and current is not None and export.authentik_version == str(current)
+    usable_export = export is not None and export_meta(export)["complete"] and fresh and same_version
     checks.append(
         _check(
             "configuratie_export",
-            "ok" if fresh and same_version else "fout",
+            "ok" if usable_export else "fout",
             "Volledige export van < 24 uur van de huidige versie."
-            if fresh and same_version
+            if usable_export
             else "Maak eerst een volledige configuratie-export van de huidige versie (< 24 uur).",
             export_id=str(export.id) if export else None,
             taken_at=iso(export.taken_at) if export else None,
@@ -312,7 +338,7 @@ def _names(rows: list[dict[str, Any]] | None, key: str) -> set[str]:
 
 def restore_check(snapshot: SsoAuthentikSnapshot, client: AuthentikClient, session: Session) -> dict[str, Any]:
     """Vergelijkt een export (van vóór herstel/upgrade) met de huidige toestand: rechten, 2FA, clients, sleutels."""
-    before = snapshot.content or {}
+    before = export_content(snapshot)
     bparts: dict[str, Any] = before.get("parts", {})
     checks: list[dict[str, Any]] = []
     try:

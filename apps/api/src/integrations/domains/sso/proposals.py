@@ -9,6 +9,7 @@ diff, exacte verzoeken, ``resource_etag`` en ``preview_hash`` en bewaart het als
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -23,7 +24,7 @@ from ...errors import ApiError
 from ...security.auth import Principal
 from ...timeutil import iso, utcnow
 from .authentik.client import AuthentikClient, AuthentikError, client_from_source
-from .authentik.reader import read_bindings, read_state, read_version
+from .authentik.reader import clean_provider, read_bindings, read_state, read_version
 from .models import SsoGroupRoleMapping, SsoProposal
 from .oidc_hub import ACTION_ID as HUB_OIDC_ACTION
 from .oidc_hub import HUB_APP_ID, HubOidcParams, Plan, build_hub_oidc_plan, sha256_obj
@@ -196,8 +197,53 @@ def _require_verified(caps: Any) -> None:
 
 
 # ------------------------------------------------------------------ opslag en weergave
+def public_hub_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    """Valideer ook waarden die een oudere versie al in een voorstel of antwoord heeft opgeslagen."""
+
+    def safe_fields(fields: dict[str, Any]) -> bool:
+        # In een diff vertegenwoordigt None ook een eerder afwezig veld.
+        values = {k: v for k, v in fields.items() if v is not None}
+        cleaned = clean_provider(values, required=())
+        return "onvolledige_velden" not in cleaned and all(k in cleaned and cleaned[k] == v for k, v in values.items())
+
+    safe = True
+    for item in preview.get("diff", []):
+        changes = item["changes"]
+        if item["object"] == "oauth2_provider":
+            safe &= all(safe_fields({ch["field"]: ch[k]}) for ch in changes for k in ("before", "after"))
+        if item["object"] == "application":
+            safe &= all(
+                v is None or (type(v) is int and v > 0) or v == "<pk van de nieuwe provider>"
+                for ch in changes
+                if ch["field"] == "provider"
+                for v in (ch["before"], ch["after"])
+            )
+    for operation in (*preview.get("requests", []), *preview.get("rollback_recipe", [])):
+        path = operation.get("path", "")
+        if path.startswith("/api/v3/providers/oauth2/"):
+            safe &= re.fullmatch(r"/api/v3/providers/oauth2/(?:(?:[1-9][0-9]*|<pk na aanmaken>)/)?", path) is not None
+            safe &= safe_fields(operation.get("body", {}))
+    if safe:
+        return preview
+    return {
+        **preview,
+        "diff": [],
+        "requests": [],
+        "rollback_recipe": [],
+        "warnings": [
+            *preview.get("warnings", []),
+            {
+                "code": "providergegevens_onvolledig",
+                "message_nl": "Deze preview is onvolledig. Maak een nieuw voorstel op basis van de actuele gegevens.",
+            },
+        ],
+    }
+
+
 def proposal_view(p: SsoProposal) -> dict[str, Any]:
     preview = p.preview or {}
+    if p.action_id == HUB_OIDC_ACTION:
+        preview = public_hub_preview(preview)
     spec = ACTIONS.get(p.action_id)
     return {
         "proposal_id": str(p.id),

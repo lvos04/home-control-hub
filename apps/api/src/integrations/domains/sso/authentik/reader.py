@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import re
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote_from_bytes, unquote, urlsplit
@@ -57,6 +58,9 @@ PROVIDER_CHOICES = {
     "sub_mode": {"hashed_user_id", "user_id", "user_uuid", "user_username", "user_email", "user_upn"},
     "issuer_mode": {"global", "per_provider"},
 }
+PROVIDER_IDENTITY = frozenset({"pk", "name", "assigned_application_slug"})
+PROVIDER_FLOWS = ("authorization_flow", "invalidation_flow")
+REQUIRED_PROVIDER_FIELDS = PROVIDER_IDENTITY | {*PROVIDER_FLOWS, "redirect_uris"}
 GRANT_TYPES = {
     "authorization_code",
     "client_credentials",
@@ -134,15 +138,17 @@ def _safe_redirect(value: str) -> bool:
         return False
 
 
-def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
+def clean_provider(p: dict[str, Any], *, required: Collection[str] = REQUIRED_PROVIDER_FIELDS) -> dict[str, Any]:
     protected = _protected_provider_values(p)
     out: dict[str, Any] = {}
-    invalid: set[str] = set()
+    invalid = set(required).difference(p)
     for key in ("name", "client_id", "assigned_application_slug"):
         if key in p:
             value = p[key]
             if (key == "assigned_application_slug" and value in (None, "")) or (
-                _plain_provider_text(value, protected) and (key != "assigned_application_slug" or SLUG.fullmatch(value))
+                _plain_provider_text(value, protected)
+                and bool(value.strip())
+                and (key != "assigned_application_slug" or SLUG.fullmatch(value))
             ):
                 out[key] = value
             else:
@@ -155,17 +161,17 @@ def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
             else:
                 invalid.add(key)
     for key in (
-        "authorization_flow",
-        "invalidation_flow",
+        *PROVIDER_FLOWS,
         "signing_key",
         "access_code_validity",
         "access_token_validity",
     ):
         if key in p:
             value = p[key]
-            allows_null = key in ("authorization_flow", "invalidation_flow", "signing_key")
-            pattern = UUID_TEXT if allows_null else DURATION
-            if (value is None and allows_null) or (_plain_provider_text(value, protected) and pattern.fullmatch(value)):
+            pattern = UUID_TEXT if key in (*PROVIDER_FLOWS, "signing_key") else DURATION
+            if (value is None and key == "signing_key") or (
+                _plain_provider_text(value, protected) and pattern.fullmatch(value)
+            ):
                 out[key] = value
             else:
                 invalid.add(key)
@@ -224,6 +230,10 @@ def clean_provider(p: dict[str, Any]) -> dict[str, Any]:
     if invalid:
         out["onvolledige_velden"] = sorted(invalid)
     return out
+
+
+def incomplete_provider_details() -> dict[str, str]:
+    return {"part": "providers", "reason": "providergegevens_onvolledig"}
 
 
 def clean_application(a: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +314,7 @@ def clean_device(d: dict[str, Any]) -> dict[str, Any]:
     return _pick(d, ("type", "name", "confirmed"))
 
 
-CLEANERS = {
+CLEANERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "providers": clean_provider,
     "applications": clean_application,
     "groups": clean_group,
@@ -478,7 +488,7 @@ def read_state(
             continue
         state.parts[part] = [CLEANERS[part](r) for r in rows]
         if part == "providers" and any(row.get("onvolledige_velden") for row in state.parts[part]):
-            state.missing.append({"part": part, "reason": "providergegevens_onvolledig"})
+            state.missing.append(incomplete_provider_details())
         if not complete:
             state.missing.append({"part": part, "reason": "te_veel_paginas"})
     return state

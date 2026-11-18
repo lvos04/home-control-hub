@@ -112,7 +112,11 @@ def read_provider(
     *,
     confirm_binding: BindingCheck | None = None,
 ) -> dict[str, Any]:
-    """Leest alleen met een onafhankelijke, actuele provider-/clientcontrole op de bevestigde TLS-verbinding."""
+    """Leest na een onafhankelijke provider-/clientcontrole op de bevestigde TLS-verbinding.
+
+    Een redirect op HEAD stopt vóór het opvragen van de credential. Een succesvolle HEAD voorspelt de GET-respons
+    niet. Een redirect op GET stopt de lezing op dezelfde verbinding en wordt nooit gevolgd.
+    """
     try:
         result = _read_provider(source_url, confirmed, requested, settings, get_credential, confirm_binding)
     except AuthentikError:
@@ -161,7 +165,7 @@ def _read_provider(
     try:
         tls = _connect(host, port, confirmed, settings, context)
         connection.sock = tls
-        # Bij een redirect of andere fout gaat er geen beheercredential naar deze route.
+        # Een fout of redirect op HEAD stopt vóór de credentialopvraag.
         connection.request("HEAD", path)
         with connection.getresponse() as response:
             AuthentikClient._check(response.status, path)
@@ -175,6 +179,8 @@ def _read_provider(
             raise AuthentikError("geen_token")
         connection.request("GET", path, headers={"Authorization": f"Bearer {credential}", "Accept": "application/json"})
         with connection.getresponse() as response:
+            if 300 <= response.status < 400:
+                raise AuthentikError("redirect_bij_get", response.status, path)
             AuthentikClient._check(response.status, path)
             body = response.read(MAX_BYTES + 1)
     except ssl.SSLCertVerificationError:
@@ -203,7 +209,8 @@ def _read_provider(
     ):
         raise AuthentikError("authentik_doel_ongeldig")
     result = clean_provider(
-        {key: value for key, value in data.items() if key not in {"name", "assigned_application_slug"}}
+        {key: value for key, value in data.items() if key not in {"name", "assigned_application_slug"}},
+        required=("pk", "authorization_flow", "invalidation_flow", "redirect_uris"),
     )
     if result.pop("onvolledige_velden", None):
         raise AuthentikError("antwoord_ongeldig")

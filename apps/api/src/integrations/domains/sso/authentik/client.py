@@ -50,6 +50,7 @@ REASONS_NL = {
     "antwoord_ongeldig": "Het antwoord van Authentik was geen geldige JSON of had een onverwacht formaat.",
     "antwoord_te_groot": "Het antwoord van Authentik was groter dan toegestaan.",
     "redirect": "Authentik antwoordde met een doorverwijzing; die wordt bewust niet gevolgd.",
+    "redirect_bij_get": "De bevestigde Authentik-server gaf bij GET een doorverwijzing. De lezing is afgebroken.",
 }
 
 
