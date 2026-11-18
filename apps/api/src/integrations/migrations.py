@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -78,28 +80,45 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
         os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
     except OSError as exc:
         raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     target = backup_dir / f"voor-upgrade-{current}-{stamp}.dump"
+    checksum = target.with_suffix(".dump.sha256")
     parts = urlsplit(settings.database_url.replace("postgresql+psycopg://", "postgresql://"))
-    host = parse_qs(parts.query).get("host", [parts.hostname or ""])[0]
-    cmd = [
-        "pg_dump",
-        "-Fc",
-        "-f",
-        str(target),
-        "-h",
-        host,
-        "-U",
-        parts.username or "hch",
-        (parts.path or "/hch").lstrip("/"),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603 (vaste argumenten)
-    if result.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
-        target.unlink(missing_ok=True)
-        raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
-    os.chmod(target, 0o600)
-    dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
-    for old in dumps[:-keep]:
-        if old != target:
-            old.unlink(missing_ok=True)
+    query = parse_qs(parts.query)
+    host = query.get("host", [parts.hostname or ""])[0]
+    port = query.get("port", [str(parts.port or "")])[0]
+    try:
+        with tempfile.TemporaryDirectory(dir=backup_dir) as directory:
+            partial = Path(directory) / target.name
+            cmd = ["pg_dump", "-Fc", "-f", str(partial), "-h", host, "-U", parts.username or "hch"]
+            if port:
+                cmd.extend(("-p", port))
+            cmd.append((parts.path or "/hch").lstrip("/"))
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603 (vaste argumenten)
+            if result.returncode != 0 or not partial.is_file() or partial.stat().st_size == 0:
+                raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
+            os.chmod(partial, 0o600)
+            with partial.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                os.fsync(handle.fileno())
+            with (Path(directory) / checksum.name).open("w", encoding="ascii") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(f"{digest}  {target.name}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            (Path(directory) / checksum.name).replace(checksum)
+            partial.replace(target)
+        # De dump wordt pas zichtbaar nadat zijn checksum beschikbaar is.
+        dir_fd = os.open(backup_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        dumps = sorted(backup_dir.glob("voor-upgrade-*.dump"), key=lambda f: (f.stat().st_mtime, f.name))
+        for old in dumps[:-keep]:
+            if old != target:
+                old.unlink(missing_ok=True)
+                old.with_suffix(".dump.sha256").unlink(missing_ok=True)
+    except OSError as exc:
+        raise BackupError("Het dump- of SHA-256-bestand kon niet veilig worden opgeslagen.") from exc
     return target

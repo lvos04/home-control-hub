@@ -189,6 +189,9 @@ Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.**
   en voert dan de migraties uit. **Mislukt de back-up, dan migreert de app niet** en stopt hij met een melding in de
   log (bijv. te weinig vrije ruimte op de dataset). Mislukt een migratie, dan blijft de oude database ongewijzigd en
   meldt de log dat ook. Een ZFS-snapshot vooraf blijft verstandig.
+- **Controle bij terugzetten:** bewaar de dump en het bijbehorende `.dump.sha256`-bestand samen. Controleer de
+  SHA-256 van de dump tegen dat bestand vóór het terugzetten. Gebruik bij een afwijking de dataset-snapshot of een
+  andere geverifieerde back-up. Een dump van een oudere versie zonder vastgelegde SHA-256 heeft dit bewijs niet.
 - **Contract 1.2:** de database kreeg migratie `0003` en de koppeling met de Hub verhuist bij de eerste
   start eenmalig uit de database naar `/appdata/secrets/hub-link.json`. Terug naar een oudere image kan alleen met de
   back-up of ZFS-snapshot van vóór de update.

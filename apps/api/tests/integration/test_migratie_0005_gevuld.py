@@ -16,6 +16,7 @@ Een upgrade op de echte NAS (vorige image + dataset-snapshot) is NIET GEVALIDEER
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -121,6 +122,19 @@ def _revision(eng: Engine) -> str:
         return str(c.execute(text("SELECT version_num FROM alembic_version")).scalar())
 
 
+def _constraints(eng: Engine) -> dict[tuple[str, str], str]:
+    with eng.connect() as c:
+        return {
+            (table, name): definition
+            for table, name, definition in c.execute(
+                text(
+                    "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE connamespace = 'public'::regnamespace"
+                )
+            )
+        }
+
+
 def _fill(eng: Engine) -> dict[str, uuid.UUID]:
     """Gegevens zoals een installatie op 0004 ze kan hebben (alle CHECK-constraints van 0004 gerespecteerd)."""
     ids = {name: uuid.uuid4() for name in ("acc1", "acc2", "flow1", "flow2", "ver1", "ver2", "run1")}
@@ -210,6 +224,7 @@ def _filled_enough(meting: Meting) -> None:
 
 
 def _restore(dump: Path, url: str) -> None:
+    assert _checksum_ok(dump), "de SHA-256 van de dump wijkt af of ontbreekt"
     pg_restore = shutil.which("pg_restore")
     if pg_restore is None:
         if os.environ.get("CI"):
@@ -281,8 +296,25 @@ def test_upgrade_of_a_filled_0004_database_loses_nothing_and_can_go_back(
         # de back-up van vóór de upgrade is een volledige terugweg
         dumps = sorted(backups.glob(f"voor-upgrade-{VORIGE}-*.dump"))
         assert dumps and all(d.stat().st_size > 0 for d in dumps)
+        dump = dumps[0]
+        checksum = dump.with_suffix(".dump.sha256")
+        assert checksum.is_file(), "vóór de upgrade is een SHA-256-bestand vereist"
+        assert re.fullmatch(r"[0-9a-f]{64}  " + re.escape(dump.name) + "\n", checksum.read_text())
+        assert checksum.stat().st_mode & 0o777 == 0o600
+        for archive in dumps:
+            assert archive.with_suffix(".dump.sha256").is_file()
+        gewijzigd = tmp_path / "gewijzigd"
+        gewijzigd.mkdir()
+        kopie = gewijzigd / dump.name
+        shutil.copyfile(dump, kopie)
+        shutil.copyfile(checksum, kopie.with_suffix(".dump.sha256"))
+        with kopie.open("ab") as handle:
+            handle.write(b"gewijzigde archiefkopie")
+        assert _checksum_ok(dump)
+        with pytest.raises(AssertionError, match="SHA-256"):
+            _restore(kopie, settings.database_url)
         terug_url = recreate_database(DB_TERUG)
-        _restore(dumps[0], terug_url)
+        _restore(dump, terug_url)
         terug = create_engine(terug_url)
         try:
             assert _revision(terug) == VORIGE
@@ -405,19 +437,18 @@ def test_the_comparison_sees_a_lost_row(vorige_versie: Settings, tmp_path: Path)
         eng.dispose()
 
 
+def _checksum_ok(dump: Path) -> bool:
+    check = subprocess.run(  # noqa: S603 - vaste opdracht voor de gedocumenteerde terugzetcontrole
+        ["sha256sum", "--check", "--status", dump.with_suffix(".dump.sha256").name],  # noqa: S607
+        cwd=dump.parent,
+        check=False,
+    )
+    return check.returncode == 0
+
+
 def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: Settings) -> None:
     settings = vorige_versie
     eng = create_engine(settings.database_url)
-
-    def check_names() -> set[str]:
-        with eng.connect() as c:
-            return set(
-                c.execute(
-                    text(
-                        "SELECT conname FROM pg_constraint WHERE conrelid = 'sso_proposal'::regclass AND contype = 'c'"
-                    )
-                ).scalars()
-            )
 
     try:
         _fill(eng)
@@ -438,9 +469,11 @@ def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: S
         before = _measure(eng, columns)
         _filled_enough(before)
         assert before["sso_proposal"][0] == 2
-        old_checks = check_names()
-        assert "ck_sso_proposal_apply_not_available" in old_checks
-        for revision in ("0006", "0005", "0006"):
+        old_checks = _constraints(eng)
+        assert ("sso_proposal", "ck_sso_proposal_apply_not_available") in old_checks
+        assert len(old_checks) > 40
+        for revision in ("0006", "0005", head_revision(settings)):
+            assert revision is not None
             if revision == "0005":
                 downgrade(settings, revision)
             else:
@@ -448,13 +481,40 @@ def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: S
             assert _revision(eng) == revision
             assert _columns(eng) == columns
             assert _differences(before, _measure(eng, columns)) == []
-            if revision == "0006":
-                assert check_names() == (
-                    old_checks - {"ck_sso_proposal_apply_not_available"} | {"ck_sso_proposal_apply_status"}
-                )
+            checks = _constraints(eng)
+            if revision == "0005":
+                assert checks == old_checks
             else:
-                assert check_names() == old_checks
+                assert old_checks.items() <= checks.items()
+                assert checks.keys() - old_checks.keys() == {("sso_proposal", "ck_sso_proposal_apply_status")}
             with pytest.raises(IntegrityError), eng.begin() as c:
                 c.execute(text("UPDATE sso_proposal SET apply_status = 'toegepast'"))
+    finally:
+        eng.dispose()
+
+
+@pytest.mark.parametrize("eerst_omhoog", [True, False])
+def test_eerder_uitgevoerde_0006_krijgt_ontbrekende_constraint_terug(
+    vorige_versie: Settings, eerst_omhoog: bool
+) -> None:
+    settings = vorige_versie
+    eng = create_engine(settings.database_url)
+    try:
+        _fill(eng)
+        upgrade(settings, "0005")
+        old_checks = _constraints(eng)
+        upgrade(settings, "0006")
+        with eng.begin() as c:
+            c.execute(text("ALTER TABLE sso_proposal DROP CONSTRAINT IF EXISTS ck_sso_proposal_apply_not_available"))
+        columns = _columns(eng)
+        before = _measure(eng, columns)
+        _filled_enough(before)
+        if eerst_omhoog:
+            upgrade(settings)
+            assert old_checks.items() <= _constraints(eng).items()
+        downgrade(settings, "0005")
+        assert _constraints(eng) == old_checks
+        assert _columns(eng) == columns
+        assert _differences(before, _measure(eng, columns)) == []
     finally:
         eng.dispose()
