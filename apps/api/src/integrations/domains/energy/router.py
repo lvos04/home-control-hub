@@ -1,21 +1,25 @@
-"""B14-routes (P0): capabilities, dekkingsmatrix-structuur en eerlijke 501 voor nog niet gebouwde data."""
+"""B14: meters en dekkingsmatrix uit de eigen viewer-koppeling met my_house."""
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
 
-from fastapi import Depends
+from fastapi import Depends, Request
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from ...deps import get_session
 from ...security.auth import Principal, require_reader
-from ...timeutil import iso, utcnow
+from ...timeutil import utcnow
 from ..common import domain_router
 from .catalog import EXPECTED_METER_ROLES, QUALITY_LABELS, SOURCES
+from .meters import ABSENT, NAS_ABSENT, Inventory, MeterItem, meter_inventory
+from .readings import LIVE_MAX_AGE, Quality
 
 router = domain_router(
     "energy",
     SOURCES,
     {
-        "/meters": ("energy.meters.read", ("B14-001",)),
         "/usage": ("energy.usage.read", ("B14-002",)),
         "/workloads": ("energy.workload.read", ("B14-003",)),
         "/advice": ("energy.advice.read", ("B14-004",)),
@@ -23,30 +27,80 @@ router = domain_router(
 )
 
 
-def coverage_payload() -> dict[str, Any]:
-    return {
-        "items": [
-            {
-                **role.to_dict(),
-                "measurement_status": "onbekend",
-                "quality": "onbekend",
-                "source": None,
-                "last_updated": None,
-                "why_unknown_nl": f"Nog niet vastgelegd: besluit {role.decision} (wizard) of readback van my_house ontbreekt.",
-            }
-            for role in EXPECTED_METER_ROLES
-        ],
-        "quality_labels": list(QUALITY_LABELS),
-        "rules_nl": [
-            "NAS-energie is alleen 'gemeten' met een losse meter; anders 'geschat' (met herkomst) of 'onbekend'.",
-            "Geen wattage afleiden uit CPU% zonder kalibratie.",
-            "Boiler: alleen meten, nooit schakelen.",
-        ],
-        "evaluated_at": iso(utcnow()),
-        "next_cursor": None,
-    }
+class MeterList(BaseModel):
+    items: list[MeterItem]
+    reason_nl: str | None
+    next_cursor: None = None
 
 
-@router.get("/coverage", summary="Dekkingsmatrix (B14-001): verwachte meterrollen, status onbekend tot gemeten")
-def coverage(_p: Principal = Depends(require_reader)) -> dict[str, Any]:
-    return coverage_payload()
+class CoverageItem(BaseModel):
+    role: str
+    title_nl: str
+    decision: str
+    read_only: bool
+    notes_nl: str
+    measurement_status: Quality
+    measurement_quality: Quality
+    quality: Quality
+    source: str | None
+    last_updated: datetime | None
+    reason_nl: str
+    why_unknown_nl: str | None
+
+
+class Coverage(BaseModel):
+    items: list[CoverageItem]
+    quality_labels: list[str]
+    rules_nl: list[str]
+    evaluated_at: datetime
+    max_age_s: int
+    next_cursor: None = None
+
+
+def coverage_payload(inventory: Inventory) -> Coverage:
+    items = []
+    for spec in EXPECTED_METER_ROLES:
+        meter = inventory.meters.get(spec.role)
+        quality: Quality = meter.measurement_quality if meter else "onbekend"
+        reason = meter.reason_nl if meter else inventory.reason
+        if spec.role == "nas_host" and reason == ABSENT:
+            reason = NAS_ABSENT
+        items.append(
+            CoverageItem(
+                **spec.to_dict(),
+                measurement_status=quality,
+                measurement_quality=quality,
+                quality=quality,
+                source=meter.source if meter else None,
+                last_updated=meter.last_updated if meter else None,
+                reason_nl=reason,
+                why_unknown_nl=reason if quality == "onbekend" else None,
+            )
+        )
+    return Coverage(
+        items=items,
+        quality_labels=list(QUALITY_LABELS),
+        rules_nl=[
+            "Een losse meter is vereist voor gemeten NAS-vermogen.",
+            "Wattage uit CPU-belasting vereist kalibratie.",
+            "De aircometer meet de gedeelde buitenunit.",
+            "De boiler wordt uitsluitend gemeten.",
+        ],
+        evaluated_at=utcnow(),
+        max_age_s=int(LIVE_MAX_AGE.total_seconds()),
+    )
+
+
+@router.get("/meters", summary="Logische meters van my_house met de laatste vermogensmeting en meetkwaliteit")
+def meters(
+    request: Request, session: Session = Depends(get_session), _p: Principal = Depends(require_reader)
+) -> MeterList:
+    inventory = meter_inventory(request, session)
+    return MeterList(items=list(inventory.meters.values()), reason_nl=None if inventory.meters else inventory.reason)
+
+
+@router.get("/coverage", summary="Dekking en bronmeettijd per verwachte meterrol (B14-001)")
+def coverage(
+    request: Request, session: Session = Depends(get_session), _p: Principal = Depends(require_reader)
+) -> Coverage:
+    return coverage_payload(meter_inventory(request, session))

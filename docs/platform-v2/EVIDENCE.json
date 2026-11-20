@@ -142,12 +142,12 @@
  {
   "id": "B14-001",
   "status": "Bezig",
-  "validatie": "Unit-getest; NIET GEVALIDEERD (hardware)",
-  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_domain_structures; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
-  "blokkade": "D14 (HomeWizard-meters) onbekend en readback van my_house niet gebouwd — NIET GEVALIDEERD (hardware).",
-  "opmerking": "Dekkingsmatrix-structuur (GET /integrations/v1/energy/coverage) met verwachte meterrollen, alles 'onbekend'; kwaliteitslabels gemeten/geschat/onbekend; database weigert CPU-schatting zonder kalibratie. Toelichting validatie: database-invariant: geen CPU-schatting zonder kalibratie.",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
+  "bewijs": "apps/api/tests/integration/test_b14_001_dekkingsmatrix.py, apps/api/tests/fakes/my_house_energy.py en apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
+  "blokkade": "Besluit D14 en beproeving met de fysieke meters in huis via N-P6-06 zijn nodig. NIET GEVALIDEERD (hardware).",
+  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De simulatie toetst expliciete rollen, bronmeettijd, nulvermogen, uitval, herkomst, geweigerde rechten en geheimhouding. De bron geeft geen bewijs van een losse NAS-meter. De statuspagina voor dit werkpakket volgt in S-P3-350.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-20"
  },
  {
   "id": "B14-002",

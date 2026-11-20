@@ -359,6 +359,158 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "Coverage": {
+        "properties": {
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "max_age_s": {
+            "title": "Max Age S",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "null"
+          },
+          "quality_labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Labels",
+            "type": "array"
+          },
+          "rules_nl": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rules Nl",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "quality_labels",
+          "rules_nl",
+          "evaluated_at",
+          "max_age_s"
+        ],
+        "title": "Coverage",
+        "type": "object"
+      },
+      "CoverageItem": {
+        "properties": {
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "measurement_quality": {
+            "enum": [
+              "gemeten",
+              "geschat",
+              "onbekend"
+            ],
+            "title": "Measurement Quality",
+            "type": "string"
+          },
+          "measurement_status": {
+            "enum": [
+              "gemeten",
+              "geschat",
+              "onbekend"
+            ],
+            "title": "Measurement Status",
+            "type": "string"
+          },
+          "notes_nl": {
+            "title": "Notes Nl",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "gemeten",
+              "geschat",
+              "onbekend"
+            ],
+            "title": "Quality",
+            "type": "string"
+          },
+          "read_only": {
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "reason_nl": {
+            "title": "Reason Nl",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "title_nl": {
+            "title": "Title Nl",
+            "type": "string"
+          },
+          "why_unknown_nl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why Unknown Nl"
+          }
+        },
+        "required": [
+          "role",
+          "title_nl",
+          "decision",
+          "read_only",
+          "notes_nl",
+          "measurement_status",
+          "measurement_quality",
+          "quality",
+          "source",
+          "last_updated",
+          "reason_nl",
+          "why_unknown_nl"
+        ],
+        "title": "CoverageItem",
+        "type": "object"
+      },
       "DrillIn": {
         "additionalProperties": false,
         "properties": {
@@ -659,6 +811,115 @@
           "role"
         ],
         "title": "MappingIn",
+        "type": "object"
+      },
+      "MeterItem": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_measurement": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Measurement"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "measurement_quality": {
+            "enum": [
+              "gemeten",
+              "geschat",
+              "onbekend"
+            ],
+            "title": "Measurement Quality",
+            "type": "string"
+          },
+          "read_only": {
+            "const": true,
+            "default": true,
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "reason_nl": {
+            "title": "Reason Nl",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "source": {
+            "const": "my_house",
+            "default": "my_house",
+            "title": "Source",
+            "type": "string"
+          },
+          "unit": {
+            "const": "W",
+            "default": "W",
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "last_measurement",
+          "last_updated",
+          "measurement_quality",
+          "reason_nl"
+        ],
+        "title": "MeterItem",
+        "type": "object"
+      },
+      "MeterList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MeterItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "null"
+          },
+          "reason_nl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Nl"
+          }
+        },
+        "required": [
+          "items",
+          "reason_nl"
+        ],
+        "title": "MeterList",
         "type": "object"
       },
       "MethodCreate": {
@@ -1016,7 +1277,7 @@
                 "type": "null"
               }
             ],
-            "description": "LAN-adres van de app (http/https).",
+            "description": "LAN-adres van de app (http/https). Voor my_house inclusief /api/v1/homes/<woning-UUID>.",
             "title": "Base Url"
           },
           "clear_credential": {
@@ -4143,16 +4404,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Coverage Integrations V1 Energy Coverage Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/Coverage"
                 }
               }
             },
             "description": "Successful Response"
           }
         },
-        "summary": "Dekkingsmatrix (B14-001): verwachte meterrollen, status onbekend tot gemeten",
+        "summary": "Dekking en bronmeettijd per verwachte meterrol (B14-001)",
         "tags": [
           "energy"
         ]
@@ -4160,25 +4419,20 @@
     },
     "/integrations/v1/energy/meters": {
       "get": {
-        "operationId": "endpoint_integrations_v1_energy_meters_get",
+        "operationId": "meters_integrations_v1_energy_meters_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Energy Meters Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/MeterList"
                 }
               }
             },
             "description": "Successful Response"
-          },
-          "501": {
-            "description": "capability_unavailable"
           }
         },
-        "summary": "energy.meters.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Logische meters van my_house met de laatste vermogensmeting en meetkwaliteit",
         "tags": [
           "energy"
         ]

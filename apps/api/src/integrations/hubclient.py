@@ -183,6 +183,18 @@ class HubClient:
         with self.client() as c:
             return c.request(method, url, json=json, headers=hdrs, params=params, extensions=extensions)
 
+    @contextlib.contextmanager
+    def stream_get(
+        self, base_url: str, path: str, *, headers: dict[str, str], params: dict[str, str]
+    ) -> Iterator[httpx.Response]:
+        """Lees een antwoord begrensd bij de aanroeper, via dezelfde DNS-, TLS- en proxyregels."""
+        url, hdrs, extensions = self._pin_address(base_url, path, dict(headers))
+        with (
+            self.client() as client,
+            client.stream("GET", url, headers=hdrs, params=params, extensions=extensions) as r,
+        ):
+            yield r
+
     def _pin_address(self, base_url: str, path: str, headers: dict[str, str]) -> tuple[str, dict[str, str], Any]:
         """§3.2: bij een hostnaam het opgeloste adres controleren en daarmee verbinden (per verbinding opnieuw)."""
         parts = urlsplit(base_url)

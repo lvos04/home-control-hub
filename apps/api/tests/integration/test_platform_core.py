@@ -221,7 +221,6 @@ def test_connector_apply_needs_key_and_a_real_execution_request(paired_client: A
         "/integrations/v1/network/devices",
         "/integrations/v1/network/dns/summary",
         "/integrations/v1/network/tunnels",
-        "/integrations/v1/energy/meters",
         "/integrations/v1/energy/usage",
         "/integrations/v1/energy/advice",
     ],
@@ -235,6 +234,8 @@ def test_unbuilt_domain_data_is_501_not_empty(paired_client: Any, auth: Any, pat
 
 def test_domain_structures(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("viewer")
+    meters = c.get("/integrations/v1/energy/meters", headers=h)
+    assert meters.status_code == 200 and meters.json()["items"] == [] and meters.json()["reason_nl"]
     cov = c.get("/integrations/v1/energy/coverage", headers=h).json()
     roles = {i["role"]: i for i in cov["items"]}
     assert set(roles) == {"p1_net", "boiler_socket", "airco_outdoor", "nas_host"}

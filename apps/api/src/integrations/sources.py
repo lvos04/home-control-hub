@@ -165,7 +165,11 @@ router = APIRouter(prefix=API_PREFIX, tags=["bronnen"], route_class=AuthFirstRou
 
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    base_url: str | None = Field(default=None, max_length=500, description="LAN-adres van de app (http/https).")
+    base_url: str | None = Field(
+        default=None,
+        max_length=500,
+        description="LAN-adres van de app (http/https). Voor my_house inclusief /api/v1/homes/<woning-UUID>.",
+    )
     enabled: bool = False
     credential: str | None = Field(
         default=None, min_length=8, max_length=4096, description="Write-only; wordt versleuteld in de vault bewaard."
@@ -252,7 +256,10 @@ def put_source(
                 {},
             )
         vault = request.app.state.vault
-        if body.clear_credential and row.credential_ref:
+        # De viewer-koppeling hoort bij één bronadres. Stuur na een adreswissel nooit het oude token mee.
+        if (
+            body.clear_credential or (source_id == "my_house" and changed_url and not body.credential)
+        ) and row.credential_ref:
             vault.delete(session, row.credential_ref)
             row.credential_ref = None
         if body.credential:

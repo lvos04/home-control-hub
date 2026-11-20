@@ -25,7 +25,25 @@ aannames over Node-RED zijn nagemeten tegen de gepinde image in lokale container
 `jelly-leon-platform`). De schermen staan in de Hub en zijn hier niet gebouwd.
 NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
 
-B10/B14 hebben alleen datamodel en inventaris; hun data-endpoints geven eerlijk `501 capability_unavailable`.
+**B14-001 energiemeters.** B14 leest my_house rechtstreeks met een eigen viewer-koppeling. Een beheerder stelt
+`my_house` in via `PUT /integrations/v1/sources/my_house`. Gebruik als `base_url` het bronadres inclusief
+`/api/v1/homes/<woning-UUID>`, zet `enabled` aan en voer het viewer-token in als `credential`. Het token wordt
+versleuteld in de kluis bewaard. Bij een adreswissel is het token van de nieuwe bestemming nodig.
+
+`GET /integrations/v1/energy/meters` geeft de logische meetkanalen van de woning met bron, vermogen in watt,
+kwaliteitslabel en eigen meettijd. `GET /integrations/v1/energy/coverage` en connectoritem `energy.coverage`
+geven de dekking per verwachte rol. De client herkent P1 aan de expliciete rol `grid` in het dagoverzicht en
+leest het bijbehorende vermogen en de meettijd uit `energy/live`. De boiler en de gedeelde airco-buitenunit
+leveren hun eigen rol, tijd en kwaliteit in dat liveantwoord. Een geschatte waarde draagt het bronlabel.
+De bron levert voor deze kanalen geen fysiek serienummer.
+
+Bij uitval of een meting ouder dan vijf minuten wordt het vermogen onbekend. De laatste bekende meettijd
+blijft herkenbaar bij dezelfde koppeling. Apparaatnamen, vermogen van binnenunits en CPU-belasting leveren
+geen meterbewijs. De huidige bron meldt geen losse NAS-meter. De fysieke toewijzing vraagt besluit D14 en
+beproeving met de meters in huis (N-P6-06).
+
+De gegevensroutes van B10 en de overige gegevensroutes van B14 voor verbruik, werklast en advies geven
+`501 capability_unavailable`.
 **Niets is op een echte NAS, met een echte Authentik of met een Node-RED op de NAS gevalideerd** (zie
 `docs/platform-v2/EVIDENCE.json`).
 
@@ -60,7 +78,7 @@ Node-RED zelf is een eigen standaard Custom App; de installatieweg is het manife
 | B11-004: proefrun met vaste voorbeeld-events | `domains/automation/simulate.py`, `samples.py` |
 | B11-005: versleutelde momentopnamen, diff zonder waarden, herstel als voorstel + ondertekend ExecutionRequest (Ed25519, canonieke JSON, eigen hercontrole) | `domains/automation/snapshots.py`, `restore.py`, `security/execreq.py` |
 | Nep-Node-RED voor tests (volgt de gemeten feiten van de gepinde image) en het meetprogramma tegen de echte image | `apps/api/tests/fakes/node_red_fake.py`, `tests/e2e/sim_node_red.py`, `tools/node_red_verify.py`, `docs/b11/` |
-| B10/B14: datamodellen met database-invarianten en inventaris (alles *te verifiëren*) | `domains/network`, `energy` |
+| B10 netwerkinventaris en B14-001 energiemeters en dekkingsmatrix | `domains/network`, `domains/energy` |
 | Migraties (Alembic) | `apps/api/alembic/` |
 | Alles-in-één image (PostgreSQL 16 via unix-socket + API + worker; de procesbewaker is PID 1, wisselt naar 568 zonder capabilities en zet no-new-privileges) | `deploy/allinone/` |
 | OpenAPI | `docs/openapi/home-control-hub.openapi.json` |

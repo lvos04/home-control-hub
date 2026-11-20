@@ -34,6 +34,12 @@ def test_no_unverified_claims_about_external_apps() -> None:
     for spec in ALL_SOURCES.values():
         if spec.source_id == "authentik":
             assert spec.api_verification == "geverifieerd_docs" and spec.api_verification_ref
+        elif spec.source_id == "my_house":
+            assert spec.api_verification == "geverifieerd_docs"
+            assert (
+                "DELTA_MATRIX.md §6" in spec.api_verification_ref
+                and "NIET GEVALIDEERD (hardware)" in spec.api_verification_ref
+            )
         elif spec.source_id == "node_red":
             # B11: gemeten tegen een lokale container van de gepinde image; de echte NAS blijft NIET GEVALIDEERD
             assert spec.api_verification == "geverifieerd_installatie"
@@ -65,9 +71,10 @@ def test_no_unverified_claims_about_external_apps() -> None:
     assert {s.domain for s in ALL_SOURCES.values()} == {"network", "automation", "sso", "energy"}
 
 
-def test_built_capabilities_are_exactly_b13_and_b11() -> None:
+def test_built_capabilities_are_exactly_b13_b11_and_meter_readback() -> None:
     built = {c.capability_id for s in ALL_SOURCES.values() for c in s.capabilities if c.build_status == "gebouwd"}
     assert built == {
+        "energy.meters.read",
         "automation.isolation.check",
         "automation.flows.read",
         "automation.event_types.read",

@@ -37,6 +37,7 @@ from .domains.automation.models import (
     AutomationRestore,
     AutomationSnapshot,
 )
+from .domains.energy.meters import meter_inventory
 from .domains.energy.router import coverage_payload as energy_coverage
 from .domains.sso import proposals as sso_proposals
 from .domains.sso import service as sso_service
@@ -234,7 +235,7 @@ def items(
         st.pop("accounts", None)
         data = [st]
     elif type == "energy.coverage":
-        data = energy_coverage()["items"]
+        data = energy_coverage(meter_inventory(request, session)).model_dump(mode="json")["items"]
     elif type == "automation.flow":
         data = [
             {
