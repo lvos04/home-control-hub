@@ -27,6 +27,7 @@ from .domains.automation import inbox as flow_inbox
 from .domains.automation import restore as flow_restore
 from .domains.automation import simulate as flow_simulate
 from .domains.automation import snapshots as flow_snapshots
+from .domains.energy.usage_sync import sync_usage
 from .domains.sso import authaudit
 from .domains.sso.authentik.client import AuthentikError, client_from_source
 from .domains.sso.service import close_expired_activations
@@ -55,6 +56,7 @@ class WorkerState:
     next_authentik_sync: float = 0.0
     next_node_red_sync: float = 0.0
     next_isolation_check: float = 0.0
+    next_energy_sync: float = 0.0
     last_push_ok: str | None = None
     stats: dict[str, int] = field(
         default_factory=lambda: {
@@ -174,6 +176,13 @@ class Worker:
                 flow_snapshots.run_isolation_check(s, self.settings, self.vault, self.transport, trace_id=trace)
                 s.commit()
 
+    def energy_step(self, now: float) -> None:
+        if now < self.state.next_energy_sync:
+            return
+        self.state.next_energy_sync = now + 300
+        with self.db.sessions() as session:
+            sync_usage(session, self.settings, self.vault, self.transport, utcnow())
+
     def housekeeping_step(self, now: float) -> None:
         with self.db.sessions() as s:
             self.state.stats["closed_activations"] += close_expired_activations(s)
@@ -189,7 +198,7 @@ class Worker:
         now = time.monotonic()
         started = utcnow()
         failed: list[str] = []
-        names = ("start", "koppelen", "koppeling", "push", "authentik", "automatisering", "onderhoud")
+        names = ("start", "koppelen", "koppeling", "push", "authentik", "automatisering", "energie", "onderhoud")
         for name, step in zip(
             names,
             (
@@ -199,6 +208,7 @@ class Worker:
                 self.push_step,
                 lambda: self.authentik_step(now),
                 lambda: self.automation_step(now),
+                lambda: self.energy_step(now),
                 lambda: self.housekeeping_step(now),
             ),
             strict=True,

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,26 +65,29 @@ class EnergyEstimateProvenance(Base):
     method: Mapped[str] = mapped_column(String(30), nullable=False)
     calibration_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
     assumptions: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
-        CheckConstraint("method IN ('interpolatie','cpu_model','vergelijkbare_dag','handmatig')", name="method"),
+        CheckConstraint(
+            "method IN ('interpolatie','cpu_model','vergelijkbare_dag','handmatig','bronaggregatie')", name="method"
+        ),
         # B14-001: geen wattage uit CPU% zonder kalibratie
         CheckConstraint("method <> 'cpu_model' OR calibration_ref IS NOT NULL", name="cpu_model_requires_calibration"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence"),
+        CheckConstraint("confidence IS NOT NULL OR method = 'bronaggregatie'", name="confidence_for_local_estimate"),
     )
 
 
 class EnergyUsageInterval(Base):
     __tablename__ = "energy_usage_interval"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
-    meter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("energy_meter.id", ondelete="CASCADE"), nullable=False)
+    meter_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("energy_meter.id", ondelete="CASCADE"), nullable=True)
     start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     counter_start: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     counter_end: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
-    delta: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    delta: Mapped[Decimal | None] = mapped_column(Numeric(15, 4), nullable=True)
     direction: Mapped[str] = mapped_column(String(10), nullable=False, default="import")
     quality: Mapped[str] = mapped_column(ForeignKey("energy_sample_quality.code"), nullable=False)
     counter_reset: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -92,6 +96,16 @@ class EnergyUsageInterval(Base):
 
     __table_args__ = (
         UniqueConstraint("meter_id", "start_utc", "direction", name="uq_energy_usage_interval_meter_start"),
+        Index("ix_energy_usage_interval_source_start", "source_ref", "start_utc"),
+        Index(
+            "uq_energy_usage_interval_gap",
+            "source_ref",
+            "start_utc",
+            "direction",
+            unique=True,
+            postgresql_where=meter_id.is_(None),
+        ),
+        CheckConstraint("meter_id IS NOT NULL OR quality = 'onbekend'", name="value_requires_meter"),
         CheckConstraint("end_utc > start_utc", name="interval_order"),
         CheckConstraint("direction IN ('import','export')", name="direction"),
         CheckConstraint("delta IS NULL OR delta >= 0", name="delta_non_negative"),
@@ -105,7 +119,7 @@ class EnergyTariff(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
     kind: Mapped[str] = mapped_column(String(10), nullable=False)
     unit: Mapped[str] = mapped_column(String(10), nullable=False)
-    price_per_unit: Mapped[float | None] = mapped_column(Numeric(10, 5), nullable=True)
+    price_per_unit: Mapped[Decimal | None] = mapped_column(Numeric(10, 5), nullable=True)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_ref: Mapped[str] = mapped_column(String(200), nullable=False)

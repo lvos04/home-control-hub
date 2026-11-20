@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+import httpx
 from cryptography.exceptions import InvalidTag
 from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ...config import Settings
 from ...models import IntegrationSource
+from ...security.vault import Vault
 from ...sources import source_ref
 from ...timeutil import utcnow
 from .catalog import EXPECTED_METER_ROLES
@@ -57,23 +60,32 @@ def _read(client: EnergyClient) -> tuple[dict[str, Reading], str]:
     return live_readings(live, declared, utcnow()), ABSENT
 
 
-def meter_inventory(request: Request, session: Session) -> Inventory:
-    # Eén transactie per koppeling houdt het doeladres, het token en de meterregistratie bij dezelfde lezing.
+def configured_client(
+    session: Session, settings: Settings, vault: Vault, transport: httpx.BaseTransport | None
+) -> tuple[EnergyClient, UUID, str]:
+    """Houd de bronconfiguratie vast tot het bijbehorende leesresultaat verwerkt is."""
     source = session.scalar(select(IntegrationSource).where(IntegrationSource.source_id == SOURCE).with_for_update())
     if source is None or not source.base_url:
-        return Inventory({}, "De bron my_house is niet ingesteld.")
+        raise EnergyReadError("De bron my_house is niet ingesteld.")
     if not source.enabled:
-        return Inventory({}, "De bron my_house staat uit.")
+        raise EnergyReadError("De bron my_house staat uit.")
     if source.credential_ref != source_ref(SOURCE):
-        return Inventory({}, "De eigen viewer-koppeling voor my_house ontbreekt.")
+        raise EnergyReadError("De eigen viewer-koppeling voor my_house ontbreekt.")
     try:
-        stored = request.app.state.vault.get(session, source.credential_ref)
-        viewer = stored_viewer(stored)
-        client = EnergyClient(source.base_url, viewer, request.app.state.settings, request.app.state.http_transport)
+        stored = vault.get(session, source.credential_ref)
+    except (InvalidTag, ValueError):
+        raise EnergyReadError("De viewer-koppeling in de kluis is onleesbaar.") from None
+    viewer = stored_viewer(stored)
+    scope = uuid5(NAMESPACE_URL, f"{viewer.pairing.server_id}/{viewer.pairing.home_id}")
+    return EnergyClient(source.base_url, viewer, settings, transport), scope, source.link_revision
+
+
+def meter_inventory(request: Request, session: Session) -> Inventory:
+    state = request.app.state
+    try:
+        client, scope, revision = configured_client(session, state.settings, state.vault, state.http_transport)
     except EnergyReadError as exc:
         return Inventory({}, str(exc))
-    except (InvalidTag, ValueError):
-        return Inventory({}, "De viewer-koppeling in de kluis is onleesbaar.")
 
     try:
         readings, reason = _read(client)
@@ -81,8 +93,7 @@ def meter_inventory(request: Request, session: Session) -> Inventory:
         readings = {}
         reason = str(exc)
 
-    scope = uuid5(NAMESPACE_URL, f"{viewer.pairing.server_id}/{viewer.pairing.home_id}")
-    inventory = _register(session, scope, source.link_revision, readings, reason)
+    inventory = _register(session, scope, revision, readings, reason)
     session.commit()
     return inventory
 
@@ -116,6 +127,8 @@ def _register(session: Session, scope: UUID, revision: str, readings: dict[str, 
             binding = EnergyMeterRole(meter_id=meter.id, role=role)
             session.add(binding)
         last_at = binding.confirmed_at if previous else None
+        if last_at is not None:
+            last_at = last_at.astimezone(UTC)
         if reading is None:
             reading = Reading.unknown(reason, last_at)
         elif last_at and reading.at and reading.at < last_at:

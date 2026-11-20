@@ -536,6 +536,45 @@
         "title": "CoverageItem",
         "type": "object"
       },
+      "Day": {
+        "properties": {
+          "cost": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "hours": {
+            "items": {
+              "$ref": "#/components/schemas/Hour"
+            },
+            "title": "Hours",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "volledig",
+              "onvolledig"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "status",
+          "usage",
+          "cost",
+          "date",
+          "hours"
+        ],
+        "title": "Day",
+        "type": "object"
+      },
       "DrillIn": {
         "additionalProperties": false,
         "properties": {
@@ -695,6 +734,52 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Hour": {
+        "properties": {
+          "cost": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "counter_reset": {
+            "title": "Counter Reset",
+            "type": "boolean"
+          },
+          "end_utc": {
+            "format": "date-time",
+            "title": "End Utc",
+            "type": "string"
+          },
+          "meter_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meter Id"
+          },
+          "start_utc": {
+            "format": "date-time",
+            "title": "Start Utc",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "start_utc",
+          "end_utc",
+          "meter_id",
+          "counter_reset",
+          "usage",
+          "cost"
+        ],
+        "title": "Hour",
         "type": "object"
       },
       "InstallationCheckIn": {
@@ -1230,6 +1315,40 @@
         "title": "ProposeIn",
         "type": "object"
       },
+      "Quantity": {
+        "properties": {
+          "quality": {
+            "default": "onbekend",
+            "enum": [
+              "gemeten",
+              "geschat",
+              "onbekend"
+            ],
+            "title": "Quality",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "Quantity",
+        "type": "object"
+      },
       "RestoreCheckIn": {
         "additionalProperties": false,
         "properties": {
@@ -1510,6 +1629,91 @@
           "target_version"
         ],
         "title": "UpgradeGateIn",
+        "type": "object"
+      },
+      "UsageReport": {
+        "properties": {
+          "cost": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/Day"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "direction": {
+            "enum": [
+              "import",
+              "export"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "period": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "p1_net",
+              "boiler_socket",
+              "airco_outdoor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "volledig",
+              "onvolledig"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "unit": {
+            "const": "kWh",
+            "default": "kWh",
+            "title": "Unit",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "status",
+          "usage",
+          "cost",
+          "period",
+          "timezone",
+          "role",
+          "direction",
+          "currency",
+          "days"
+        ],
+        "title": "UsageReport",
         "type": "object"
       },
       "ValidationError": {
@@ -4516,25 +4720,119 @@
     },
     "/integrations/v1/energy/usage": {
       "get": {
-        "operationId": "endpoint_integrations_v1_energy_usage_get",
+        "operationId": "usage_integrations_v1_energy_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "title": "Period",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Een datum binnen de gewenste periode in de woning.",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Een datum binnen de gewenste periode in de woning.",
+              "title": "Date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "default": "p1_net",
+              "enum": [
+                "p1_net",
+                "boiler_socket",
+                "airco_outdoor"
+              ],
+              "title": "Role",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "default": "import",
+              "enum": [
+                "import",
+                "export"
+              ],
+              "title": "Direction",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optioneel ter controle van de door de woning gemelde tijdzone.",
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optioneel ter controle van de door de woning gemelde tijdzone.",
+              "title": "Timezone"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Energy Usage Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/UsageReport"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
           "501": {
-            "description": "capability_unavailable"
+            "description": "Bron of eerste uur-export ontbreekt"
+          },
+          "503": {
+            "description": "De bron of de viewer-koppeling is niet beschikbaar"
           }
         },
-        "summary": "energy.usage.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Verbruik en variabele kosten per lokale woningdag (B14-002)",
         "tags": [
           "energy"
         ]

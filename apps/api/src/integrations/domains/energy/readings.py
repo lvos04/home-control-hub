@@ -28,7 +28,7 @@ class Reading:
         return cls(None, at, "onbekend", reason)
 
 
-def _timestamp(raw: object) -> datetime | None:
+def source_timestamp(raw: object) -> datetime | None:
     if not isinstance(raw, str):
         return None
     try:
@@ -39,7 +39,7 @@ def _timestamp(raw: object) -> datetime | None:
 
 
 def read_part(part: dict[str, Any], now: datetime) -> Reading:
-    at = _timestamp(part.get("at"))
+    at = source_timestamp(part.get("at"))
     if at is None or at > now:
         return Reading.unknown("Een geldige eigen meettijd ontbreekt.")
     if now - at > LIVE_MAX_AGE or part.get("stale") is True:

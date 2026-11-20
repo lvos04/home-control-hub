@@ -87,19 +87,22 @@ def test_api_databasefout_logt_geen_detail(
     assert body["trace_id"] in logtekst
 
 
-def test_worker_databasefout_logt_geen_detail(clean_db: str, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(("methode", "onderdeel"), [("start_step", "start"), ("energy_step", "energie")])
+def test_worker_databasefout_logt_geen_detail(
+    clean_db: str, caplog: pytest.LogCaptureFixture, methode: str, onderdeel: str
+) -> None:
     from integrations.worker import Worker
 
     db = Database(clean_db)
 
-    def stap() -> None:
+    def stap(*_: object) -> None:
         _schending(db, "check")
 
     worker: Any = Worker.__new__(Worker)
-    namen = ("start_step", "enroll_step", "link_step", "push_step", "authentik_step", "automation_step")
+    namen = ("start_step", "enroll_step", "link_step", "push_step", "authentik_step", "automation_step", "energy_step")
     for naam in namen:
         setattr(worker, naam, (lambda *_: None))
-    worker.start_step = stap
+    setattr(worker, methode, stap)
     worker.housekeeping_step = lambda *_: None
     gezien: list[list[str]] = []
     worker.heartbeat = lambda _started, failed: gezien.append(failed)
@@ -108,12 +111,12 @@ def test_worker_databasefout_logt_geen_detail(clean_db: str, caplog: pytest.LogC
             worker.run_once()
     finally:
         db.dispose()
-    assert gezien == [["start"]]
+    assert gezien == [[onderdeel]]
     eigen = [rec for rec in caplog.records if rec.name.startswith("integrations")]
     assert eigen, "de fout is niet gelogd"
     logtekst = "\n".join(caplog.handler.format(rec) for rec in eigen)
     _geen_detail(logtekst)
-    assert "23514" in logtekst and "ck_k32_rol" in logtekst and "start" in logtekst
+    assert "23514" in logtekst and "ck_k32_rol" in logtekst and onderdeel in logtekst
 
 
 @pytest.mark.parametrize("soort", ["unique", "check"])

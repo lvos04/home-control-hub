@@ -57,7 +57,41 @@ De laatste bekende meettijd blijft herkenbaar bij dezelfde koppeling. Apparaatna
 geen meterbewijs. De huidige bron meldt geen losse NAS-meter. De fysieke toewijzing vraagt besluit D14 en
 beproeving met de meters in huis (N-P6-06).
 
-De gegevensroutes van B10 en de overige gegevensroutes van B14 voor verbruik, werklast en advies geven
+**B14-002 energietijdreeks.** Met een leesrol geeft `GET /integrations/v1/energy/usage` het verbruik en de
+variabele energiekosten. Kies `period=day|week|month` en een lokale `date`. Een week begint op maandag.
+`role` kiest `p1_net` (standaard), `boiler_socket` of `airco_outdoor`. Gebruik `direction=import`
+voor afname en `direction=export` voor teruglevering. Het antwoord vermeldt de tijdzone van de woning.
+De optionele parameter `timezone` controleert of de aanroeper dezelfde zone gebruikt.
+
+De worker leest iedere vijf minuten de uur-export van vandaag, gisteren en één eerdere woningdag uit
+de laatste 31 dagen. Na een herstart vervolgt hij die terugblik. Eerder opgeslagen dagen blijven
+opvraagbaar. Alleen afgesloten uren komen in het archief. Elke hoeveelheid in het rapport heeft een bron
+en een kwaliteit. Voor een dag- of periodetotaal moeten alle uren een waarde hebben.
+
+| Toestand | Wat het rapport toont |
+| --- | --- |
+| Overgang naar zomertijd in een woning met een uur tijdverschil | 23 afzonderlijke UTC-uren op de lokale dag |
+| Terug naar wintertijd | 25 UTC-uren, ook beide voorkomens van het teruggezette uur |
+| Gemeten nul | 0 kWh met bronkwaliteit |
+| Gat, strijdige bronrijen of door de bron overgeslagen tellerreset | Onbekend uur en onvolledig dag- en periodetotaal |
+| Geldig uurtotaal bij een gemelde tellerreset | Bronwaarde met `counter_reset` |
+| Meterwissel | Opeenvolgende meters tellen elk in hun eigen uren. Bij twee apparaten in hetzelfde uur is de verdeling onbekend. |
+| Minstens één geschat uur en alle uren aanwezig | Geschat totaal met herkomst |
+| Geen eenduidige prijs voor het hele uur of ontbrekende woningvaluta | Onbekend bedrag, met de beschikbare kWh ernaast |
+
+De bron levert een apparaatnaam per gebonden rol. De dienst leidt daar binnen de gekoppelde woning een
+meter-ID uit af. Een naamswijziging kan daardoor als wissel verschijnen en identiek benoemde meters zijn
+in de export niet te onderscheiden. De gebruiker ziet de meter-ID. De kosten gebruiken de afnameprijs
+of terugleververgoeding uit de tarieflijst in de woningvaluta. Vaste dagkosten vallen buiten dit
+verbruiksbedrag. Bij afwijkende T1/T2-prijzen ontbreekt een eenduidige prijs voor de hoofdteller.
+
+Schema 0009 bewaart vier decimalen per uur, gaten zonder bekende meter en de herkomst van een
+bronschatting zonder opgegeven zekerheid. Een terugmigratie naar 0008 stopt zodra zulke rijen hun
+betekenis of precisie zouden verliezen. Herstel in dat geval de voor-upgradeback-up in een aparte datamap.
+Bij meerdere terugstappen legt de dienst elke revisie apart vast, zodat de back-up van de volgende stap
+het bijbehorende schema kan lezen.
+
+De gegevensroutes van B10 en de overige gegevensroutes van B14 voor werklast en advies geven
 `501 capability_unavailable`.
 **Niets is op een echte NAS, met een echte Authentik of met een Node-RED op de NAS gevalideerd** (zie
 `docs/platform-v2/EVIDENCE.json`).

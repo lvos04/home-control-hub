@@ -263,7 +263,8 @@ TRUNCATE = (
     "sso_authentik_snapshot, sso_auth_event, sso_anomaly, automation_flow, automation_snapshot, "
     "automation_flow_version, automation_trigger, automation_flow_token, automation_event, automation_delivery, "
     "automation_flow_run, automation_action_request, automation_replay_key, automation_rate_limit, "
-    "automation_flow_owner, automation_restore, automation_execution_nonce, energy_meter_role, energy_meter "
+    "automation_flow_owner, automation_restore, automation_execution_nonce, energy_usage_interval, "
+    "energy_estimate_provenance, energy_tariff, energy_meter_role, energy_meter "
     "RESTART IDENTITY CASCADE"
 )
 

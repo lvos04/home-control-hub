@@ -151,13 +151,13 @@
  },
  {
   "id": "B14-002",
-  "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (hardware)",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Intervallen in UTC met tellerreset-markering; 'geschat' vereist herkomst. Toelichting validatie: Niet getest: alleen datamodel; zomertijd 23/25 uur niet gebouwd.",
+  "status": "Bezig",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
+  "bewijs": "apps/api/tests/integration/test_b14_002_tijdreeks.py",
+  "blokkade": "NIET GEVALIDEERD (hardware). De integrale programmaproef EX28 met een fysieke P1-meter bij een tellerreset en een tijdwisseling volgt in S-P6-21.",
+  "opmerking": "De lokale viewerbron levert de uur-export met kwaliteitslabel en woningzone. De proeven bestrijken dagen van 23 en 25 uur, herlevering, gaten, meterwissels, bronprijzen en de kwaliteit van dag-, week- en maandtotalen. EX28 blijft als programmaregel Geblokkeerd.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-20"
  },
  {
   "id": "B14-003",

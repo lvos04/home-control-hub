@@ -242,7 +242,6 @@ def test_connector_apply_needs_key_and_a_real_execution_request(paired_client: A
         "/integrations/v1/network/devices",
         "/integrations/v1/network/dns/summary",
         "/integrations/v1/network/tunnels",
-        "/integrations/v1/energy/usage",
         "/integrations/v1/energy/advice",
     ],
 )
@@ -251,6 +250,13 @@ def test_unbuilt_domain_data_is_501_not_empty(paired_client: Any, auth: Any, pat
     assert r.status_code == 501
     body = r.json()
     assert body["code"] == "capability_unavailable" and body["details"]["status"] == "niet_gebouwd"
+
+
+def test_verbruik_zonder_bron_geeft_geen_leeg_rapport(paired_client: Any, auth: Any) -> None:
+    response = paired_client.get("/integrations/v1/energy/usage", headers=auth("viewer"))
+    assert response.status_code == 501
+    assert response.json()["code"] == "capability_unavailable"
+    assert response.json()["details"]["reason"] == "bron_niet_beschikbaar"
 
 
 def test_domain_structures(paired_client: Any, auth: Any) -> None:

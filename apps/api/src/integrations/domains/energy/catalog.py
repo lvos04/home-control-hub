@@ -32,7 +32,13 @@ SOURCES: tuple[SourceSpec, ...] = (
                 ("B14-001",),
                 build_status="gebouwd",
             ),
-            cap("energy.usage.read", "Verbruiksintervallen met kwaliteitslabel", "read", ("B14-002",)),
+            cap(
+                "energy.usage.read",
+                "Verbruiksintervallen met kwaliteitslabel",
+                "read",
+                ("B14-002",),
+                build_status="gebouwd",
+            ),
         ),
         forbidden_nl=(
             "Boiler blijft in alle gevallen alleen meten; geen schakelroute (EX27, B14-005).",

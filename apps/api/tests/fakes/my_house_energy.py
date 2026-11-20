@@ -6,8 +6,9 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -25,6 +26,9 @@ class MyHouseEnergy:
         self.token = "shc_" + secrets.token_urlsafe(32)
         self.at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
         self.summary = {"meters": [{"role": "grid", "unit": "kWh", "quality": "estimated", "kwh": 3.1}]}
+        self.summary.update(timezone="Europe/Amsterdam", currency="EUR")
+        self.hour_rows: dict[date, list[dict[str, Any]]] = {}
+        self.tariffs: list[dict[str, Any]] = []
         self.live: dict[str, Any] = {
             "at": self.at,
             "total_w": -42.5,
@@ -95,12 +99,26 @@ class MyHouseEnergy:
             return httpx.Response(status, text=self.token, headers={"Location": "https://elders.test/"})
         if path == f"{self.path}/energy/export":
             assert request.url.params["format"] == "json"
+            assert request.url.params["resolution"] == "hour"
             assert request.url.params["from"] == request.url.params["to"]
-            return httpx.Response(200, json={"rows": []})
+            day = date.fromisoformat(request.url.params["from"])
+            zone = ZoneInfo(str(self.summary["timezone"]))
+            start = datetime.combine(day, time.min, zone)
+            return httpx.Response(
+                200,
+                json={
+                    "schema": "shc.energy.v2",
+                    "resolution": "hour",
+                    "timezone": zone.key,
+                    "from": start.astimezone(UTC).isoformat(),
+                    "to": (start + timedelta(days=1)).astimezone(UTC).isoformat(),
+                    "rows": self.hour_rows.get(day, []),
+                },
+            )
         data: dict[str, Any] = {
             f"{self.path}/energy/live": self.live,
             f"{self.path}/energy/summary": self.summary,
-            f"{self.path}/tariffs": [],
+            f"{self.path}/tariffs": self.tariffs,
             "/api/v1/energy/limits": {"grid": 20},
         }
         return httpx.Response(200, json=data[path])

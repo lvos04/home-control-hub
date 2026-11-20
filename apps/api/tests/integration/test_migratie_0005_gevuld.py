@@ -122,7 +122,7 @@ def _differences(before: Meting, after: Meting) -> list[str]:
 
 @pytest.mark.parametrize("databasenaam_in_query", [False, True], ids=["url-pad", "dbname"])
 def test_terugmigratie_0008_archiveert_de_koppelrevisies(
-    vorige_versie: Settings, tmp_path: Path, databasenaam_in_query: bool
+    vorige_versie: Settings, tmp_path: Path, databasenaam_in_query: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     eng = create_engine(vorige_versie.database_url)
     if databasenaam_in_query:
@@ -145,6 +145,10 @@ def test_terugmigratie_0008_archiveert_de_koppelrevisies(
         assert _revision(eng) == "0008"
         assert _columns(eng) == kolommen and _measure(eng, kolommen) == voor
 
+        # De dump van 0008 moet ook in een terugmigratie vanaf 0009 leesbaar zijn. Een achtergebleven
+        # DDL-slot geeft binnen de proef een fout in plaats van een onbeperkt wachtende pg_dump.
+        upgrade(vorige_versie, "0009")
+        monkeypatch.setenv("PGOPTIONS", os.environ.get("PGOPTIONS", "") + " -c lock_timeout=10s")
         assert cmd_migrate(vorige_versie, None, "0007") == 0
         assert _revision(eng) == "0007"
         (dump,) = (vorige_versie.data_dir / "backups").glob("voor-terugmigratie-0008-*.dump")
@@ -176,6 +180,26 @@ def _constraints(eng: Engine) -> dict[tuple[str, str], str]:
                 )
             )
         }
+
+
+def _met_uurcijfers(checks: dict[tuple[str, str], str]) -> dict[tuple[str, str], str]:
+    """De twee nieuwe uitzonderingen in 0009 hebben elk een eigen beperkende voorwaarde."""
+    table = "energy_estimate_provenance"
+    key = (table, "ck_energy_estimate_provenance_method")
+    tail = "'handmatig'::character varying]"
+    assert tail in checks[key]
+    return {
+        **checks,
+        (
+            "energy_usage_interval",
+            "ck_energy_usage_interval_value_requires_meter",
+        ): "CHECK (((meter_id IS NOT NULL) OR ((quality)::text = 'onbekend'::text)))",
+        key: checks[key].replace(tail, "'handmatig'::character varying, 'bronaggregatie'::character varying]"),
+        (
+            table,
+            "ck_energy_estimate_provenance_confidence_for_local_estimate",
+        ): "CHECK (((confidence IS NOT NULL) OR ((method)::text = 'bronaggregatie'::text)))",
+    }
 
 
 def _fill(eng: Engine) -> dict[str, uuid.UUID]:
@@ -555,8 +579,9 @@ def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: S
             if revision == "0005":
                 assert checks == old_checks
             else:
-                assert old_checks.items() <= checks.items()
-                assert checks.keys() - old_checks.keys() == {("sso_proposal", "ck_sso_proposal_apply_status")}
+                expected = _met_uurcijfers(old_checks) if revision == head_revision(settings) else old_checks
+                assert expected.items() <= checks.items()
+                assert checks.keys() - expected.keys() == {("sso_proposal", "ck_sso_proposal_apply_status")}
             with pytest.raises(IntegrityError), eng.begin() as c:
                 c.execute(text("UPDATE sso_proposal SET apply_status = 'toegepast'"))
     finally:
@@ -581,7 +606,7 @@ def test_eerder_uitgevoerde_0006_krijgt_ontbrekende_constraint_terug(
         _filled_enough(before)
         if eerst_omhoog:
             upgrade(settings)
-            assert old_checks.items() <= _constraints(eng).items()
+            assert _met_uurcijfers(old_checks).items() <= _constraints(eng).items()
         downgrade(settings, "0005")
         assert _constraints(eng) == old_checks
         assert _columns(eng) == columns

@@ -71,10 +71,11 @@ def test_no_unverified_claims_about_external_apps() -> None:
     assert {s.domain for s in ALL_SOURCES.values()} == {"network", "automation", "sso", "energy"}
 
 
-def test_built_capabilities_are_exactly_b13_b11_and_meter_readback() -> None:
+def test_built_capabilities_are_exactly_b13_b11_and_energy_reads() -> None:
     built = {c.capability_id for s in ALL_SOURCES.values() for c in s.capabilities if c.build_status == "gebouwd"}
     assert built == {
         "energy.meters.read",
+        "energy.usage.read",
         "automation.isolation.check",
         "automation.flows.read",
         "automation.event_types.read",

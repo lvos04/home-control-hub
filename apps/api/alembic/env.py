@@ -29,7 +29,14 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        # Een terugmigratie kan pg_dump vanuit een tweede verbinding starten. Geef de DDL-sloten
+        # van de voorgaande revisie eerst vrij, met haar versie en wijzigingen samen vastgelegd.
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            transaction_per_migration=config.attributes.get("backup_before_downgrade") is not None,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
