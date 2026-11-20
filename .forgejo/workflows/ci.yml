@@ -16,15 +16,8 @@ jobs:
   python:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@postgres:5432/postgres
+      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@/postgres
       CI: "true"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -55,15 +48,17 @@ jobs:
       - name: Mypy
         working-directory: apps/api
         run: mypy
+      - name: Tijdelijke PostgreSQL 16 starten op de Unix-socket van de job
+        run: bash .forgejo/scripts/testpostgres.sh start
       - name: Unit- en integratietests
         working-directory: apps/api
         run: pytest -q
       - name: Migraties op en neer
         env:
-          HCH_DATABASE_URL: postgresql+psycopg://postgres@postgres:5432/hch_ci_mig
+          HCH_DATABASE_URL: postgresql+psycopg://postgres@/hch_ci_mig
         run: |
           export HCH_DATA_DIR="$RUNNER_TEMP/hch-mig"
-          psql -h postgres -U postgres -c 'CREATE DATABASE hch_ci_mig'
+          psql -U postgres -c 'CREATE DATABASE hch_ci_mig'
           python -m integrations migrate
           python -m integrations migrate --down base
           python -m integrations migrate
@@ -87,19 +82,15 @@ jobs:
         run: pytest -q tests/e2e -p no:cacheprovider
       - name: pip-audit op de runtime-afhankelijkheden
         run: pip-audit -r apps/api/requirements.lock --progress-spinner off
+      - name: Eigen testdatabase opruimen
+        if: always()
+        run: bash .forgejo/scripts/testpostgres.sh stop
 
   statuspagina-ui:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@postgres:5432/postgres
+      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@/postgres
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -113,16 +104,21 @@ jobs:
         working-directory: tests/ui
         run: |
           npm ci --no-audit --no-fund
-          npx --no-install playwright install --with-deps chromium
+          node node_modules/@playwright/test/cli.js install --with-deps chromium
+      - name: Tijdelijke PostgreSQL 16 starten op de Unix-socket van de job
+        run: bash .forgejo/scripts/testpostgres.sh start
       - name: Toestanden van de statuspagina genereren
         run: python tests/ui/genereer_toestanden.py --uit tests/ui/uit
       - name: Chromium, axe-core, overloop, CSP, toetsenbord en schermafdrukken
         working-directory: tests/ui
         env:
           SCHERMAFDRUKKEN: "1"
-        run: npx --no-install playwright test
+        run: node node_modules/@playwright/test/cli.js test
       - name: Ontwerpreview en browsertest van het koppelformulier tegen de simulator
         run: python tests/ui/ontwerpreview.py --uit tests/ui/review-uit
+      - name: Eigen testdatabase opruimen
+        if: always()
+        run: bash .forgejo/scripts/testpostgres.sh stop
       - name: Schermafdrukken en toestanden bewaren
         if: always()
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4

@@ -28,8 +28,9 @@ jobs:
         run: |
           set -euo pipefail
           image=git.medialeon.nl/leon/home-control-hub
-          export DOCKER_CONFIG="$RUNNER_TEMP/hch-docker" PATH="$GITHUB_WORKSPACE/.forgejo/scripts:$PATH"
+          export DOCKER_CONFIG="$RUNNER_TEMP/hch-docker" PATH="$RUNNER_TEMP/hch-bin:$PATH"
           mkdir -p "$DOCKER_CONFIG" release
+          install -Dm755 .forgejo/scripts/docker-credential-forgejo-ci "$RUNNER_TEMP/hch-bin/docker-credential-forgejo-ci"
           echo '{"credHelpers":{"git.medialeon.nl":"forgejo-ci"}}' > "$DOCKER_CONFIG/config.json"
           builder="hch-release-$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}"
           docker buildx create --name "$builder" --driver docker-container
