@@ -61,10 +61,15 @@ def resolve_host(host: str, port: int) -> list[str]:
     return out
 
 
+def _unmap_ipv4(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
 def forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_loopback: bool) -> str | None:
     """De reden waarom de dienst niet met dit adres mag verbinden (§3.2), of ``None``."""
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    ip = _unmap_ipv4(ip)
     if ip.is_unspecified:
         return "0.0.0.0/::"
     if ip.is_link_local:
@@ -121,6 +126,7 @@ def validate_hub_url(
     with contextlib.suppress(ValueError):
         ip = ipaddress.ip_address(host)
     if ip is not None:
+        ip = _unmap_ipv4(ip)
         if ip.is_unspecified:
             raise HubUrlError(f"{label} mag niet 0.0.0.0 of :: zijn; gebruik het LAN-adres van de NAS.")
         if ip.is_link_local:
