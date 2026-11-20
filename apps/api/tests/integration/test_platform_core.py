@@ -175,7 +175,7 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
         "automation.flows.restore": "vereist_execution_request",
     }
     assert set(d["domains"]) == {"network", "automation", "sso", "energy"} and d["timestamp_utc"].endswith("Z")
-    assert d["limits"]["max_age_s"] == {"source": 900, "health": 900}  # contract 1.3 §6.2
+    assert d["limits"]["max_age_s"] == {"source": 900, "health": 900, "energy.coverage": 300}  # contract 1.3 §6.2
     health = c.get("/connector/v1/health", headers=h).json()
     assert health["status"] in ("healthy", "degraded", "down", "unknown")
     names = {x["name"]: x for x in health["checks"]}

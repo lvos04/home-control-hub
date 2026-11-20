@@ -143,9 +143,9 @@
   "id": "B14-001",
   "status": "Bezig",
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
-  "bewijs": "apps/api/tests/integration/test_b14_001_dekkingsmatrix.py, apps/api/tests/fakes/my_house_energy.py en apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
+  "bewijs": "apps/api/tests/integration/test_b14_001_dekkingsmatrix.py, apps/api/tests/fakes/my_house_energy.py, tests/interop/test_my_house_energy.py::test_bronkwaliteit en apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
   "blokkade": "Besluit D14 en beproeving met de fysieke meters in huis via N-P6-06 zijn nodig. NIET GEVALIDEERD (hardware).",
-  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De simulatie toetst expliciete rollen, bronmeettijd, nulvermogen, uitval, herkomst, geweigerde rechten en geheimhouding. De bron geeft geen bewijs van een losse NAS-meter. De statuspagina voor dit werkpakket volgt in S-P3-350.",
+  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De vaste proeven toetsen HTTPS, vers instantiebewijs, server/client/woning en viewer/hub bij opslag en gebruik. De producent-consumentproef toetst de opgeslagen kwaliteit per rol. De connectorproef controleert de bronmeettijd, de grens van 300 seconden en meting_verouderd. Nulvermogen en uitval zijn afzonderlijk beproefd. De bron geeft geen bewijs van een losse NAS-meter. De statuspagina voor dit werkpakket volgt in S-P3-350.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-20"
  },

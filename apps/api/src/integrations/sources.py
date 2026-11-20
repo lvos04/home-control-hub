@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
+from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -28,6 +29,14 @@ from .deps import check_if_match, etag, get_session, if_match, trace_id
 from .domains import DOMAINS, SourceSpec
 from .domains.automation.catalog import SOURCES as AUTOMATION_SOURCES
 from .domains.energy.catalog import SOURCES as ENERGY_SOURCES
+from .domains.energy.client import (
+    BoundViewer,
+    EnergyClient,
+    EnergyReadError,
+    ViewerPairing,
+    energy_address,
+    stored_viewer,
+)
 from .domains.network.catalog import SOURCES as NETWORK_SOURCES
 from .domains.sso.catalog import SOURCES as SSO_SOURCES
 from .errors import ApiError, capability_unavailable, not_found
@@ -168,13 +177,16 @@ class SourceConfig(BaseModel):
     base_url: str | None = Field(
         default=None,
         max_length=500,
-        description="LAN-adres van de app (http/https). Voor my_house inclusief /api/v1/homes/<woning-UUID>.",
+        description="LAN-adres van de app (http/https). Voor my_house HTTPS met /api/v1/homes/<woning-UUID>.",
     )
     enabled: bool = False
     credential: str | None = Field(
         default=None, min_length=8, max_length=4096, description="Write-only; wordt versleuteld in de vault bewaard."
     )
     clear_credential: bool = False
+    my_house_pairing: ViewerPairing | None = Field(
+        default=None, description="Bij invoer van een my_house-token verplicht: de drie ID's uit het koppelantwoord."
+    )
 
 
 @router.get("/sources", summary="Alle bronnen (catalogus + toestand)")
@@ -222,6 +234,13 @@ def put_source(
             )
         except HubUrlError as exc:
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
+    if source_id == "my_house" and base_url:
+        try:
+            energy_address(base_url, settings)
+        except EnergyReadError as exc:
+            raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
+    if body.my_house_pairing and (source_id != "my_house" or not body.credential):
+        raise ApiError(422, "validation_error", "De koppelgegevens horen bij een nieuw my_house-credential.")
     if body.enabled and not base_url:
         raise ApiError(422, "validation_error", "Een bron aanzetten kan alleen met een adres.", {"veld": "base_url"})
     # de credential gaat niet mee in de verzoek-hash (alleen of hij er is), dus ook niet door de centrale controle van
@@ -233,7 +252,7 @@ def put_source(
     payload["credential"] = bool(body.credential)  # nooit de waarde in de verzoek-hash/opslag
 
     def action() -> tuple[int, Any, dict[str, str]]:
-        row = session.get(IntegrationSource, source_id)
+        row = session.get(IntegrationSource, source_id, with_for_update=True)
         created = row is None
         if row is None:
             if match not in (None, "*"):
@@ -256,14 +275,33 @@ def put_source(
                 {},
             )
         vault = request.app.state.vault
-        # De viewer-koppeling hoort bij één bronadres. Stuur na een adreswissel nooit het oude token mee.
-        if (
-            body.clear_credential or (source_id == "my_house" and changed_url and not body.credential)
-        ) and row.credential_ref:
-            vault.delete(session, row.credential_ref)
+        ref = source_ref(source_id)
+        if body.clear_credential or (source_id == "my_house" and changed_url):
+            previous = row.credential_ref
+            if previous and not body.credential and (source_id != "my_house" or previous == ref):
+                vault.delete(session, previous)
             row.credential_ref = None
-        if body.credential:
-            ref = source_ref(source_id)
+        if source_id == "my_house" and (body.credential or (body.enabled and row.credential_ref)):
+            try:
+                if not base_url:
+                    raise EnergyReadError("Het bevestigde my_house-adres ontbreekt.")
+                if body.credential:
+                    if body.my_house_pairing is None:
+                        raise EnergyReadError("De bevestigde server-ID, client-ID en woning zijn vereist.")
+                    viewer = BoundViewer(address=base_url, pairing=body.my_house_pairing, token=body.credential)
+                else:
+                    if row.credential_ref != ref:
+                        raise EnergyReadError("De eigen my_house-kluisverwijzing ontbreekt.")
+                    viewer = stored_viewer(vault.get(session, ref))
+                EnergyClient(base_url, viewer, settings, request.app.state.http_transport).verify()
+            except EnergyReadError as exc:
+                raise ApiError(422, "validation_error", str(exc)) from exc
+            except (InvalidTag, ValueError):
+                raise ApiError(422, "validation_error", "De my_house-koppeling in de kluis is onleesbaar.") from None
+            if body.credential:
+                vault.put(session, ref, viewer.model_dump_json(), last4=body.credential[-4:])
+                row.credential_ref = ref
+        elif body.credential:
             vault.put(session, ref, body.credential)
             row.credential_ref = ref
         session.flush()

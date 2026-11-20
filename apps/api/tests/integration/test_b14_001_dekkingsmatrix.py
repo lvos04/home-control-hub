@@ -4,30 +4,49 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
 from sqlalchemy import select
 
+from integrations.domains.energy.client import BoundViewer, ViewerPairing
 from integrations.domains.energy.models import EnergyMeter, EnergyMeterRole
 from tests.conftest import idem
 from tests.fakes.my_house_energy import MyHouseEnergy
+from tests.unit.test_authentik_execution_transport import TlsAuthentik
+from tests.unit.test_authentik_execution_transport import tls_authentik as tls_authentik
 
 ENERGY = "/integrations/v1/energy"
 SOURCE = "/integrations/v1/sources/my_house"
 CONNECTOR = "/connector/v1/items?type=energy.coverage"
 
 
+def configure(linked: Any, auth: Any, fake: MyHouseEnergy, **changes: Any) -> Any:
+    linked.app.state.http_transport = httpx.MockTransport(fake.handle)
+    return linked.put(
+        SOURCE,
+        headers=idem(auth("admin"), **{"If-Match": "*"}),
+        json={
+            "base_url": fake.address,
+            "enabled": True,
+            "credential": fake.token,
+            "my_house_pairing": fake.pairing,
+            **changes,
+        },
+    )
+
+
+def viewer(fake: MyHouseEnergy, token: str | None = None) -> BoundViewer:
+    return BoundViewer(address=fake.address, token=token or fake.token, pairing=ViewerPairing(**fake.pairing))
+
+
 @pytest.fixture
 def bron(linked: Any, auth: Any) -> MyHouseEnergy:
     fake = MyHouseEnergy()
-    result = linked.put(
-        SOURCE,
-        headers=idem(auth("admin")),
-        json={"base_url": fake.address, "enabled": True, "credential": fake.token},
-    )
+    result = configure(linked, auth, fake)
     assert result.status_code == 201 and fake.token not in result.text
-    linked.app.state.http_transport = httpx.MockTransport(fake.handle)
+    assert result.json()["runtime"]["credential_last4"] == fake.token[-4:]
     return fake
 
 
@@ -61,9 +80,10 @@ def test_meters_rollen_en_herkomst(linked: Any, auth: Any, bron: MyHouseEnergy) 
 
 @pytest.mark.parametrize("path", [ENERGY + "/meters", ENERGY + "/coverage", CONNECTOR])
 def test_leesrecht_voor_bronverzoek(linked: Any, auth: Any, bron: MyHouseEnergy, path: str) -> None:
+    checks = list(bron.checks)
     assert linked.get(path).status_code == 401
     assert linked.get(path, headers=auth("kind")).status_code == 403
-    assert not bron.calls
+    assert not bron.calls and bron.checks == checks
 
 
 def test_geen_naam_cpu_binnenunit_of_huistotaal_als_rol(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
@@ -103,8 +123,8 @@ def test_uitval_en_herstel_zonder_oude_waarde(linked: Any, auth: Any, bron: MyHo
         ({"watts": False}, "onbekend"),
         ({"stale": True}, "onbekend"),
         ({"stale": 0}, "onbekend"),
-        ({"quality": "missing"}, "onbekend"),
-        ({"quality": "estimated"}, "geschat"),
+        ({"source_quality": "missing"}, "onbekend"),
+        ({"source_quality": "estimated"}, "geschat"),
         ({"at": None}, "onbekend"),
         ({"at": "2030-01-01T12:00:00"}, "onbekend"),
     ],
@@ -147,7 +167,7 @@ def test_client_heeft_alleen_vijf_vaste_gets(make_settings: Any) -> None:
     from integrations.domains.energy.client import EnergyClient, EnergyRoute
 
     bron = MyHouseEnergy()
-    client = EnergyClient(bron.address, bron.token, make_settings(), httpx.MockTransport(bron.handle))
+    client = EnergyClient(bron.address, viewer(bron), make_settings(), httpx.MockTransport(bron.handle))
     for route in EnergyRoute:
         client.read(route, day=date.today())
     assert {path for _, path in bron.calls} == {
@@ -163,7 +183,7 @@ def test_client_heeft_alleen_vijf_vaste_gets(make_settings: Any) -> None:
             client.read(EnergyRoute.LIVE, method=word)  # type: ignore[call-arg]
         with pytest.raises(ValueError):
             client.read(word)  # type: ignore[arg-type]
-    assert len(bron.calls) == 5 and bron.token not in repr(client)
+    assert len(bron.calls) == len(set(bron.nonces)) == 5 and bron.token not in repr(client)
 
 
 def test_ouderdom_op_de_grens() -> None:
@@ -172,10 +192,15 @@ def test_ouderdom_op_de_grens() -> None:
     now = datetime.now(UTC)
     limit = int(LIVE_MAX_AGE.total_seconds())
     for age in (-1, 0, 1, limit - 1, limit, limit + 1, 901):
-        part = {"watts": 0, "stale": False, "quality": "measured", "at": (now - timedelta(seconds=age)).isoformat()}
+        part = {
+            "watts": 0,
+            "stale": False,
+            "source_quality": "measured",
+            "at": (now - timedelta(seconds=age)).isoformat(),
+        }
         reading = read_part(part, now)
         assert (reading.value == 0) is (0 <= age <= LIVE_MAX_AGE.total_seconds())
-    for field in ("watts", "stale", "quality", "at"):
+    for field in ("watts", "stale", "source_quality", "at"):
         assert read_part({k: v for k, v in {**part, "at": now.isoformat()}.items() if k != field}, now).value is None
 
 
@@ -218,20 +243,15 @@ def test_onjuiste_broninhoud_geeft_reden(linked: Any, auth: Any, bron: MyHouseEn
 
 
 def test_woning_ontbreekt_of_bron_staat_uit(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
-    for address, enabled in (("https://woning.test", True), (bron.address, False)):
-        result = linked.put(
-            SOURCE,
-            headers=idem(auth("admin"), **{"If-Match": "*"}),
-            json={"base_url": address, "enabled": enabled, "credential": bron.token},
-        )
-        assert result.status_code == 200
-        matrix = rows(linked, auth, CONNECTOR)
-        assert all(m["quality"] == "onbekend" and m["last_updated"] is None for m in matrix.values())
+    assert configure(linked, auth, bron, base_url="https://woning.test").status_code == 422
+    assert configure(linked, auth, bron, enabled=False).status_code == 200
+    matrix = rows(linked, auth, CONNECTOR)
+    assert all(m["quality"] == "onbekend" and m["last_updated"] is None for m in matrix.values())
     assert not bron.calls
 
 
 def test_p1_zonder_waarde_krijgt_geen_tijd_van_deelmeter(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
-    bron.live["total_w"] = None
+    bron.live.update(total_w=None, total_observed_at=None)
     matrix = rows(linked, auth, ENERGY + "/coverage")
     assert matrix["p1_net"]["quality"] == "onbekend" and matrix["p1_net"]["last_updated"] is None
     assert matrix["boiler_socket"]["last_updated"] == bron.at
@@ -251,8 +271,10 @@ def test_token_uit_een_ander_formaat_wordt_niet_verstuurd() -> None:
 
     bron = MyHouseEnergy()
     with pytest.raises(EnergyReadError):
-        EnergyClient(bron.address, "ander-tokenformaat", Settings(), httpx.MockTransport(bron.handle))
-    assert not bron.calls
+        EnergyClient(bron.address, viewer(bron, "ander-tokenformaat"), Settings(), httpx.MockTransport(bron.handle))
+    with pytest.raises(EnergyReadError):
+        EnergyClient(bron.address, bron.token, Settings(), httpx.MockTransport(bron.handle))
+    assert not bron.calls and not bron.checks
 
 
 def test_alleen_de_eigen_kluisverwijzing(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
@@ -264,4 +286,233 @@ def test_alleen_de_eigen_kluisverwijzing(linked: Any, auth: Any, bron: MyHouseEn
         linked.app.state.vault.put(session, vreemde_ref, bron.token)
         session.get(IntegrationSource, "my_house").credential_ref = vreemde_ref
     assert all(r["quality"] == "onbekend" for r in rows(linked, auth, CONNECTOR).values())
+    assert not bron.calls
+
+
+def test_andere_instantie_op_hetzelfde_adres(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
+    first = rows(linked, auth, ENERGY + "/meters")["boiler_socket"]
+    assert first["last_measurement"] == 0
+    # Hetzelfde adres, dezelfde woning en hetzelfde testtoken. Alleen de server-ID verandert.
+    bron.server_id = uuid4()
+    bron.live["parts"][1]["watts"] = 71
+    bron.calls.clear()
+    bron.checks.clear()
+    assert all(row["quality"] == "onbekend" for row in rows(linked, auth, CONNECTOR).values())
+    assert not bron.calls and bron.checks == ["/api/v1/pairing/identity"]
+    assert configure(linked, auth, bron).status_code == 200
+    new = rows(linked, auth, ENERGY + "/meters")["boiler_socket"]
+    assert new["id"] != first["id"] and new["last_measurement"] == 71
+
+
+@pytest.mark.parametrize(
+    ("role", "purpose"),
+    [
+        ("viewer", "hub"),
+        ("viewer", "phone"),
+        ("control", "phone"),
+        ("admin", "phone"),
+        ("control", "hub"),
+        ("admin", "hub"),
+        ("", "hub"),
+        ("viewer", ""),
+    ],
+)
+def test_koppelrecht(linked: Any, auth: Any, role: str, purpose: str) -> None:
+    from integrations.models import IntegrationSource, VaultSecret
+
+    fake = MyHouseEnergy()
+    fake.role, fake.purpose = role, purpose
+    allowed = (role, purpose) == ("viewer", "hub")
+    result = configure(linked, auth, fake)
+    assert result.status_code == (201 if allowed else 422)
+    assert fake.token not in result.text and not fake.calls
+    with linked.app.state.db.sessions() as s:
+        assert (s.get(IntegrationSource, "my_house") is not None) is allowed
+        assert (s.get(VaultSecret, "vault://source/my-house") is not None) is allowed
+    assert rows(linked, auth, CONNECTOR)["boiler_socket"]["quality"] == ("gemeten" if allowed else "onbekend")
+    assert bool(fake.calls) is allowed
+    if not allowed:
+        fake.role, fake.purpose = "viewer", "hub"
+        assert configure(linked, auth, fake).status_code == 201
+        fake.role, fake.purpose = role, purpose
+        assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
+        assert not fake.calls
+
+
+def test_transport_zonder_tls(linked: Any, auth: Any) -> None:
+    from integrations.models import IntegrationSource
+
+    fake = MyHouseEnergy()
+    address = fake.address.replace("https:", "http:")
+    assert configure(linked, auth, fake, base_url=address).status_code == 422
+    assert linked.get(SOURCE, headers=auth("viewer")).json()["runtime"]["credential_present"] is False
+    assert not fake.checks and not fake.calls
+    assert configure(linked, auth, fake).status_code == 201
+    with linked.app.state.db.sessions.begin() as s:
+        source = s.get(IntegrationSource, "my_house")
+        source.base_url = address
+        # Ook een intern consistente oude HTTP-koppeling hoort bij gebruik te stranden op het transport.
+        old = viewer(fake).model_copy(update={"address": address})
+        linked.app.state.vault.put(s, source.credential_ref, old.model_dump_json(), last4=fake.token[-4:])
+    fake.checks.clear()
+    assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
+    assert not fake.checks and not fake.calls
+
+
+@pytest.mark.parametrize("state", ["oude_kluiswaarde", "andere_client", "woning_ontbreekt", "ander_woningadres"])
+def test_koppelbewijs_bij_gebruik(linked: Any, auth: Any, bron: MyHouseEnergy, state: str) -> None:
+    from integrations.models import IntegrationSource
+
+    with linked.app.state.db.sessions.begin() as s:
+        source = s.get(IntegrationSource, "my_house")
+        if state == "oude_kluiswaarde":
+            linked.app.state.vault.put(s, source.credential_ref, bron.token)
+        elif state == "andere_client":
+            bron.client_id = uuid4()
+        elif state == "woning_ontbreekt":
+            bron.homes = []
+        else:
+            source.base_url = bron.address.replace(str(bron.home), str(uuid4()))
+    bron.checks.clear()
+    assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
+    assert not bron.calls
+    if state in ("oude_kluiswaarde", "ander_woningadres"):
+        assert not bron.checks
+
+
+@pytest.mark.parametrize("first_status", [200, 503])
+def test_recht_opnieuw_voor_volgende_get_en_herpoging(
+    linked: Any, auth: Any, bron: MyHouseEnergy, first_status: int
+) -> None:
+    def changed(request: httpx.Request) -> httpx.Response:
+        result = bron.handle(request)
+        if request.url.path.endswith("/energy/live"):
+            bron.purpose = "phone"
+            return result if first_status == 200 else httpx.Response(first_status)
+        return result
+
+    linked.app.state.http_transport = httpx.MockTransport(changed)
+    assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
+    assert bron.calls == [("GET", bron.path + "/energy/live")]
+    assert len(set(bron.nonces)) == 3
+
+
+@pytest.mark.parametrize(
+    ("source_quality", "quality"),
+    [
+        ("measured", "gemeten"),
+        ("estimated", "geschat"),
+        ("derived", "onbekend"),
+        (None, "onbekend"),
+    ],
+)
+def test_bronkwaliteit(linked: Any, auth: Any, bron: MyHouseEnergy, source_quality: str | None, quality: str) -> None:
+    if source_quality is None:
+        del bron.live["total_source_quality"]
+        del bron.live["parts"][1]["source_quality"]
+    else:
+        bron.live["total_source_quality"] = bron.live["parts"][1]["source_quality"] = source_quality
+    meters = rows(linked, auth, ENERGY + "/meters")
+    for role, value in (("p1_net", -42.5), ("boiler_socket", 0)):
+        assert meters[role]["measurement_quality"] == quality
+        assert meters[role]["last_measurement"] == (None if quality == "onbekend" else value)
+
+
+def test_connector_versheidscontract(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
+    now = datetime.now(UTC)
+    fresh, stale = (
+        (now - timedelta(seconds=s)).isoformat(timespec="seconds").replace("+00:00", "Z") for s in (240, 310)
+    )
+    bron.live["total_observed_at"] = stale
+    bron.live["parts"][0]["at"] = stale
+    bron.live["parts"][1]["at"] = fresh
+    discover = linked.get("/connector/v1/discover", headers=auth("viewer")).json()
+    assert discover["limits"]["max_age_s"]["energy.coverage"] == 300
+    assert linked.get(ENERGY + "/coverage", headers=auth("viewer")).json()["max_age_s"] == 300
+    for path in (ENERGY + "/coverage", CONNECTOR):
+        matrix = rows(linked, auth, path)
+        for role, at, quality, code in [
+            ("p1_net", stale, "onbekend", "meting_verouderd"),
+            ("airco_outdoor", stale, "onbekend", "meting_verouderd"),
+            ("boiler_socket", fresh, "gemeten", None),
+            ("nas_host", None, "onbekend", None),
+        ]:
+            item = matrix[role]
+            assert (item["observed_at"], item["last_updated"], item["quality"], item["reason_code"]) == (
+                at,
+                at,
+                quality,
+                code,
+            )
+
+
+def test_onvertrouwd_tls_certificaat(tls_authentik: TlsAuthentik) -> None:
+    from integrations.config import Settings
+    from integrations.domains.energy.client import EnergyClient, EnergyRoute, ViewerDenied
+
+    server, url, _cert, _heads = tls_authentik
+    source = MyHouseEnergy()
+    source.address = url + source.path
+    client = EnergyClient(source.address, viewer(source), Settings(allow_loopback_hub=True), None)
+    with pytest.raises(ViewerDenied):
+        client.verify()
+    with pytest.raises(ViewerDenied):
+        client.read(EnergyRoute.LIVE)
+    assert not server.calls
+
+
+@pytest.mark.parametrize(
+    "invalid", ["bewijs_ontbreekt", "fout_bewijs", "ander_algoritme", "andere_client", "andere_woning"]
+)
+def test_geen_opslag_zonder_bewijs(linked: Any, auth: Any, invalid: str) -> None:
+    from integrations.models import IntegrationSource, VaultSecret
+
+    fake = MyHouseEnergy()
+    authorised = []
+
+    def invalid_proof(request: httpx.Request) -> httpx.Response:
+        result = fake.handle(request)
+        if "Authorization" in request.headers:
+            authorised.append(request.url.path)
+        data = result.json()
+        if request.url.path.endswith("/identity"):
+            if invalid == "bewijs_ontbreekt":
+                del data["proof"]
+            elif invalid == "fout_bewijs":
+                data["proof"] = "0" * 64
+            elif invalid == "ander_algoritme":
+                data["proof_alg"] = None
+        elif invalid == "andere_client" and request.url.path.endswith("/self"):
+            data["id"] = str(uuid4())
+        elif invalid == "andere_woning" and request.url.path.endswith("/homes"):
+            data = [{"id": str(uuid4())}]
+        return httpx.Response(200, json=data)
+
+    linked.app.state.http_transport = httpx.MockTransport(invalid_proof)
+    result = linked.put(
+        SOURCE,
+        headers=idem(auth("admin")),
+        json={
+            "base_url": fake.address,
+            "enabled": True,
+            "credential": fake.token,
+            "my_house_pairing": fake.pairing,
+        },
+    )
+    assert result.status_code == 422 and fake.token not in result.text
+    assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
+    assert not fake.calls
+    if invalid in ("bewijs_ontbreekt", "fout_bewijs", "ander_algoritme"):
+        assert not authorised
+    with linked.app.state.db.sessions() as s:
+        assert s.get(IntegrationSource, "my_house") is None and s.get(VaultSecret, "vault://source/my-house") is None
+
+
+def test_herconfiguratie_bewaart_geen_onbevestigde_wijziging(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
+    before = linked.get(SOURCE, headers=auth("viewer")).json()["runtime"]
+    bron.purpose = "phone"
+    assert configure(linked, auth, bron, credential=None, my_house_pairing=None).status_code == 422
+    after = linked.get(SOURCE, headers=auth("viewer")).json()["runtime"]
+    assert before == after
+    assert all(m["quality"] == "onbekend" for m in rows(linked, auth, CONNECTOR).values())
     assert not bron.calls

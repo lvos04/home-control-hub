@@ -446,6 +446,18 @@
             "title": "Notes Nl",
             "type": "string"
           },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
           "quality": {
             "enum": [
               "gemeten",
@@ -458,6 +470,17 @@
           "read_only": {
             "title": "Read Only",
             "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
           },
           "reason_nl": {
             "title": "Reason Nl",
@@ -505,6 +528,8 @@
           "quality",
           "source",
           "last_updated",
+          "observed_at",
+          "reason_code",
           "reason_nl",
           "why_unknown_nl"
         ],
@@ -858,6 +883,17 @@
             "title": "Read Only",
             "type": "boolean"
           },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
           "reason_nl": {
             "title": "Reason Nl",
             "type": "string"
@@ -885,6 +921,7 @@
           "last_measurement",
           "last_updated",
           "measurement_quality",
+          "reason_code",
           "reason_nl"
         ],
         "title": "MeterItem",
@@ -1277,7 +1314,7 @@
                 "type": "null"
               }
             ],
-            "description": "LAN-adres van de app (http/https). Voor my_house inclusief /api/v1/homes/<woning-UUID>.",
+            "description": "LAN-adres van de app (http/https). Voor my_house HTTPS met /api/v1/homes/<woning-UUID>.",
             "title": "Base Url"
           },
           "clear_credential": {
@@ -1303,6 +1340,17 @@
             "default": false,
             "title": "Enabled",
             "type": "boolean"
+          },
+          "my_house_pairing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewerPairing"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bij invoer van een my_house-token verplicht: de drie ID's uit het koppelantwoord."
           }
         },
         "title": "SourceConfig",
@@ -1502,6 +1550,34 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ViewerPairing": {
+        "additionalProperties": false,
+        "description": "De drie ID's uit het bevestigde my_house-koppelantwoord.",
+        "properties": {
+          "client_id": {
+            "format": "uuid",
+            "title": "Client Id",
+            "type": "string"
+          },
+          "home_id": {
+            "format": "uuid",
+            "title": "Home Id",
+            "type": "string"
+          },
+          "server_id": {
+            "format": "uuid",
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "client_id",
+          "home_id"
+        ],
+        "title": "ViewerPairing",
         "type": "object"
       }
     }

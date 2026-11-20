@@ -137,7 +137,7 @@ def test_link_problems_in_hub_link(paired_client: Any, auth: Any, fake_hub: Any)
 
 def test_discover_names_max_age(paired_client: Any, auth: Any) -> None:
     d = paired_client.get("/connector/v1/discover", headers=auth("viewer")).json()
-    assert d["limits"]["max_age_s"] == {"source": 900, "health": 900}
+    assert d["limits"]["max_age_s"] == {"source": 900, "health": 900, "energy.coverage": 300}
 
 
 def test_worker_writes_a_heartbeat_each_round(make_settings: Any, fake_hub: Any, clean_db: str) -> None:

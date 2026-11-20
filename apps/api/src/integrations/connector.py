@@ -38,6 +38,7 @@ from .domains.automation.models import (
     AutomationSnapshot,
 )
 from .domains.energy.meters import meter_inventory
+from .domains.energy.readings import LIVE_MAX_AGE
 from .domains.energy.router import coverage_payload as energy_coverage
 from .domains.sso import proposals as sso_proposals
 from .domains.sso import service as sso_service
@@ -167,7 +168,11 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
             "outbound_timeout_s": {"connect": 5, "read": 15},
             "max_retries": 3,
             # contract 1.3 §6.2: na deze leeftijd is een meting 'unknown' (meting_verouderd); een afnemer mag strenger
-            "max_age_s": {"source": MAX_AGE_S, "health": MAX_AGE_S},
+            "max_age_s": {
+                "source": MAX_AGE_S,
+                "health": MAX_AGE_S,
+                "energy.coverage": int(LIVE_MAX_AGE.total_seconds()),
+            },
         },
         "domains": domains,
         "timestamp_utc": iso(utcnow()),

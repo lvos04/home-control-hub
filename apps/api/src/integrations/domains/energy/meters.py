@@ -17,7 +17,7 @@ from ...models import IntegrationSource
 from ...sources import source_ref
 from ...timeutil import utcnow
 from .catalog import EXPECTED_METER_ROLES
-from .client import EnergyClient, EnergyReadError, EnergyRoute, ViewerDenied
+from .client import EnergyClient, EnergyReadError, EnergyRoute, ViewerDenied, stored_viewer
 from .models import EnergyMeter, EnergyMeterRole
 from .readings import SOURCE_ROLES, Quality, Reading, declared_roles, live_readings
 
@@ -35,6 +35,7 @@ class MeterItem(BaseModel):
     last_measurement: float | None
     last_updated: datetime | None
     measurement_quality: Quality
+    reason_code: str | None
     reason_nl: str
 
 
@@ -66,15 +67,13 @@ def meter_inventory(request: Request, session: Session) -> Inventory:
     if source.credential_ref != source_ref(SOURCE):
         return Inventory({}, "De eigen viewer-koppeling voor my_house ontbreekt.")
     try:
-        token = request.app.state.vault.get(session, source.credential_ref)
-    except (InvalidTag, ValueError):
-        token = None
-    if not token:
-        return Inventory({}, "Het viewer-token voor my_house ontbreekt of is onleesbaar.")
-    try:
-        client = EnergyClient(source.base_url, token, request.app.state.settings, request.app.state.http_transport)
+        stored = request.app.state.vault.get(session, source.credential_ref)
+        viewer = stored_viewer(stored)
+        client = EnergyClient(source.base_url, viewer, request.app.state.settings, request.app.state.http_transport)
     except EnergyReadError as exc:
         return Inventory({}, str(exc))
+    except (InvalidTag, ValueError):
+        return Inventory({}, "De viewer-koppeling in de kluis is onleesbaar.")
 
     try:
         readings, reason = _read(client)
@@ -82,7 +81,8 @@ def meter_inventory(request: Request, session: Session) -> Inventory:
         readings = {}
         reason = str(exc)
 
-    inventory = _register(session, uuid5(NAMESPACE_URL, source.base_url), source.link_revision, readings, reason)
+    scope = uuid5(NAMESPACE_URL, f"{viewer.pairing.server_id}/{viewer.pairing.home_id}")
+    inventory = _register(session, scope, source.link_revision, readings, reason)
     session.commit()
     return inventory
 
@@ -129,5 +129,6 @@ def _register(session: Session, scope: UUID, revision: str, readings: dict[str, 
             last_updated=binding.confirmed_at,
             measurement_quality=reading.quality,
             reason_nl=reading.reason,
+            reason_code=reading.reason_code,
         )
     return Inventory(meters, reason)

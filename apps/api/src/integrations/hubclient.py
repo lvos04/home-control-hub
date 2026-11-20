@@ -184,16 +184,24 @@ class HubClient:
             return c.request(method, url, json=json, headers=hdrs, params=params, extensions=extensions)
 
     @contextlib.contextmanager
+    def pinned_client(self, base_url: str) -> Iterator[tuple[httpx.Client, dict[str, Any]]]:
+        """Houd bewijs en bijbehorende lezing op hetzelfde gecontroleerde adres met dezelfde TLS-hostnaam."""
+        url, headers, extensions = self._pin_address(base_url, "", {})
+        with self.client() as client:
+            client.base_url = url
+            client.headers.update(headers)
+            yield client, extensions
+
+    @contextlib.contextmanager
     def stream_get(
         self, base_url: str, path: str, *, headers: dict[str, str], params: dict[str, str]
     ) -> Iterator[httpx.Response]:
-        """Lees een antwoord begrensd bij de aanroeper, via dezelfde DNS-, TLS- en proxyregels."""
-        url, hdrs, extensions = self._pin_address(base_url, path, dict(headers))
+        """Lees één antwoord via dezelfde DNS-, TLS- en proxyregels."""
         with (
-            self.client() as client,
-            client.stream("GET", url, headers=hdrs, params=params, extensions=extensions) as r,
+            self.pinned_client(base_url) as (client, extensions),
+            client.stream("GET", path, headers=headers, params=params, extensions=extensions) as response,
         ):
-            yield r
+            yield response
 
     def _pin_address(self, base_url: str, path: str, headers: dict[str, str]) -> tuple[str, dict[str, str], Any]:
         """§3.2: bij een hostnaam het opgeloste adres controleren en daarmee verbinden (per verbinding opnieuw)."""

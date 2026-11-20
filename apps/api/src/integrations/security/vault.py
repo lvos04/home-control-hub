@@ -31,11 +31,14 @@ class Vault:
             raise ValueError(f"ongeldige vault-referentie: {ref!r}")
         return ref
 
-    def put(self, session: Session, ref: str, plaintext: str) -> str:
+    def put(self, session: Session, ref: str, plaintext: str, *, last4: str | None = None) -> str:
         self.check_ref(ref)
         nonce = os.urandom(12)
         ct = self._aead.encrypt(nonce, plaintext.encode("utf-8"), ref.encode("utf-8"))
-        last4 = plaintext[-4:] if len(plaintext) >= 8 else ""
+        if last4 is None:
+            last4 = plaintext[-4:] if len(plaintext) >= 8 else ""
+        elif len(last4) != 4:
+            raise ValueError("De zichtbare aanduiding moet vier tekens bevatten.")
         row = session.get(VaultSecret, ref)
         if row is None:
             session.add(VaultSecret(ref=ref, nonce=nonce, ciphertext=ct, last4=last4, version=1))

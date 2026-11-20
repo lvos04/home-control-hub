@@ -26,19 +26,34 @@ aannames over Node-RED zijn nagemeten tegen de gepinde image in lokale container
 NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
 
 **B14-001 energiemeters.** B14 leest my_house rechtstreeks met een eigen viewer-koppeling. Een beheerder stelt
-`my_house` in via `PUT /integrations/v1/sources/my_house`. Gebruik als `base_url` het bronadres inclusief
-`/api/v1/homes/<woning-UUID>`, zet `enabled` aan en voer het viewer-token in als `credential`. Het token wordt
-versleuteld in de kluis bewaard. Bij een adreswissel is het token van de nieuwe bestemming nodig.
+`my_house` in via `PUT /integrations/v1/sources/my_house`. Gebruik het HTTPS-adres met
+`/api/v1/homes/<woning-UUID>` en zet `enabled` aan. Geef het viewer-token met doel `hub` als `credential` op.
+Vul in `my_house_pairing` de waarden `server_id`, `client_id` en `home_id` uit het koppelantwoord in
+(`server.server_id`, `client.id` en `server.home_id`). De kluis bewaart token en binding samen na controle.
+Een oude koppeling zonder deze ID's of een andere bestemming vraagt opnieuw om de bevestigde koppelgegevens.
 
 `GET /integrations/v1/energy/meters` geeft de logische meetkanalen van de woning met bron, vermogen in watt,
 kwaliteitslabel en eigen meettijd. `GET /integrations/v1/energy/coverage` en connectoritem `energy.coverage`
 geven de dekking per verwachte rol. De client herkent P1 aan de expliciete rol `grid` in het dagoverzicht en
 leest het bijbehorende vermogen en de meettijd uit `energy/live`. De boiler en de gedeelde airco-buitenunit
-leveren hun eigen rol, tijd en kwaliteit in dat liveantwoord. Een geschatte waarde draagt het bronlabel.
+leveren hun eigen rol, tijd en opgeslagen kwaliteit in dat liveantwoord. Alleen `measured` geeft `gemeten`,
+`estimated` geeft `geschat`. Bij een ontbrekend of afgeleid bronlabel blijft het vermogen onbekend.
 De bron levert voor deze kanalen geen fysiek serienummer.
 
-Bij uitval of een meting ouder dan vijf minuten wordt het vermogen onbekend. De laatste bekende meettijd
-blijft herkenbaar bij dezelfde koppeling. Apparaatnamen, vermogen van binnenunits en CPU-belasting leveren
+| Toestand bij B14 | Energieverzoek | Dekking per rol |
+| --- | --- | --- |
+| Bron uit, kluiswaarde ontbreekt of oude koppeling zonder ID's | Geen | Onbekend |
+| HTTP, ongeldig certificaat of afwijkend adres | Geen | Onbekend |
+| Serverbewijs, client-ID of woning ontbreekt of wijkt af | Geen | Onbekend |
+| Rol en doel verschillen van de combinatie `viewer` en `hub` | Geen | Onbekend |
+| Bevestigde koppeling, verse rol met getal en bronlabel `measured` | GET | Gemeten, ook bij 0 W |
+| Bevestigde koppeling, verse rol met getal en bronlabel `estimated` | GET | Geschat |
+| Bevestigde koppeling, meting verlopen of meetbewijs onvolledig | GET | Onbekend |
+| Controle vervalt tussen twee verzoeken of vóór een herpoging | Geen volgend energieverzoek | Onbekend |
+
+De connector geeft de eigen bronmeettijd als `observed_at` door en publiceert de grens van 300 seconden in
+`discover`. Bij overschrijding krijgt de rol de code `meting_verouderd`. Bij uitval wordt het vermogen onbekend.
+De laatste bekende meettijd blijft herkenbaar bij dezelfde koppeling. Apparaatnamen, vermogen van binnenunits en CPU-belasting leveren
 geen meterbewijs. De huidige bron meldt geen losse NAS-meter. De fysieke toewijzing vraagt besluit D14 en
 beproeving met de meters in huis (N-P6-06).
 

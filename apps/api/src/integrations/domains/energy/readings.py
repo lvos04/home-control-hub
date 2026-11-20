@@ -21,6 +21,7 @@ class Reading:
     at: datetime | None
     quality: Quality
     reason: str
+    reason_code: str | None = None
 
     @classmethod
     def unknown(cls, reason: str, at: datetime | None = None) -> Reading:
@@ -42,7 +43,7 @@ def read_part(part: dict[str, Any], now: datetime) -> Reading:
     if at is None or at > now:
         return Reading.unknown("Een geldige eigen meettijd ontbreekt.")
     if now - at > LIVE_MAX_AGE or part.get("stale") is True:
-        return Reading.unknown("De vermogensmeting is verouderd.", at)
+        return Reading(None, at, "onbekend", "De vermogensmeting is verouderd.", "meting_verouderd")
     value = part.get("watts")
     if part.get("stale") is not False or isinstance(value, bool) or not isinstance(value, int | float):
         return Reading.unknown(NO_READING, at)
@@ -51,9 +52,9 @@ def read_part(part: dict[str, Any], now: datetime) -> Reading:
             return Reading.unknown(NO_READING, at)
     except OverflowError:
         return Reading.unknown(NO_READING, at)
-    if part.get("quality") == "measured":
+    if part.get("source_quality") == "measured":
         return Reading(value, at, "gemeten", "my_house levert een gemeten vermogen voor deze rol.")
-    if part.get("quality") == "estimated":
+    if part.get("source_quality") == "estimated":
         return Reading(value, at, "geschat", "my_house markeert deze vermogensmeting als schatting.")
     return Reading.unknown("Een bruikbaar kwaliteitslabel ontbreekt.", at)
 
@@ -78,10 +79,16 @@ def live_readings(live: Any, declared: set[str], now: datetime) -> dict[str, Rea
         return result
     if not isinstance(live, dict) or not isinstance(live.get("parts"), list):
         raise EnergyReadError("Het liveantwoord van my_house heeft een ongeldig formaat.")
-    # live_power vult total_w uitsluitend uit de actuele, gebonden grid-meter. Bij null kan 'at' van een deelmeter zijn.
-    if "grid" in declared and live.get("total_w") is not None:
+    # Alleen de eigen P1-rij levert bronbewijs. Het oude veld 'at' kan ook van een deelmeter zijn.
+    if "grid" in declared:
         result["p1_net"] = read_part(
-            {"watts": live["total_w"], "at": live.get("at"), "stale": False, "quality": "measured"}, now
+            {
+                "watts": live.get("total_w"),
+                "at": live.get("total_observed_at"),
+                "stale": False,
+                "source_quality": live.get("total_source_quality"),
+            },
+            now,
         )
     seen: set[str] = set()
     for part in live["parts"]:
