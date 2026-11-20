@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 
 from integrations.config import Settings
 from integrations.migrations import downgrade, head_revision, upgrade
-from integrations.models import all_models
+from integrations.models import IdempotencyRecord, all_models
 from tests.conftest import AUTHENTIK_URL, FakeHub, fresh, idem, recreate_database
 
 pytestmark = pytest.mark.integration
@@ -121,6 +122,26 @@ def test_pinned_keys_work_while_hub_is_down(paired_client: Any, fake_hub: FakeHu
 
 
 # ------------------------------------------------------------------ idempotency en ETag
+def test_bronherhaling_van_voor_de_my_house_koppelvelden(paired_client: Any, auth: Any) -> None:
+    path = "/integrations/v1/sources/authentik"
+    body = {"base_url": AUTHENTIK_URL, "enabled": True}
+    headers = idem(auth("admin"))
+    first = paired_client.put(path, json=body, headers=headers)
+    assert first.status_code == 201
+
+    # De oude dienst nam uitsluitend deze vier configuratievelden en de bron-ID in de verzoekhash op.
+    prior = {"source_id": "authentik", **body, "credential": False, "clear_credential": False}
+    data = json.dumps({"m": "PUT", "p": path, "b": prior}, sort_keys=True, separators=(",", ":")).encode()
+    with paired_client.app.state.db.sessions.begin() as session:
+        record = session.scalars(
+            select(IdempotencyRecord).where(IdempotencyRecord.key == uuid.UUID(headers["Idempotency-Key"]))
+        ).one()
+        record.request_hash = paired_client.app.state.vault.request_hmac(data)
+
+    replay = paired_client.put(path, json=body, headers=fresh(headers))
+    assert replay.status_code == first.status_code and replay.json() == first.json()
+
+
 def test_idempotency_required_replay_and_conflict(paired_client: Any, auth: Any) -> None:
     c, h = paired_client, auth("admin")
     body = {"system": "hub_local", "username": "nood", "is_break_glass": True, "login_kind": "lokaal"}

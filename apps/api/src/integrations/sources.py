@@ -248,7 +248,8 @@ def put_source(
     refusal = unstorable_text({"credential": body.credential})
     if refusal is not None:
         raise refusal
-    payload = body.model_dump()
+    # Houd de verzoekhash van bestaande configuraties van andere bronnen stabiel.
+    payload = body.model_dump(exclude={"my_house_pairing"} if source_id != "my_house" else set())
     payload["credential"] = bool(body.credential)  # nooit de waarde in de verzoek-hash/opslag
 
     def action() -> tuple[int, Any, dict[str, str]]:
