@@ -81,7 +81,9 @@ jobs:
       - name: Dienst-E2E met simulators
         run: pytest -q tests/e2e -p no:cacheprovider
       - name: pip-audit op de runtime-afhankelijkheden
-        run: pip-audit -r apps/api/requirements.lock --progress-spinner off
+        run: |
+          cache=$(mktemp -d "$RUNNER_TEMP/hch-audit.XXXXXXXX")
+          XDG_CACHE_HOME="$cache" pip-audit --cache-dir "$cache/pypi" -r apps/api/requirements.lock --progress-spinner off
       - name: Eigen testdatabase opruimen
         if: always()
         run: bash .forgejo/scripts/testpostgres.sh stop
