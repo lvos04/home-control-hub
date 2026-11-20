@@ -359,20 +359,31 @@ def test_fixed_not_validated_sentence_is_on_one_line(pad: str) -> None:
     assert any(VASTE_ZIN in regel for regel in text.splitlines()), pad
 
 
-def test_workflows_pin_actions_by_sha() -> None:
-    for wf in (REPO_ROOT / ".github/workflows").glob("*.yml"):
+@pytest.mark.parametrize("platform", [".github", ".forgejo"])
+def test_workflows_pin_actions_by_sha(platform: str) -> None:
+    workflows = REPO_ROOT / platform / "workflows"
+    assert (workflows / "release.yml").is_file()
+    for wf in workflows.glob("*.yml"):
         for line in wf.read_text(encoding="utf-8").splitlines():
             m = re.search(r"uses:\s*(\S+)", line)
             if m:
                 assert re.search(r"@[0-9a-f]{40}$", m.group(1)), f"{wf.name}: {m.group(1)} niet op SHA gepind"
 
 
-def test_ci_runs_the_validator_and_the_peil_reference_as_mandatory() -> None:
+@pytest.mark.parametrize("platform", [".github", ".forgejo"])
+def test_ci_runs_the_validator_and_the_peil_reference_as_mandatory(platform: str) -> None:
     """C1.3-HCH-13 en Peil 1.1.1 (E07): in CI draaien de manifestvalidator en de referentie-renderer op vaste commits en
     verplicht; zonder die stappen zouden de twee tests hierboven en in test_statuspagina_peil.py stil overgeslagen
     worden."""
-    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    ci = (REPO_ROOT / platform / "workflows/ci.yml").read_text(encoding="utf-8")
+    bronstap = ci
+    if platform == ".forgejo":
+        assert "bash .forgejo/scripts/haal-bronnen.sh" in ci
+        bronstap = (REPO_ROOT / ".forgejo/scripts/haal-bronnen.sh").read_text(encoding="utf-8")
+        assert 'git -C "$hub" show "$peilpin:design/ontwerptaal/bouw/sjabloon.py"' in bronstap
+        assert "peilpin=$(jq -er .bron_commit design/ontwerptaal/HERKOMST.json)" in bronstap
+    else:
+        assert '["bron_commit"]' in ci and "/design/ontwerptaal/bouw/sjabloon.py" in ci
     assert re.search(r"VALIDATOR_COMMIT: [0-9a-f]{40}\n", ci)
     assert '/bin/jl-manifest" validate --strict deploy/manifest/home-control-hub.manifest.yaml' in ci
-    assert 'echo "HCH_MANIFEST_VALIDATOR_VERPLICHT=1"' in ci and 'echo "HCH_PEIL_REFERENTIE_VERPLICHT=1"' in ci
-    assert '["bron_commit"]' in ci and "/design/ontwerptaal/bouw/sjabloon.py" in ci
+    assert 'echo "HCH_MANIFEST_VALIDATOR_VERPLICHT=1"' in ci and 'echo "HCH_PEIL_REFERENTIE_VERPLICHT=1"' in bronstap

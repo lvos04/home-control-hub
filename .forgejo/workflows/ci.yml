@@ -1,0 +1,150 @@
+name: ci
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@postgres:5432/postgres
+      CI: "true"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Python 3.12 en afhankelijkheden installeren
+        run: bash .forgejo/scripts/installeer-api.sh
+      - name: Validator, contract en Peil-bronnen ophalen
+        env:
+          BRON_LEESTOKEN: ${{ secrets.BRON_LEESTOKEN }}
+          VALIDATOR_COMMIT: a994c2a51f45b81b2c48c6533b0ccf51ba857f5a
+        run: bash .forgejo/scripts/haal-bronnen.sh
+      - name: Manifest strikt valideren met de gepinde validator
+        run: |
+          dir="$RUNNER_TEMP/appstore"
+          python -m venv "$RUNNER_TEMP/validator"
+          "$RUNNER_TEMP/validator/bin/pip" install --disable-pip-version-check -q --require-hashes \
+            -r "$dir/apps/api/requirements.lock"
+          "$RUNNER_TEMP/validator/bin/pip" install --disable-pip-version-check -q --no-deps "$dir/apps/api"
+          "$RUNNER_TEMP/validator/bin/jl-manifest" validate --strict deploy/manifest/home-control-hub.manifest.yaml
+          echo "HCH_JL_MANIFEST=$RUNNER_TEMP/validator/bin/jl-manifest" >> "$GITHUB_ENV"
+          echo "HCH_MANIFEST_VALIDATOR_VERPLICHT=1" >> "$GITHUB_ENV"
+      - name: Ruff (lint en opmaak)
+        run: |
+          (cd apps/api && ruff check . && ruff format --check .)
+          ruff check tests/e2e tests/interop tests/ui deploy/allinone tools
+          ruff format --check tests/e2e tests/interop tests/ui deploy/allinone tools
+      - name: Mypy
+        working-directory: apps/api
+        run: mypy
+      - name: Unit- en integratietests
+        working-directory: apps/api
+        run: pytest -q
+      - name: Migraties op en neer
+        env:
+          HCH_DATABASE_URL: postgresql+psycopg://postgres@postgres:5432/hch_ci_mig
+        run: |
+          export HCH_DATA_DIR="$RUNNER_TEMP/hch-mig"
+          psql -h postgres -U postgres -c 'CREATE DATABASE hch_ci_mig'
+          python -m integrations migrate
+          python -m integrations migrate --down base
+          python -m integrations migrate
+      - name: OpenAPI-drift
+        run: |
+          python -m integrations openapi --out docs/openapi/home-control-hub.openapi.json
+          git diff --exit-code docs/openapi/
+      - name: Contract-drift tegen de pin en de huidige bronbranch op Forgejo
+        run: |
+          bron="$RUNNER_TEMP/hubbron"
+          git -C "$bron" checkout -q --detach "origin/$(jq -er .bron_ref docs/platform-v2/CONTRACT_HERKOMST.json)"
+          python tools/contract_kopie.py controleer
+          python tools/contract_kopie.py vergelijk --bron "$bron"
+      - name: Peil-drift tegen de pin en de huidige bronbranch op Forgejo
+        run: |
+          bron="$RUNNER_TEMP/hubbron"
+          git -C "$bron" checkout -q --detach "origin/$(jq -er .bron_ref design/ontwerptaal/HERKOMST.json)"
+          python tools/peil_kopie.py controleer
+          python tools/peil_kopie.py vergelijk --bron "$bron"
+      - name: Dienst-E2E met simulators
+        run: pytest -q tests/e2e -p no:cacheprovider
+      - name: pip-audit op de runtime-afhankelijkheden
+        run: pip-audit -r apps/api/requirements.lock --progress-spinner off
+
+  statuspagina-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      HCH_TEST_ADMIN_URL: postgresql+psycopg://postgres@postgres:5432/postgres
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Python 3.12 en afhankelijkheden installeren
+        run: bash .forgejo/scripts/installeer-api.sh
+      - name: Browsertests en Chromium installeren
+        working-directory: tests/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx --no-install playwright install --with-deps chromium
+      - name: Toestanden van de statuspagina genereren
+        run: python tests/ui/genereer_toestanden.py --uit tests/ui/uit
+      - name: Chromium, axe-core, overloop, CSP, toetsenbord en schermafdrukken
+        working-directory: tests/ui
+        env:
+          SCHERMAFDRUKKEN: "1"
+        run: npx --no-install playwright test
+      - name: Ontwerpreview en browsertest van het koppelformulier tegen de simulator
+        run: python tests/ui/ontwerpreview.py --uit tests/ui/review-uit
+      - name: Schermafdrukken en toestanden bewaren
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: statuspagina-peil
+          path: |
+            docs/screenshots/peil/statuspagina/*.png
+            tests/ui/uit/
+            tests/ui/review-uit/
+          retention-days: 14
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: python
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Alles-in-één image bouwen en beproeven
+        run: |
+          image="home-control-hub:ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+          trap 'docker image rm "$image" >/dev/null || true' EXIT
+          docker buildx build --load --build-arg VERSION="$GITHUB_SHA" -f deploy/allinone/Dockerfile -t "$image" .
+          bash deploy/allinone/smoke-test.sh "$image"

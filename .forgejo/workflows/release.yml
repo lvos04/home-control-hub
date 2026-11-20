@@ -1,0 +1,49 @@
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Versietag vergelijken met VERSION
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$version" = "$(cat VERSION)" || { echo "Tag past niet bij VERSION"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Versie publiceren met herkomstbewijs, digest en SPDX
+        shell: bash
+        env:
+          REGISTRY_USER: ${{ vars.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          image=git.medialeon.nl/leon/home-control-hub
+          export DOCKER_CONFIG="$RUNNER_TEMP/hch-docker" PATH="$GITHUB_WORKSPACE/.forgejo/scripts:$PATH"
+          mkdir -p "$DOCKER_CONFIG" release
+          echo '{"credHelpers":{"git.medialeon.nl":"forgejo-ci"}}' > "$DOCKER_CONFIG/config.json"
+          builder="hch-release-$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}"
+          docker buildx create --name "$builder" --driver docker-container
+          trap 'docker buildx rm "$builder"' EXIT
+          docker buildx build --builder "$builder" --platform linux/amd64 --push --provenance=true --sbom=true \
+            --metadata-file "$RUNNER_TEMP/image.json" --build-arg VERSION="$VERSION" \
+            -f deploy/allinone/Dockerfile -t "$image:$VERSION" .
+          digest=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/image.json")
+          docker buildx imagetools inspect "$image@$digest" --format '{{json .SBOM}}' \
+            | jq -e '(.SPDX // .["linux/amd64"].SPDX) | select((.spdxVersion | startswith("SPDX-")) and (.packages | length > 0))' \
+            > release/sbom.spdx.json
+          jq -n --arg v "$VERSION" --arg image "$image" --arg digest "$digest" \
+            '{app_id:"home-control-hub",version:$v,image:$image,tag:$v,digest:$digest}' > release/digests.json
+      - name: Changelog en beide bestanden aan de Forgejo-release koppelen
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+        run: bash .forgejo/scripts/releasebestanden.sh

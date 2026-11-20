@@ -13,14 +13,19 @@ set -euo pipefail
 
 IMAGE="${1:-home-control-hub:dev}"
 WORK="$(mktemp -d)"
-NAME="hch-smoke-$$"
-PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+NAME="hch-smoke-${WORK##*/}"
+# De job en de geïsoleerde bouwengine kunnen verschillende netwerk- en bestandssystemen hebben.
+ENGINE_HOST=localhost
+if [[ ${DOCKER_HOST:-} == tcp://* ]]; then
+  ENGINE_HOST="$(python3 -c 'import os, urllib.parse; print(urllib.parse.urlsplit(os.environ["DOCKER_HOST"]).hostname)')"
+fi
+BIND="$(python3 -c 'import socket,sys; print(socket.gethostbyname(sys.argv[1]))' "$ENGINE_HOST")"
 PASS=0
 FAIL=0
 
 cleanup() {
   docker rm -f "$NAME" "$NAME-568" "$NAME-bad" >/dev/null 2>&1 || true
-  docker run --rm -v "$WORK:/w" --entrypoint sh "$IMAGE" -c 'rm -rf /w/* /w/.[!.]* 2>/dev/null || true' >/dev/null 2>&1 || true
+  docker volume rm "$NAME-root" "$NAME-u568" "$NAME-bad" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -42,23 +47,27 @@ wait_healthy() {
   return 1
 }
 
+# De browserherkomst blijft localhost, ook bij een Docker-engine op een eigen netwerkadres.
+http_curl() { curl --noproxy '*' --connect-to "localhost:$PORT:$ENGINE_HOST:$PORT" "$@"; }
+
 # zonder pipes (pipefail + grep -q geeft anders vals-negatieve SIGPIPE-fouten)
-http_has() { curl -fsS "http://127.0.0.1:$PORT$1" -o "$WORK/http.txt" && grep -q -- "$2" "$WORK/http.txt"; }
+http_has() { http_curl -fsS "http://localhost:$PORT$1" -o "$WORK/http.txt" && grep -q -- "$2" "$WORK/http.txt"; }
 http_has_401_reason() {
-  curl -s "http://127.0.0.1:$PORT/connector/v1/discover" -o "$WORK/http.txt" && grep -q '"reason":"not_linked"' "$WORK/http.txt"
+  http_curl -s "http://localhost:$PORT/connector/v1/discover" -o "$WORK/http.txt" && grep -q '"reason":"not_linked"' "$WORK/http.txt"
 }
 # B11: de flow-API neemt alleen flow-tokens aan; zonder of met een onbekend token is het antwoord 401 met de reden
 flow_api_401() { # extra curl-argumenten..., laatste = verwachte reden
   local reason="${*: -1}"
-  [ "$(curl -s -o "$WORK/flow.txt" -w '%{http_code}' "${@:1:$#-1}" \
-    "http://127.0.0.1:$PORT/integrations/v1/automation/flow-api/me")" = 401 ] && grep -q "\"reason\":\"$reason\"" "$WORK/flow.txt"
+  [ "$(http_curl -s -o "$WORK/flow.txt" -w '%{http_code}' "${@:1:$#-1}" \
+    "http://localhost:$PORT/integrations/v1/automation/flow-api/me")" = 401 ] && grep -q "\"reason\":\"$reason\"" "$WORK/flow.txt"
 }
 log_has() { docker logs "$1" > "$WORK/log.txt" 2>&1; grep -q -- "$2" "$WORK/log.txt"; }
 
 run() { # naam, datamap, extra args — bewust geen --security-opt en geen --cap-drop (zoals het formulier)
   local n="$1" d="$2"; shift 2
-  docker run -d --name "$n" -p "127.0.0.1:$PORT:30420" -v "$d:/appdata" \
+  docker run -d --name "$n" -p "$BIND::30420" --mount "type=volume,src=$d,dst=/appdata,volume-nocopy" \
     --health-interval 3s --health-start-period 60s "$@" "$IMAGE" >/dev/null
+  PORT="$(docker inspect -f '{{(index (index .NetworkSettings.Ports "30420/tcp") 0).HostPort}}' "$n")"
 }
 # Elk proces in de container (behalve deze controle zelf en Dockers kortlevende healthcheck-exec, die als eerste naar
 # 568 wisselt): Uid 568 (alle vier velden), CapEff, CapPrm en CapAmb 0000000000000000, NoNewPrivs 1 en — met
@@ -122,7 +131,10 @@ healthcheck_config_is_exec_form() { # exec-vorm, geen sh -c (§2.2)
 }
 # Bestanden in de datamap bekijken via een wegwerpcontainer (als root in de container): de datamap is van 568 met
 # 0700/0600, dus een gewone hostgebruiker (zoals de CI-runner) kan ze zelf niet lezen.
-in_work() { docker run --rm --network none -v "$WORK:/w" --entrypoint sh "$IMAGE" -c "$1"; }
+in_work() {
+  docker run --rm --network none -v "$NAME-root:/w/root" -v "$NAME-u568:/w/u568" -v "$NAME-bad:/w/bad" \
+    --entrypoint sh "$IMAGE" -c "$1"
+}
 # SQL in de ingebouwde database (als 568, via de unix-socket; alleen voor deze test)
 sql() { docker exec --user 568:568 "$1" psql -h /tmp/hch-pg -U hch -d hch -tAc "$2"; }
 marker_write() {
@@ -133,18 +145,19 @@ pg_dump_works() { # zonder werkende pg_dump weigert elke latere update te migrer
   docker exec --user 568:568 "$NAME" sh -c 'pg_dump -Fc -h /tmp/hch-pg -U hch -f /tmp/rooktest.dump hch && test -s /tmp/rooktest.dump && rm -f /tmp/rooktest.dump'
 }
 too_large() { # > 1 MiB zonder token: de grens geldt vóór de authenticatie
-  [ "$(head -c 1100000 /dev/zero | curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-    --data-binary @- "http://127.0.0.1:$PORT/integrations/v1/sso/recovery/accounts")" = 413 ]
+  [ "$(head -c 1100000 /dev/zero | http_curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data-binary @- "http://localhost:$PORT/integrations/v1/sso/recovery/accounts")" = 413 ]
 }
 too_large_chunked() { # zelfde grens zonder Content-Length (chunked), op de ontkoppelroute
-  [ "$(head -c 1100000 /dev/zero | curl -s -o /dev/null -w '%{http_code}' -H 'Transfer-Encoding: chunked' \
-    -H 'Content-Type: application/json' --data-binary @- "http://127.0.0.1:$PORT/connector/v1/hub-link/unlink")" = 413 ]
+  [ "$(head -c 1100000 /dev/zero | http_curl -s -o /dev/null -w '%{http_code}' -H 'Transfer-Encoding: chunked' \
+    -H 'Content-Type: application/json' --data-binary @- "http://localhost:$PORT/connector/v1/hub-link/unlink")" = 413 ]
 }
 
-mkdir -p "$WORK/root" "$WORK/u568" "$WORK/bad"
+# De verse root-map en de 568-map simuleren de twee beginsituaties van de opslag.
+in_work 'chown 0:0 /w/root && chmod 0755 /w/root && chown 568:568 /w/u568'
 
 echo "== 1. start als root op een root-eigendom-map (zoals een verse TrueNAS-dataset)"
-run "$NAME" "$WORK/root"
+run "$NAME" "$NAME-root"
 check "healthcheck wordt healthy" "wait_healthy $NAME"
 check "/healthz geeft 200" "http_has /healthz '\"status\":\"ok\"'"
 check "/readyz geeft ready" "http_has /readyz '\"ready\"'"
@@ -152,10 +165,12 @@ check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingera
   "http_has / 'Peil statuspagina-sjabloon 1.1.1' && http_has / 'Niet gekoppeld' && http_has / 'name=\"hub_vingerafdruk\"'"
 check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"
 check "API zonder token geeft 401 unauthorized (not_linked)" \
-  "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"
+  "[ \"\$(http_curl -s -o /dev/null -w '%{http_code}' http://localhost:$PORT/connector/v1/discover)\" = 401 ] && http_has_401_reason"
 check "flow-API (B11) zonder flow-token geeft 401 flow_token_ontbreekt" "flow_api_401 flow_token_ontbreekt"
+# Dezelfde onbekende testwaarde als in test_b11_003_veilige_acties.py.
+onbekend_flowtoken=$(python3 -c 'print("flw_" + "x" * 43)')
 check "flow-API (B11) met een onbekend flow-token geeft 401 flow_token_ongeldig" \
-  "flow_api_401 -H 'Authorization: Bearer flw_onbekend' flow_token_ongeldig"
+  "flow_api_401 -H 'Authorization: Bearer $onbekend_flowtoken' flow_token_ongeldig"
 check "elk proces: Uid 568, CapEff/CapPrm/CapAmb 0, CapBnd 0, NoNewPrivs 1 (ook PID 1)" "procs_ok $NAME 1"
 check "PID 1 is de bewaker en draait als 568" "pid1_is_supervisor_568 $NAME"
 check "verweesde zombies worden door PID 1 opgeruimd" "zombies_reaped $NAME"
@@ -169,9 +184,9 @@ check "geheimen 0600 en eigenaar 568" \
   "[ \"\$(in_work 'stat -c \"%a %u\" /w/root/secrets/vault.key /w/root/secrets/identity.ed25519' | sort -u)\" = '600 568' ]"
 check "geen lokale ontkoppelcode meer (contract 1.3 §3.7)" "! log_has $NAME 'ontkoppelcode'"
 check "statuspagina: Referrer-Policy same-origin (contract 1.3 §3.7)" \
-  "curl -fsS -D $WORK/kop.txt -o /dev/null http://127.0.0.1:$PORT/ && grep -qi '^referrer-policy: same-origin' $WORK/kop.txt"
+  "http_curl -fsS -D $WORK/kop.txt -o /dev/null http://localhost:$PORT/ && grep -qi '^referrer-policy: same-origin' $WORK/kop.txt"
 check "koppel-POST met Origin: null geeft 403 herkomst_onjuist (niets naar de Hub)" \
-  "[ \"\$(curl -s -o $WORK/post.txt -w '%{http_code}' -H 'Origin: null' --data 'csrf=x' http://127.0.0.1:$PORT/koppelen)\" = 403 ] && grep -q herkomst_onjuist $WORK/post.txt"
+  "[ \"\$(http_curl -s -o $WORK/post.txt -w '%{http_code}' -H 'Origin: null' --data 'csrf=x' http://localhost:$PORT/koppelen)\" = 403 ] && grep -q herkomst_onjuist $WORK/post.txt"
 check "no-new-privileges staat in de app-log" "log_has $NAME 'no-new-privileges aan'"
 check "geen setuid/setgid-bestanden in de image" \
   "[ -z \"\$(docker exec $NAME sh -c 'find / -xdev -perm /6000 -type f 2>/dev/null')\" ]"
@@ -201,8 +216,7 @@ check "geen back-up nodig zonder openstaande migratie" \
 docker rm -f "$NAME" >/dev/null
 
 echo "== 4. start direct als 568 op een 568-map"
-docker run --rm -v "$WORK:/w" --entrypoint sh "$IMAGE" -c 'chown 568:568 /w/u568' >/dev/null
-run "$NAME-568" "$WORK/u568" --user 568:568
+run "$NAME-568" "$NAME-u568" --user 568:568
 check "als 568 gestart en healthy" "wait_healthy $NAME-568"
 check "als 568: elk proces Uid 568, CapEff/CapPrm/CapAmb 0, NoNewPrivs 1 (CapBnd mag de standaardset zijn)" "procs_ok $NAME-568 0"
 check "als 568: healthcheck apart zet ook no-new-privileges" "healthcheck_drops_root $NAME-568"
@@ -211,7 +225,7 @@ docker rm -f "$NAME-568" >/dev/null
 echo "== 5. verkeerde rechten geven een duidelijke Nederlandse fout"
 # de map expliciet van root (0755) maken: anders hangt de uitkomst af van de uid van de hostgebruiker
 in_work 'chown 0:0 /w/bad && chmod 0755 /w/bad'
-docker run -d --name "$NAME-bad" -v "$WORK/bad:/appdata" --user 1000:1000 "$IMAGE" >/dev/null
+docker run -d --name "$NAME-bad" --mount "type=volume,src=$NAME-bad,dst=/appdata,volume-nocopy" --user 1000:1000 "$IMAGE" >/dev/null
 sleep 8
 check "fout 'geen schrijfrechten' in de log" "log_has $NAME-bad 'FOUT: geen schrijfrechten'"
 
