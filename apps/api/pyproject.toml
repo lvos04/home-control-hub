@@ -21,6 +21,9 @@ dependencies = [
     "bcrypt==5.0.0",
 ]
 
+[project.urls]
+Repository = "https://git.medialeon.nl/leon/home-control-hub"
+
 [project.optional-dependencies]
 dev = [
     "pytest==9.2.0",

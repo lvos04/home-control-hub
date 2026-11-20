@@ -1,5 +1,7 @@
 # home-control-hub
 
+[Broncode op Forgejo](https://git.medialeon.nl/leon/home-control-hub) · [![CI](https://git.medialeon.nl/leon/home-control-hub/badges/workflows/ci.yml/badge.svg?branch=ccr-c133d7a0-kuz1cv)](https://git.medialeon.nl/leon/home-control-hub/actions?workflow=ci.yml&branch=ccr-c133d7a0-kuz1cv)
+
 Integratiedienst van **TrueNAS Home Platform V2**: B10 netwerk/privacy, B11 Node-RED, B13 Authentik/SSO (met
 beheerherstel B13-001) en B14 energie/resources. Een zelfstandige API-dienst met alleen een kleine Nederlandse
 statuspagina; alle schermen staan in de Hub (`ai-server-manager`).
@@ -146,8 +148,9 @@ make openapi                # OpenAPI opnieuw exporteren (CI faalt bij drift)
 make test-ui                # statuspagina in Chromium: axe-core, overloop, CSP, focus (Node 22; eenmalig
                             # 'cd tests/ui && npx playwright install chromium')
 make schermafdrukken        # idem + afdrukken naar docs/screenshots/peil/statuspagina/
-make peil-drift             # Peil-kopie offline en tegen ai-server-manager op GitHub
-make contract-drift         # contractkopie (contracts 1.3) offline en tegen ai-server-manager op GitHub
+# Gebruik een bijgewerkte Forgejo-werkkopie van ai-server-manager op de bronbranch uit de herkomstbestanden.
+python3 tools/peil_kopie.py vergelijk --bron ../ai-server-manager
+python3 tools/contract_kopie.py vergelijk --bron ../ai-server-manager
 make ontwerpreview          # draaiende dienst + Hub-simulator: 14 toestanden × 320–1440 × licht/donker (axe WCAG 2.2 AA,
                             # contrast, doelen, focus, tekstafstand, Peil-statusregels) + browsertest herkomst
                             # (tests/ui/herkomst.mjs) → tests/ui/review-uit/

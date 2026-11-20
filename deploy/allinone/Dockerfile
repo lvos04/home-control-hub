@@ -10,7 +10,7 @@
 # zonder capabilities en met zelf gezette PR_SET_NO_NEW_PRIVS (het Custom App-formulier zet die niet; contract 1.2
 # §2.2). De procesbewaker is zelf PID 1 en ruimt zombies op: geen dumb-init/tini die als root blijft draaien.
 # Basisimages staan op exacte versie + sha256-digest (contract §1). De optionele BuildKit-secret 'ca_bundle' is
-# alleen voor bouwomgevingen achter een TLS-proxy; zonder die secret bouwt de image schoon (bv. in GitHub Actions).
+# alleen voor bouwomgevingen achter een TLS-proxy; zonder die secret bouwt de image schoon.
 
 ARG PYTHON_IMAGE=mirror.gcr.io/library/python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 ARG POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
@@ -43,7 +43,7 @@ FROM ${PYTHON_IMAGE}
 ARG VERSION=0.1.0
 LABEL org.opencontainers.image.title="home-control-hub" \
       org.opencontainers.image.description="Home Control Hub — integratiedienst (netwerk, Node-RED, Authentik/SSO, energie), alles-in-één" \
-      org.opencontainers.image.source="https://github.com/lvos04/home-control-hub" \
+      org.opencontainers.image.source="https://git.medialeon.nl/leon/home-control-hub" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=pg /out/pg/lib /usr/lib/postgresql/16
 COPY --from=pg /out/pg/share /usr/share/postgresql/16

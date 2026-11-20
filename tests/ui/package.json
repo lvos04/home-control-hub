@@ -2,6 +2,11 @@
   "name": "home-control-hub-statuspagina-ui",
   "private": true,
   "description": "Statuspagina in Peil (HC11): axe-core, overloop op 320 px, CSP zonder JS, aanraakdoelen, focus en schermafdrukken over de echte uitvoer van de app. Eerst: python tests/ui/genereer_toestanden.py",
+  "repository": {
+    "type": "git",
+    "url": "git+https://git.medialeon.nl/leon/home-control-hub.git",
+    "directory": "tests/ui"
+  },
   "scripts": {
     "test": "playwright test",
     "schermafdrukken": "SCHERMAFDRUKKEN=1 playwright test"
