@@ -19,6 +19,7 @@ case "$1" in
       -o "-c listen_addresses='' -k '$basis'" -w start
     PGHOST="$basis" psql -U postgres -Atc 'SHOW server_version'
     echo "PGHOST=$basis" >> "$GITHUB_ENV"
+    echo "$pgbin" >> "$GITHUB_PATH"
     ;;
   stop)
     if [[ -f "$basis/data/postmaster.pid" ]]; then

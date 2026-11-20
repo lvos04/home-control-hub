@@ -214,9 +214,6 @@ def test_expired(authn: Authenticator, hub_keys: HubKeys) -> None:
         # dezelfde JWT ook bij een andere dienst bruikbaar (review contract 1.2)
         {"aud": ["home-control-hub", "zoeken-en-persoonlijke-ai"]},
         {"aud": ["home-control-hub"]},
-        {"exp": int(time.time()) + 3600},  # exp - iat > 120 s
-        {"nbf": int(time.time()) + 600},
-        {"iat": int(time.time()) + 600, "nbf": int(time.time()) + 600, "exp": int(time.time()) + 660},
         {"exp": None},
         {"iat": None},
         {"nbf": None},
@@ -229,6 +226,21 @@ def test_expired(authn: Authenticator, hub_keys: HubKeys) -> None:
 )
 def test_invalid_claims(authn: Authenticator, hub_keys: HubKeys, over: dict[str, Any]) -> None:
     assert _fail(authn, _sign(hub_keys, _claims(**over))) == "invalid_token"
+
+
+@pytest.mark.parametrize(
+    "offsets",
+    [
+        pytest.param({"exp": 3600}, id="looptijd-te-lang"),
+        pytest.param({"nbf": 600}, id="nog-niet-geldig"),
+        pytest.param({"iat": 600, "nbf": 600, "exp": 660}, id="uitgegeven-in-de-toekomst"),
+    ],
+)
+def test_invalid_claim_times(authn: Authenticator, hub_keys: HubKeys, offsets: dict[str, int]) -> None:
+    claims = _claims()
+    now = claims["iat"]
+    claims.update({key: now + seconds for key, seconds in offsets.items()})
+    assert _fail(authn, _sign(hub_keys, claims)) == "invalid_token"
 
 
 @pytest.mark.parametrize(

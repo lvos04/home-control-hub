@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 from alembic import command
+from psycopg.conninfo import make_conninfo
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
@@ -298,23 +299,14 @@ def _restore(dump: Path, url: str) -> None:
             pytest.fail("pg_restore ontbreekt in CI")
         pytest.skip("pg_restore niet geïnstalleerd")
     parts = make_url(url)
-    env = {**os.environ}
-    if parts.password:
-        env["PGPASSWORD"] = str(parts.password)
+    args, parameters = parts.get_dialect()().create_connect_args(parts)
+    env = os.environ.copy()
+    password = parameters.pop("password", None)
+    if password is not None:
+        env["PGPASSWORD"] = str(password)
+    # Dezelfde libpq-bestemming als de testdatabase, ook als PGHOST de eigen Unix-socket aanwijst.
     result = subprocess.run(  # noqa: S603 - vaste argumenten
-        [
-            pg_restore,
-            "--no-owner",
-            "-h",
-            str(parts.host or "127.0.0.1"),
-            "-p",
-            str(parts.port or 5432),
-            "-U",
-            str(parts.username or "postgres"),
-            "-d",
-            str(parts.database),
-            str(dump),
-        ],
+        [pg_restore, "--no-owner", "--dbname", make_conninfo(*args, **parameters), str(dump)],
         capture_output=True,
         text=True,
         check=False,
