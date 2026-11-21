@@ -15,6 +15,8 @@ Versie: `contracts 1.3` · Peildatum 2026-11-10 · Eigenaar: `lvos04/ai-server-m
   (1.2). Aanvulling C-12 (manifeststandaard, blijft 1.3):
   `ai-server-manager:docs/adr/ADR-0031-contract-1-3-aanvulling-c12.md`, uitgewerkt in
   `appstore-en-fork:docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md`.
+  Bronvertrouwen en plannerinvoer (§8.1–8.2) volgen besluit 1 en 3 van
+  `ai-server-manager:docs/adr/ADR-0032-vertrouwde-appplannen-en-kluisdoorgifte.md`.
   Invoer van 1.3: `ai-server-manager:docs/platform-v2/CONTRACT_1.3_KANDIDATEN.md` (groepen A01–A36).
 - Dit document maakt de pakketvoorstellen (`01_ARCHITECTUUR/02`, `03`, `07`, `08`) concreet zodat alle repos samenwerken.
   Het zegt **niets** over de echte NAS: alle NAS-gegevens (D01–D18) zijn onbekend tot de gebruiker ze in de
@@ -187,6 +189,15 @@ gelijk (gemeten in appstore-en-fork, S-P2-520). Het veld `accounts` (W1) volgt i
 - C12-7. §11: de statusregel volgt het besluit van de gebruiker van 2026-11-11: rest alleen de test op de echte NAS,
   hardware of een echt account, dan blijft het `Bezig` met `alleen NAS-test nodig` en `NIET GEVALIDEERD (…)`;
   `Geblokkeerd` alleen als het werk zonder NAS, hardware of account niet verder kan worden gebouwd.
+
+### Aanvulling M1 en M3 (2026-11-21, blijft `contracts 1.3`)
+
+- **M1 (§8.1).** De appstore verklaart in zijn bestaande ondertekende herkomstrecord welk catalogusitem, welke
+  versie en welke volledige uitgeversvingerafdruk bij het manifest horen. Hub en executor binden dat bewijs aan de
+  gekozen doelinstantie. Een ontbrekende binding sluit uitvoering uit.
+- **M3 (§8.2).** De Hub geeft de geverifieerde catalogusbinding door bij het aanmaken van zijn eigen plannerplan.
+  De planner kan de invoer controleren met de bestaande Hub-sleutel. §4.4 blijft het contract voor beschikbaarheid.
+  Dit besluit legt de bouwafspraken vast. De versieregel en peildatum volgen dezelfde conventie als bij C-12.
 
 ## Eerdere wijzigingen
 
@@ -982,6 +993,7 @@ evidence worden geredigeerd.
   claims `iss:"hub"`, `aud:"<app_id>"` (één string, §4.2), `sub:"hub"`, `token_use:"hub_service"`, `roles:["service"]`,
   `service_id:"<UUID van de registratie>"`, `iat`, `nbf`, `exp` (`≤ 120 s`), `jti` (UUID v4); zelfde ondertekensleutel
   als §4.2 (gepind).
+- Alleen de vertrouwde planneraanvraag van §8.2 vereist de aanvullende claim `catalog_request_sha256`.
 - De dienst geeft hiervoor principal `service:hub` met rol `service` (de rechten per dienst staan in zijn eigen ADR;
   `service` is nooit `admin`). Weigeren met 401 `token_use_invalid` als: `token_use` ontbreekt of onbekend is;
   `token_use:"user"` met rol `service`; `token_use:"hub_service"` met `sub ≠ "hub"`, `roles ≠ ["service"]` of
@@ -1404,6 +1416,89 @@ executorpagina (§3.9). De alleen-lezen-sleutel van de Hub gebruikt leesmethoden
 voor een **vaste lijst event sources** (nu alleen `reporting.realtime`, rol `REPORTING_READ`): abonneren, één bericht
 lezen, opzeggen (ook na een time-out). Een andere event source vraagt een contractwijziging. (Bronwaarneming in de
 broncode van TrueNAS 25.10.8; NIET GEVALIDEERD (echte NAS).)
+
+### 8.1 Bron- en doelbinding van appplannen (M1)
+
+**Catalogusbewijs.** De Hub haalt zelf bij de actief ingeschreven appstore het item, de gekozen versie
+(`GET /catalog/v1/versions/{version_id}`) en de actuele bronconfiguratie op. Een beheerder heeft vooraf de
+appstore-identiteit, Git-bron (bron-ID, locatie, subpad en volledige vaste commit) en uitgeverssleutel toegelaten.
+De selectie heeft een revisie. De enige toegelaten bronsoort voor uitvoering is gepinde Git met verplichte
+uitgevershandtekening. Een bewegende ref, een HTTP-ETag, een upload of een ingebouwde bron geeft geen vrijgave.
+
+`appstore-en-fork` gebruikt zijn bestaande `SignedProvenance`. De uitgever tekent het canonieke oorspronkelijke
+manifestobject. De appstore verifieert die handtekening en tekent vervolgens het record met zijn ingeschreven
+Ed25519-identiteit. Voor een uitvoerbare versie gelden de volgende aanvullingen op de bestaande velden.
+
+| Gegevens | Wat de Hub exact controleert |
+|---|---|
+| Catalogus | `entry_id` en `version_id` zijn UUID's in het getekende record. Het item en de versiedetail geven dezelfde `entry_id`. De gekozen `version_id` is de `id` van die versiedetail. Vaste `app_id`, exacte `version` en bron-ID stemmen overal overeen. |
+| Bron en uitgever | `source.kind` is `git`. `source.url`, `source.subpath` (`null` voor de bronwortel), `source.path` (bestand relatief aan het subpad) en `source.commit` (40 kleine hextekens) komen uit het record en passen exact bij de pin en het beoogde bestand. De actieve bron vereist ondertekening. Het record bevat `publisher_signature: verified` en `publisher_key_sha256`, de volledige SHA-256 van de 32 ruwe publieke sleutelbytes als `sha256:` plus 64 kleine hextekens. |
+| Inhoud | De Hub verifieert zelf de recordhandtekening met de volledige gepinde appstoresleutel en vergelijkt de volledige uitgeversvingerafdruk met de vooraf toegelaten sleutel. Het record verklaart `valid: true`. De Hub berekent `manifest_sha256` opnieuw over het oorspronkelijke object `manifest` uit de versiedetail volgens `appstore.manifest.canonical`. Hij valideert met de gepinde `schema_sha256` en `validator_version`, ook na parameterinvulling. |
+
+De appstore levert de twee ondertekende ID's, het getekende subpad, de uitgeversvingerafdruk en de zichtbare
+`entry_id`. Hij kent het bewijs alleen toe na verificatie van het bijbehorende bronbestand en de
+entry-versierelatie. Een oud of onvolledig record, alleen `provenance_verified`, `valid` of een sleutel-ID van
+16 hex geeft geen toestemming. Bij ontbrekend oorspronkelijk object of onzekere herkomst weigert de Hub.
+
+**Binding aan de actie.** `ai-server-manager` neemt in het strikte actieschema onder `proposal.parameters` een
+object `catalog_binding` op bij een uitvoerbare planstap. Dezelfde parameters met de werkelijke vertaalde payload
+gaan in de gebonden preview en `action_scope.parameters_sha256` van §8. De bestaande envelope blijft in gebruik.
+De binding bevat uitsluitend de volgende niet-geheime gegevens.
+
+- `appstore_service_id` (registratie-UUID), `source_approval_revision` (ondoorzichtige revisie),
+  `provenance` (het geverifieerde `SignedProvenance`) en `release`. Die release bevat een vaste
+  `{train, app, version}` onder `catalog` (bij een Custom App de gebruikte ix-app-versie) en een niet-lege
+  lijst verwachte `image_digests`. De schemapin staat in het record.
+- `plan_id` (UUID), `step_id` en `plan_etag` uit §8.2. Het object `instance` bevat `host_id`, een unieke
+  `instance_id` (UUID), `registry_revision`, `app_name` en `expected_version` (resource-ETag of `absent`).
+  `target.app_id` blijft de
+  runtime-appnaam. De vaste catalogus-`app_id` staat afzonderlijk in het record. Bij installatie reserveert de Hub
+  de instantie voor de goedgekeurde naam. Pas een passende readback bevestigt naam, image en hostpoort.
+- `vault_refs` is de exacte lijst gemarkeerde `{path, parameter, ref}`, elk met de onveranderlijke `revision`,
+  leeg als er geen zijn. Een ontbrekend, onbekend, dubbel of afwijkend veld of een markering buiten het schema
+  blokkeert de stap. De binding verleent op zichzelf geen toegang tot de kluis (§3.1).
+
+Bij voorstel, goedkeuring en vlak vóór uitvoering controleert de Hub bron, plan en doel opnieuw.
+Elke wijziging of intrekking vereist een nieuwe preview en goedkeuring. De executor eist zelf één passende
+regel in de witte lijst van zijn image onder de eigen `policy_hash` voor bron, uitgever, app, versie, manifesthash,
+digests en veldschema. Hij toetst payload en markeringen daaraan. Met eigen verse readback op de gepinde host
+toetst hij naam, app-/image-identiteit en ETag, bij installatie de afwezigheid van de naam, bij kluisplekken
+ook de eigen instantieregistratie. Bij ontbrekend of strijdig bewijs volgen nul kluisopvragen en nul
+schrijfaanroepen. Alleen een aangetoond verdwenen versie geeft `version_unavailable`. Bij onzekerheid blijft de
+stap geblokkeerd. De beschermingen van §2.3 en de overige gates van §8 blijven gelden.
+
+### 8.2 Vertrouwde plannerinvoer (M3)
+
+**Van Hub naar planner.** `ai-server-manager` maakt na de M1-controles zelf de preview aan bij de geregistreerde
+planner. Voor deze variant van de bestaande installatie-/updatepreview bevat `catalog_binding` in de body precies
+`appstore_service_id`, `source_approval_revision`, `provenance`, `release` en `instance` uit §8.1, inclusief
+`instance_id`. De planner maakt plan-ID, stap en ETag. De uiteindelijke kluismarkeringen komen uit de geverifieerde
+vertaling. De Hub bindt de aanvraag aan zijn bestaande kortlevende dienst-JWT (§4.3) met één extra claim
+voor deze variant, `catalog_request_sha256`. Dit is `sha256:` plus de SHA-256 in kleine hextekens over de canonieke
+JSON-array `[methode, routepad, Idempotency-Key, verzoekobject]` (§8). De methode is `POST`, het pad is het exacte
+previewpad zonder query en het object omvat de hele body, inclusief parameters, doel en manifesttekst. Dezelfde
+Ed25519-sleutel en replaycontrole van §4.3 gelden. Een extra sleuteluitwisseling is overbodig.
+
+`jelly-leon-platform` accepteert deze variant uitsluitend van `service:hub` na verificatie met de gepinde
+Hub-JWT-sleutel, eigen audience, eigen service-ID, vervaltijd en eenmalige `jti`. De planner rekent de claim na over
+het ontvangen verzoek en vergelijkt `app_id`, versie en `manifest_sha256` van het zelf ingelezen manifestobject
+met het door de Hub geverifieerde record. Onvolledig, afwijkend, verlopen of onverwacht bewijs wordt geweigerd.
+Losse `manifest_yaml` kan uitsluitend een onvertrouwde preview opleveren, met **geen uitvoerbare stap** en
+**geen kluisvertaling**. Een los vertrouwensvlaggetje of een door de aanvrager geleverde pin verleent geen rechten.
+
+De planner bewaart de geverifieerde binding onveranderlijk in het eigen plandocument en levert haar terug bij
+aanmaken en bij `GET /lifecycle/v1/plans/{plan_id}`. Elke actiestap hoort bij precies dat `plan_id`, die `step_id`
+en dat doel. De Hub registreert uit zijn eigen aanmaakantwoord plan-ID, ETag, binding en vervaltijd. Hij haalt
+alleen dat plan op, vergelijkt de binding met zijn eigen M1-bewijs en controleert de stap, actuele ETag en vervaltijd
+vóór voorstel en uitvoering. Elke actiestap vereist een levende bevoegde gebruikerssessie, de gewone preview en
+de toepasselijke goedkeuring. Een planner-token verleent geen gebruikersrechten. De Hub weigert een
+`ActionProposal`, goedkeuring of stapresultaat van een dienst-token.
+
+`report_step` blijft bij de planner toegankelijk voor een operator. Voor een uitgevoerde voorganger eist de Hub
+zijn eigen uitvoeringsregistratie en eigen readback. Een handmatige stap vereist een aan plan en stap gebonden
+beheerdersbevestiging in de Hub. Een vreemde voortgangsmelding of onverwachte ETag stopt de orkestratie.
+Zolang appstore, planner, Hub of executor het vereiste bewijs niet leveren of toetsen, gaat geen planstap naar
+uitvoering. De beschikbaarheidsmeting van §4.4 levert uitsluitend de daar beschreven versiestatus.
 
 ## 9. Manifeststandaard (B08-001, eigenaar `appstore-en-fork`)
 

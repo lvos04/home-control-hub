@@ -19,11 +19,11 @@ from tests.conftest import REPO_ROOT
 
 PV2 = REPO_ROOT / "docs" / "platform-v2"
 #: vaste bron-commit van ai-server-manager (branch ccr-c133d7a0-kuz1cv) waarop de kopieën zijn gemaakt
-BRON_COMMIT = "7ebed6523dcb643b4f3c8510bda46c918a49ea14"
+BRON_COMMIT = "bc1746e88e7b742fa8dae270ef94c34cbbc3fc4a"
 #: sha256 van de bronbestanden op die commit; een nieuwe kopie overnemen is een stap van de orkestratie (nooit lokaal
 #: aanpassen, ook niet om een link te repareren). Dezelfde pins staan in CONTRACT_HERKOMST.json (tools/contract_kopie.py)
 KOPIEEN = {
-    "PLATFORM_CONTRACTEN.md": "c06eebdc23b52fd4e3ffa5be18abc481c2fbbf0938d86c58bebb78a870fd8159",
+    "PLATFORM_CONTRACTEN.md": "e3a8f6cdd11e6460708fdfae5fd6c44da05f62a8670bfebce951824d6aa46c0a",
     "CONTRACT_1.3_CONFORMITEIT.md": "b5ebba073a8fe8beb715d58e6760feae38e33ad445956d107e64840133dd7924",
     # historie (contract 1.3 C1.3-ALG-01: "mag als historie blijven staan"), zelfde bron-commit
     "CONTRACT_1.2_CONFORMITEIT.md": "634941340afd2d9a55846076ab468ea4aacddb32dd8be6a7b92dd113661d39a4",
