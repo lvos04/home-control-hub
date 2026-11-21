@@ -165,7 +165,8 @@ class NodeRedFake:
     requests: list[tuple[str, str]] = field(default_factory=list)
     writes: list[dict[str, Any]] = field(default_factory=list)
     revoked: list[str] = field(default_factory=list)
-    seen_passwords: list[str] = field(default_factory=list)
+    #: uitkomst per aanmelding ("ok" of "geweigerd"); nooit het wachtwoord zelf (V-094, R-VEILIG-3 van S-P3-360)
+    logins: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ inrichten (zoals het formulier)
     def apply_arguments(self, arguments: list[str]) -> None:
@@ -453,8 +454,8 @@ class NodeRedFake:
         form = {k: v[0] for k, v in parse_qs(request.content.decode("utf-8"), keep_blank_values=True).items()}
         if form.get("client_id") not in ("node-red-admin", "node-red-editor") or form.get("grant_type") != "password":
             return httpx.Response(401, json={"error": "unauthorized_client"})
-        self.seen_passwords.append(form.get("password", ""))
         token = self.login(form.get("username", ""), form.get("password", ""), form.get("scope", ""))
+        self.logins.append("geweigerd" if token is None else "ok")
         if token is None:
             return httpx.Response(
                 403, json={"error": "invalid_grant", "error_description": "Invalid resource owner credentials"}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 import pytest
@@ -905,3 +906,70 @@ def test_c12_d_existing_vault_items_and_credential_secret_stay_byte_equal(
     after = (vault_rows(), cred_file.read_bytes(), node_red_fake.credential_secret)
     assert old_ref in before[0] and after == before
     assert node_red_fake.writes == []
+
+
+# --------------------------------------------------------------------- aanmelding van het dienstaccount (S-P3-360)
+SOURCE = "/integrations/v1/sources/node_red"
+
+
+def _put_source(client: Any, auth: Any, url: str, credential: str | None = None, key: str | None = None) -> Any:
+    body: dict[str, Any] = {"base_url": url, "enabled": True}
+    if credential is not None:
+        body["credential"] = credential
+    return client.put(SOURCE, json=body, headers=idem(auth("admin"), key=key, **{"If-Match": "*"}))
+
+
+def _stored_login(client: Any) -> str | None:
+    from integrations.sources import source_ref
+
+    with client.app.state.db.sessions() as session:
+        try:
+            return client.app.state.vault.get(session, source_ref("node_red"))  # type: ignore[no-any-return]
+        except KeyError:
+            return None
+
+
+def test_an_address_change_drops_the_stored_login(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
+    """R-VEILIG-1: de aanmelding hoort bij de bevestigde bestemming; een nieuw adres krijgt het oude wachtwoord niet."""
+    from tests.fakes.node_red_fake import TEST_SERVICE_USER
+
+    profile = setup_node_red(linked, fake_hub, auth)
+    login = f"{TEST_SERVICE_USER}:{profile['dienstwachtwoord']}"
+    same = _put_source(linked, auth, NODE_RED_URL)  # zelfde adres: de kluiswaarde blijft
+    assert same.status_code == 200 and same.json()["runtime"]["credential_present"] is True
+    assert _stored_login(linked) == login
+    before = len(fake_hub.requests)
+    moved = _put_source(linked, auth, "http://tweede-node.test:1880")
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["runtime"]["credential_present"] is False and _stored_login(linked) is None
+    assert len(fake_hub.requests) == before  # niets naar de nieuwe bestemming gestuurd
+    again = _put_source(linked, auth, NODE_RED_URL, credential=login)  # pas na expliciete invoer weer een aanmelding
+    assert again.json()["runtime"]["credential_present"] is True and _stored_login(linked) == login
+
+
+def test_a_reused_key_with_another_password_is_refused(linked: Any, auth: Any) -> None:
+    """R-VEILIG-2: zelfde Idempotency-Key met een ander wachtwoord is 422, niet een herhaling van het eerste."""
+    from tests.fakes.node_red_fake import TEST_SERVICE_USER
+
+    first, second = f"{TEST_SERVICE_USER}:{'a' * 32}", f"{TEST_SERVICE_USER}:{'b' * 32}"
+    key = str(uuid.uuid4())
+    created = _put_source(linked, auth, NODE_RED_URL, credential=first, key=key)
+    replay = _put_source(linked, auth, NODE_RED_URL, credential=first, key=key)
+    assert created.status_code == replay.status_code == 201 and replay.headers.get("Idempotent-Replay") == "true"
+    other = _put_source(linked, auth, NODE_RED_URL, credential=second, key=key)
+    assert other.status_code == 422 and other.json()["code"] == "idempotency_key_reused", other.text
+    assert second not in other.text and _stored_login(linked) == first
+    rotated = _put_source(linked, auth, NODE_RED_URL, credential=second)
+    assert rotated.status_code == 200 and _stored_login(linked) == second
+
+
+def test_the_simulators_keep_no_password(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
+    """R-VEILIG-3 (V-094): de verzoekhistorie van de testdubbels bewaart geen wachtwoord, wel aantal en uitkomst."""
+    profile = setup_node_red(linked, fake_hub, auth)
+    secret = profile["dienstwachtwoord"]
+    r = linked.post(f"{A}/isolation/check", headers=idem(auth("admin")))
+    assert r.status_code == 200 and r.json()["status"] == "gemeten_in_orde", r.text
+    logins = [req for req in fake_hub.requests if req.url.path == "/auth/token"]
+    assert logins and all(secret.encode() not in req.content for req in logins)
+    assert secret not in repr(vars(node_red_fake))
+    assert node_red_fake.logins == ["ok"] * len(logins)

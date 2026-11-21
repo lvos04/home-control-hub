@@ -184,7 +184,10 @@ class FakeHub:
         return TokenHeaders(lambda: self.sim.service_jwt())
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
+        # een aanmelding alleen met methode en adres in de historie, nooit met het wachtwoord (V-094, R-VEILIG-3)
+        self.requests.append(
+            httpx.Request(request.method, request.url) if request.url.path == "/auth/token" else request
+        )
         url = request.url
         if url.host == "authentik.test":
             if not self.authentik_up:

@@ -133,7 +133,7 @@ def test_client_reads_flows_nodes_settings_and_revokes_its_token(fake: NodeRedFa
         assert c.get_diagnostics()["runtime"]["settings"]["adminAuth"] == "SET"
         assert len(fake.tokens) == 1
     assert fake.tokens == {} and len(fake.revoked) == 1  # token ingetrokken bij het sluiten
-    assert fake.seen_passwords == [SERVICE_PW]  # één aanmelding voor alle aanroepen
+    assert fake.logins == ["ok"]  # één aanmelding voor alle aanroepen
 
 
 def test_client_refuses_an_unsecured_node_red() -> None:
@@ -166,7 +166,7 @@ def test_client_relogs_in_once_when_the_token_is_revoked(fake: NodeRedFake) -> N
     c.get_flows()
     fake.tokens.clear()  # Node-RED herstart: sessies weg
     assert c.get_flows().rev == fake.rev
-    assert fake.seen_passwords == [SERVICE_PW, SERVICE_PW]
+    assert fake.logins == ["ok", "ok"]
 
 
 def test_post_flows_needs_the_current_rev_and_is_never_repeated(fake: NodeRedFake) -> None:

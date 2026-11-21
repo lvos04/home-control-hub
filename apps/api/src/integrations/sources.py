@@ -244,7 +244,7 @@ def put_source(
         raise ApiError(422, "validation_error", "De koppelgegevens horen bij een nieuw my_house-credential.")
     if body.enabled and not base_url:
         raise ApiError(422, "validation_error", "Een bron aanzetten kan alleen met een adres.", {"veld": "base_url"})
-    # de credential gaat niet mee in de verzoek-hash (alleen of hij er is), dus ook niet door de centrale controle van
+    # de credential gaat alleen als HMAC mee in de verzoek-hash, dus niet door de centrale controle van
     # run_idempotent: een NUL-teken of losse surrogaat erin is hier al 422, vóór er iets gebeurt (KLEIN-22)
     refusal = unstorable_text({"credential": body.credential})
     if refusal is not None:
@@ -261,7 +261,10 @@ def put_source(
             )
     # Houd de verzoekhash van bestaande configuraties van andere bronnen stabiel.
     payload = body.model_dump(exclude={"my_house_pairing"} if source_id != "my_house" else set())
-    payload["credential"] = bool(body.credential)  # nooit de waarde in de verzoek-hash/opslag
+    # nooit de waarde in de verzoek-hash/opslag, wel een HMAC: een andere waarde onder dezelfde key is 422 (R-VEILIG-2)
+    payload["credential"] = (
+        request.app.state.vault.request_hmac(body.credential.encode("utf-8")) if body.credential else False
+    )
 
     def action() -> tuple[int, Any, dict[str, str]]:
         row = session.get(IntegrationSource, source_id, with_for_update=True)
@@ -288,7 +291,9 @@ def put_source(
             )
         vault = request.app.state.vault
         ref = source_ref(source_id)
-        if body.clear_credential or (source_id == "my_house" and changed_url):
+        # my_house en Node-RED: de aanmelding hoort bij de bevestigde bestemming, een ander adres krijgt de oude niet
+        # (R-VEILIG-1 van S-P3-360); Authentik houdt zijn kluisrij bewust bij een tijdelijk leeg adres
+        if body.clear_credential or (source_id in ("my_house", "node_red") and changed_url):
             previous = row.credential_ref
             if previous and not body.credential and (source_id != "my_house" or previous == ref):
                 vault.delete(session, previous)

@@ -9,6 +9,10 @@
   een `credentialSecret` uit het formulier is een afwijking. `anoniem_geweigerd` (C-11) blijft.
 - De aanmelding van het dienstaccount komt alleen via `PUT /integrations/v1/sources/node_red` als
   `<gebruiker>:<wachtwoord>`, met een wachtwoord of token van minstens 32 tekens.
+- Een ander adres bij `PUT /integrations/v1/sources/node_red` wist de bewaarde aanmelding (zoals al bij
+  `my_house`); het nieuwe adres krijgt pas een aanmelding na expliciete invoer. Hetzelfde adres houdt de kluiswaarde.
+- Een andere credential onder dezelfde `Idempotency-Key` geeft `422 idempotency_key_reused` (de verzoek-hash bevat
+  nu een HMAC van de credential, nooit de waarde).
 - Het kluisitem van het oude profiel en een `credentialSecret` die Node-RED al gebruikt, blijven ongemoeid.
 - `GET /automation/editor` noemt geen accountnaam (`aanmelden_als`) meer.
 - NIET GEVALIDEERD (echte NAS): Node-RED heeft volgens het manifest nog geen dienstaccount ("Wachten", C-12 punt 7).
