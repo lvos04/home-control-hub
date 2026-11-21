@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -18,6 +19,7 @@ Period = Literal["day", "week", "month"]
 Role = Literal["p1_net", "boiler_socket", "airco_outdoor"]
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
+METER_CONFIRMATION = "my_house:energy/export:meter_id"
 METRICS: dict[str, Direction] = {"energy_import_kwh": "import", "energy_export_kwh": "export"}
 
 
@@ -72,7 +74,10 @@ def sample(row: dict[str, Any]) -> Sample:
     notes = row.get("notes", "")
     if not isinstance(notes, str):
         return Sample()
-    skipped = "tellerreset; interval overgeslagen" in notes
+    reset_skipped = row.get("reset_skipped", False)
+    if not isinstance(reset_skipped, bool):
+        return Sample()
+    skipped = reset_skipped or "tellerreset; interval overgeslagen" in notes
     reset = skipped or "tellerreset gedetecteerd" in notes.split("; ")
     n = number(row.get("value"), magnitude=10**11, scale=4)
     if (
@@ -109,6 +114,7 @@ def parse_export(raw: Any, scope: UUID, day: date, zone: ZoneInfo) -> Series:
     ):
         raise EnergyReadError("De uur-export past niet bij de gevraagde woningdag.")
     starts = {start for start, _ in hours(day, zone)}
+    meter_scope = uuid5(scope, METER_CONFIRMATION)
     result: Series = {}
     for item in raw["rows"]:
         if not isinstance(item, dict) or item.get("unit") != "kWh":
@@ -120,14 +126,15 @@ def parse_export(raw: Any, scope: UUID, day: date, zone: ZoneInfo) -> Series:
         at = source_timestamp(item.get("at"))
         if at is None or at not in starts:
             continue
-        name = item.get("device")
-        meter = (
-            uuid5(scope, f"{role}/{name}")
-            if isinstance(name, str) and name.strip() and len(name) <= 250 and name.isprintable()
-            else None
-        )
+        source_id = item.get("meter_id")
+        meter = None
+        if isinstance(source_id, str):
+            with suppress(ValueError):
+                meter = uuid5(meter_scope, f"{role}/{UUID(source_id)}")
         slot = result.setdefault((role, direction), {}).setdefault(at, {})
-        observation = sample(item) if meter is not None else Sample()
+        observation = sample(item)
+        if meter is None:
+            observation = Sample(reset=observation.reset)
         # Een onherkenbare meter maakt de toewijzing van dit uur onzeker.
         old = slot.get(meter)
         if old is not None and old != observation:

@@ -11,11 +11,11 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, PlainSerializer
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from .hourly import DAY, Direction, Period, Role, hours, midnight, period_days, series_ref
-from .models import EnergyUsageInterval
+from .hourly import DAY, METER_CONFIRMATION, Direction, Period, Role, hours, midnight, period_days, series_ref
+from .models import EnergyMeterRole, EnergyUsageInterval
 from .readings import Quality
 from .tariffs import Prices
 
@@ -97,15 +97,22 @@ def usage_report(
     first, after = period_days(period, day)
     start, end = midnight(first, zone), midnight(after, zone)
     ref = series_ref(scope, role, direction)
-    slots: dict[datetime, list[EnergyUsageInterval]] = defaultdict(list)
-    for record in db.scalars(
-        select(EnergyUsageInterval).where(
+    slots: dict[datetime, list[tuple[EnergyUsageInterval, bool]]] = defaultdict(list)
+    # Historische, op een weergavenaam gebaseerde intervallen hebben geen bewijs
+    # van de onderliggende punten of meter. Herlevering vervangt ze per woningdag.
+    for record, confirmation in db.execute(
+        select(EnergyUsageInterval, EnergyMeterRole.confirmed_by)
+        .outerjoin(
+            EnergyMeterRole,
+            and_(EnergyMeterRole.meter_id == EnergyUsageInterval.meter_id, EnergyMeterRole.role == role),
+        )
+        .where(
             EnergyUsageInterval.source_ref == ref,
             EnergyUsageInterval.start_utc >= start,
             EnergyUsageInterval.start_utc < end,
         )
     ):
-        slots[record.start_utc.astimezone(UTC)].append(record)
+        slots[record.start_utc.astimezone(UTC)].append((record, confirmation == METER_CONFIRMATION))
     prices = Prices(db, scope, direction, start, end)
     days = []
     while first < after:
@@ -114,8 +121,8 @@ def usage_report(
             rows = slots.get(t, [])
             usage, cost = Quantity(source=EXPORT), Quantity(source=COST)
             meter = None
-            if len(rows) == 1:
-                r = rows[0]
+            if len(rows) == 1 and rows[0][1]:
+                r, _ = rows[0]
                 meter = r.meter_id
                 if (
                     r.delta is not None
@@ -131,7 +138,7 @@ def usage_report(
                     start_utc=t,
                     end_utc=following,
                     meter_id=meter,
-                    counter_reset=any(r.counter_reset for r in rows),
+                    counter_reset=any(r.counter_reset for r, _ in rows),
                     usage=usage,
                     cost=cost,
                 )

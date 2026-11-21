@@ -32,6 +32,8 @@ def _instant(raw: object, zone: ZoneInfo) -> datetime | None:
 
 
 def _price(row: dict[str, Any], direction: Direction) -> Decimal | None:
+    if direction == "export" and row.get("export_price_known", True) is not True:
+        return None
     price = number(row.get(f"{direction}_per_kwh"), magnitude=100_000, scale=5)
     if direction == "import" and any(
         tier is not None and number(tier, magnitude=100_000, scale=5) != price

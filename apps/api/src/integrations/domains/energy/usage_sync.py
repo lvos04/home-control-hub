@@ -16,7 +16,18 @@ from ...models import ServiceState
 from ...security.vault import Vault
 from ...timeutil import utcnow
 from .client import EnergyReadError, EnergyRoute, ViewerDenied
-from .hourly import DAY, Channel, Sample, Series, home_zone, hours, midnight, parse_export, series_ref
+from .hourly import (
+    DAY,
+    METER_CONFIRMATION,
+    Channel,
+    Sample,
+    Series,
+    home_zone,
+    hours,
+    midnight,
+    parse_export,
+    series_ref,
+)
 from .meters import SOURCE, configured_client
 from .models import EnergyEstimateProvenance, EnergyMeter, EnergyMeterRole, EnergyUsageInterval
 from .readings import SOURCE_ROLES, declared_roles
@@ -32,8 +43,8 @@ class Archive:
         self.scope = scope
         self.meters: dict[UUID, EnergyMeter] = {}
         self.roles: set[str] = set()
-        for meter, role in db.execute(
-            select(EnergyMeter, EnergyMeterRole.role)
+        for meter, role, confirmation in db.execute(
+            select(EnergyMeter, EnergyMeterRole.role, EnergyMeterRole.confirmed_by)
             .join(EnergyMeterRole)
             .where(
                 EnergyMeter.source_id == SOURCE,
@@ -41,7 +52,8 @@ class Archive:
                 EnergyMeter.source_meter_id.startswith(f"{scope}/"),
             )
         ):
-            self.meters[meter.id] = meter
+            if confirmation == METER_CONFIRMATION:
+                self.meters[meter.id] = meter
             self.roles.add(role)
         self.estimate_id = uuid5(scope, "uuraggregatie")
         self.provenance = db.get(EnergyEstimateProvenance, self.estimate_id)
@@ -58,7 +70,7 @@ class Archive:
             self.meters[key] = m
             self.db.add(m)
             self.db.flush()
-            self.db.add(EnergyMeterRole(meter_id=key, role=role, confirmed_by="my_house:energy/export"))
+            self.db.add(EnergyMeterRole(meter_id=key, role=role, confirmed_by=METER_CONFIRMATION))
         self.roles.add(role)
 
     def estimate(self) -> UUID:
@@ -125,7 +137,10 @@ class Archive:
             )
             .select_from(EnergyUsageInterval)
             .join(EnergyMeterRole, EnergyMeterRole.meter_id == EnergyUsageInterval.meter_id)
-            .where(EnergyUsageInterval.source_ref.startswith(f"my_house/{self.scope}/"))
+            .where(
+                EnergyUsageInterval.source_ref.startswith(f"my_house/{self.scope}/"),
+                EnergyMeterRole.confirmed_by == METER_CONFIRMATION,
+            )
             .group_by(EnergyMeterRole.role, EnergyMeterRole.meter_id)
             .order_by(EnergyMeterRole.role, func.min(EnergyUsageInterval.start_utc), EnergyMeterRole.meter_id)
         )

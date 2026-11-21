@@ -20,7 +20,7 @@ fase gebouwd en met simulators getest; *ontbrekend* = nog te bouwen. Geen enkele
 | B11-004 simulatie en tests | — | proefrun met vaste voorbeeld-events; actieverzoeken worden alleen gesimuleerd | afscherming van nodes die zelf naar buiten gaan (kan deze dienst niet; alleen met bevestiging) |
 | B11-005 herstel en versiebeheer | — | versleutelde momentopnamen, diff zonder waarden, herstel als voorstel + ondertekend ExecutionRequest, readback | `automation.flows.restore` in de policy van de Hub (een echte Hub geeft er nog geen opdracht voor uit) |
 | B14-001 dekkingsmatrix | — | structuur met status *onbekend*, kwaliteitslabels, DB-invarianten | D14, readback my_house |
-| B14-002 energietijdreeks | — | P3: uurarchief met bronkwaliteit, tellerreset en meterwissel. Dag-, week- en maandrapport in de woningzone met gescheiden afname, teruglevering en variabele kosten | integrale EX28-proef met hardware (S-P6-21) |
+| B14-002 energietijdreeks | — | Uurarchief met kwaliteit van de bronpunten, overgeslagen resets en stabiele meter-ID’s. Lokale dag-, week- en maandrapporten houden afname, teruglevering en onbekende vergoedingen apart | Workerhartslag bij bronstoring, onbekende queryvelden, antwoord bij onbereikbare archiefopslag en de fysieke EX28-proef (S-P6-21) |
 | B14-003…005 | — | alleen schema | alles |
 
 Review P0 (2026-11-09): aanscherpingen in ADR-0006; geen nieuwe functionaliteit, wel fail-closed gedrag en tests.

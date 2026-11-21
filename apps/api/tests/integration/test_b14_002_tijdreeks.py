@@ -6,14 +6,14 @@ import random
 from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_DNS, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 from sqlalchemy import select
 
-from integrations.domains.energy.models import EnergyMeter, EnergyTariff, EnergyUsageInterval
+from integrations.domains.energy.models import EnergyMeter, EnergyMeterRole, EnergyTariff, EnergyUsageInterval
 from integrations.worker import Worker
 from tests.fakes.my_house_energy import MyHouseEnergy
 from tests.integration.test_b14_001_dekkingsmatrix import ENERGY, configure
@@ -34,6 +34,7 @@ def row(at: datetime, value: Any = 1, quality: str = "measured", **fields: Any) 
         "at": at.isoformat(),
         "role": "grid",
         "device": "testmeter A",
+        "meter_id": str(uuid5(NAMESPACE_DNS, fields.get("device", "testmeter A"))),
         "metric": "energy_import_kwh",
         "unit": "kWh",
         "value": value,
@@ -314,3 +315,93 @@ def test_terugmigratie_zonder_precisieverlies(linked, source, sync):
         stored = db.scalars(select(EnergyUsageInterval)).all()
         assert len(stored) == 96
         assert all(r.meter_id and r.quality == "gemeten" and str(r.delta) == "0.0001" for r in stored)
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_gelijknamige_meters_behouden_bron_id_en_voorganger(linked, auth, source, sync, mixed):
+    day = date(2026, 4, 8)
+    old, new = str(uuid4()), str(uuid4())
+    stamps = hours(day)
+    rows = [row(t, 1 if i < 12 or mixed else 2, meter_id=old if i < 12 else new) for i, t in enumerate(stamps)]
+    if mixed:
+        rows[12] = row(stamps[12], 0.5, "estimated", meter_id=old)
+        rows.append(row(stamps[12], 0.5, "estimated", meter_id=new))
+    source.hour_rows[day] = rows
+    for delivery in range(2):
+        if delivery:
+            rows.reverse()
+            for item in rows:
+                item["device"] = "Hernoemd"
+        sync(day)
+        data = report(linked, auth, day)
+        slots = data["days"][0]["hours"]
+        first, last = slots[0]["meter_id"], slots[-1]["meter_id"]
+        assert first and last and first != last
+        with linked.app.state.db.sessions() as db:
+            assert str(db.get(EnergyMeter, last).replaced_meter_id) == first
+        if mixed:
+            assert slots[12]["usage"]["value"] is None and slots[12]["usage"]["quality"] == "onbekend"
+            assert data["usage"]["value"] is None and data["status"] == "onvolledig"
+        else:
+            assert data["usage"]["value"] == 36
+        if delivery == 0:
+            original = (first, last)
+        else:
+            assert (first, last) == original
+
+
+def test_resetkenmerk_zonder_vrije_tekst(linked, auth, source, sync):
+    day = date(2026, 4, 8)
+    source.hour_rows[day] = [row(t, 1) for t in hours(day)]
+    source.hour_rows[day][12].update(value=0.75, reset_skipped=True)
+    sync(day)
+    data = report(linked, auth, day)
+    slot = data["days"][0]["hours"][12]
+    assert slot["counter_reset"] and slot["usage"]["value"] is None and slot["usage"]["quality"] == "onbekend"
+    assert data["status"] == "onvolledig" and data["usage"]["value"] is None
+
+
+def test_oude_en_ongeldige_meteridentiteit_geven_geen_gemeten_uur(linked, auth, source, sync):
+    day = date(2026, 4, 8)
+    rows = [row(t, 1) for t in hours(day)]
+    source.hour_rows[day] = rows
+    del rows[0]["meter_id"]
+    rows[1]["meter_id"] = "ongeldig"
+    sync(day)
+    data = report(linked, auth, day)
+    slots = data["days"][0]["hours"]
+    assert all(s["meter_id"] is None and s["usage"]["value"] is None for s in slots[:2])
+    assert slots[2]["usage"]["quality"] == "gemeten"
+    assert data["status"] == "onvolledig"
+
+
+def test_terugleververgoeding_met_oud_nulveld_en_bekendheid(linked, auth, source, sync):
+    day = date(2026, 4, 8)
+    source.hour_rows[day] = [row(t, 1, metric="energy_export_kwh") for t in hours(day)]
+    tariff = {"valid_from": day.isoformat(), "export_per_kwh": 0}
+    source.tariffs = [tariff]
+    for known, expected in ((False, None), (True, 0)):
+        tariff["export_price_known"] = known
+        sync(day)
+        data = report(linked, auth, day, direction="export")
+        assert data["usage"]["value"] == 24
+        assert data["cost"]["value"] == expected and data["cost"]["quality"] == ("gemeten" if known else "onbekend")
+
+
+def test_archief_met_oude_naambinding_tot_herlevering(linked, auth, source, sync):
+    day = date(2026, 4, 8)
+    source.hour_rows[day] = [row(t) for t in hours(day)]
+    sync(day)
+    first = report(linked, auth, day)
+    key = first["days"][0]["hours"][0]["meter_id"]
+    # Een oudere worker archiveerde op naam en gaf het uur ten onrechte als gemeten door.
+    with linked.app.state.db.sessions() as db:
+        role = db.get(EnergyMeterRole, (key, "p1_net"))
+        role.confirmed_by = "my_house:energy/export"
+        db.commit()
+    assert report(linked, auth, day)["usage"]["value"] is None
+    replacement = str(uuid4())
+    for item in source.hour_rows[day]:
+        item["meter_id"] = replacement
+    sync(day)
+    assert report(linked, auth, day)["usage"] == first["usage"]

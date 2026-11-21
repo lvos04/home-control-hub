@@ -154,10 +154,10 @@
   "status": "Bezig",
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "apps/api/tests/integration/test_b14_002_tijdreeks.py",
-  "blokkade": "NIET GEVALIDEERD (hardware). De integrale programmaproef EX28 met een fysieke P1-meter bij een tellerreset en een tijdwisseling volgt in S-P6-21.",
-  "opmerking": "De lokale viewerbron levert de uur-export met kwaliteitslabel en woningzone. De proeven bestrijken dagen van 23 en 25 uur, herlevering, gaten, meterwissels, bronprijzen en de kwaliteit van dag-, week- en maandtotalen. EX28 blijft als programmaregel Geblokkeerd.",
+  "blokkade": "Open softwarepunten zijn de workerhartslag bij bronstoring, onbekende queryvelden en het antwoord bij onbereikbare archiefopslag. NIET GEVALIDEERD (hardware). De fysieke EX28-proef bij een tellerreset en tijdwisseling volgt in S-P6-21.",
+  "opmerking": "De lokale bronproeven van my_house toetsen geschatte tellerstanden en een overgeslagen reset vóór en na uuraggregatie. De rapportproeven toetsen stabiele meter-ID’s bij gelijke namen, herlevering, een onbeslist wisseluur en een ontbrekende tegenover een expliciete nulvergoeding. De woningdagen van 23 en 25 uur zijn Sim-getest. EX28 blijft als programmaregel Geblokkeerd.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-20"
+  "bijgewerkt": "2026-11-21"
  },
  {
   "id": "B14-003",
