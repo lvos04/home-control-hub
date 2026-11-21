@@ -15,7 +15,7 @@ Versie: `contracts 1.3` · Peildatum 2026-11-10 · Eigenaar: `lvos04/ai-server-m
   (1.2). Aanvulling C-12 (manifeststandaard, blijft 1.3):
   `ai-server-manager:docs/adr/ADR-0031-contract-1-3-aanvulling-c12.md`, uitgewerkt in
   `appstore-en-fork:docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md`.
-  Bronvertrouwen en plannerinvoer (§8.1–8.2) volgen besluit 1 en 3 van
+  Bronvertrouwen, plannerinvoer en geheime overdracht (§8.1–8.3) volgen besluit 1, 3 en 4 van
   `ai-server-manager:docs/adr/ADR-0032-vertrouwde-appplannen-en-kluisdoorgifte.md`.
   Invoer van 1.3: `ai-server-manager:docs/platform-v2/CONTRACT_1.3_KANDIDATEN.md` (groepen A01–A36).
 - Dit document maakt de pakketvoorstellen (`01_ARCHITECTUUR/02`, `03`, `07`, `08`) concreet zodat alle repos samenwerken.
@@ -198,6 +198,15 @@ gelijk (gemeten in appstore-en-fork, S-P2-520). Het veld `accounts` (W1) volgt i
 - **M3 (§8.2).** De Hub geeft de geverifieerde catalogusbinding door bij het aanmaken van zijn eigen plannerplan.
   De planner kan de invoer controleren met de bestaande Hub-sleutel. §4.4 blijft het contract voor beschikbaarheid.
   Dit besluit legt de bouwafspraken vast. De versieregel en peildatum volgen dezelfde conventie als bij C-12.
+
+### Aanvulling M2 (2026-11-21, blijft `contracts 1.3`)
+
+- **M2 (§8.3).** Geheime waarden gaan nooit meer in het ondertekende verzoek. Na zijn eigen controles haalt de
+  executor ze eenmalig bij de Hub op, versleuteld voor een sleutel van alleen die opvraag en ondertekend door
+  beide kanten met hun bij het koppelen gepinde sleutels. Er zijn precies twee typen: appgeheim en
+  enrollment-token. De executor vult `HUB_*` in, niet de vertaling (§3.2). Een instantie met door de executor
+  ingevulde plekken krijgt geen bijwerking of terugzetting via `app.config` tot het recept met alleen
+  verwijzingen bestaat. §3.1, §3.2 en §8 verwijzen daarnaar. De versieregel blijft gelijk, zoals bij C-12.
 
 ## Eerdere wijzigingen
 
@@ -594,7 +603,7 @@ Regels:
   andere app en nooit onder een accountnaam (§9); anders weigeren ze de actie. Vertaling, preview, goedkeuring,
   verzoekhash, idempotentie-opslag, audit, log en evidence bevatten nooit de waarde, hooguit de verwijzing; de waarde
   gaat alleen mee bij `app.create`/`app.update` (onderdeel van de R2-actie; plekken en grenzen: ADR-0015 besluit 1 tot
-  en met 5). Dit geldt alleen voor zo'n geheim van de Hub: nooit voor een geheim van de gebruiker, nooit als letterlijke
+  en met 5), en alleen via de afzonderlijke overdracht van §8.3. Dit geldt alleen voor zo'n geheim van de Hub: nooit voor een geheim van de gebruiker, nooit als letterlijke
   waarde of via een gewone parameter, en nooit voor de aanmelding van een beheerder of dienstaccount
   (`account_gegevens_verboden`, §9). Hoe TrueNAS zo'n ingevulde waarde in het formulier toont of bewaart, is NIET
   GEVALIDEERD (echte NAS).
@@ -604,8 +613,8 @@ Regels:
 - **Geheimen die een app niet zelf maakt:**
   - (a) **Catalogusapps met verplichte geheime waarden** in hun `values` (bv. Authentik `db_password`/`secret_key`): bij
     installatie via de API genereert de Hub ze (CSPRNG, ≥ 256 bit), bewaart ze versleuteld in zijn vault
-    (`vault://app/<app_id>/<parameter>`) en geeft de executor ze alleen in de `values` van `app.create`/`app.update` mee
-    (onderdeel van de R2-actie). Ze staan nooit in een manifest, preview-diff, auditdetail, log of evidence (alleen
+    (`vault://app/<app_id>/<parameter>`) en geeft de executor ze alleen voor de `values` van `app.create`/`app.update`
+    (onderdeel van de R2-actie), via de afzonderlijke overdracht van §8.3 en nooit in het ondertekende verzoek. Ze staan nooit in een manifest, preview-diff, auditdetail, log of evidence (alleen
     "gegenereerd" met datum). Het manifest markeert zo'n parameter met `source: generated` en `secret: true` (§9). Bij een
     handmatige installatie vult de gebruiker ze zelf in TrueNAS in (een geheim van de gebruiker, zoals het registry-token
     van §2.1). De Hub leest de app-configuratie nooit terug (de configuratie kan geheimen bevatten). Een Custom App
@@ -617,9 +626,10 @@ Regels:
 
 ### 3.2 Overzicht enrollment (eigen nieuwe diensten)
 
-1. **Via de API geïnstalleerd** (normaal vanaf P2): de Hub maakt een enrollment-token voor `app_id` en geeft bij
-   `app.create`/`app.update` alleen deze env mee: `HUB_URL`, `HUB_KEY_FINGERPRINT` (niet geheim) en
-   `HUB_ENROLLMENT_TOKEN` (de kortlevende uitzondering op "geen geheimen in het formulier", §3.1).
+1. **Via de API geïnstalleerd** (normaal vanaf P2): bij `app.create` vult de executor deze env in (§8.3):
+   `HUB_URL` en `HUB_KEY_FINGERPRINT` (niet geheim) uit zijn eigen gepinde koppeling met de Hub, en
+   `HUB_ENROLLMENT_TOKEN` (de kortlevende uitzondering op "geen geheimen in het formulier", §3.1). Dat token maakt de
+   Hub voor `app_id` pas bij de afgifte van §8.3.
 2. **Handmatig geïnstalleerd**: de beheerder maakt in de Hub-UI óf een enrollment-token en vult `HUB_URL` +
    `HUB_ENROLLMENT_TOKEN` (+ `HUB_KEY_FINGERPRINT`) in het formulier van de Custom App in (**aanbevolen**: geen
    wedloop), óf een **koppelcode** die hij op de statuspagina van de dienst invoert (§3.7).
@@ -633,7 +643,7 @@ waarschuwing in de log):
 |---|---|---|---|
 | `HUB_URL` | voor env-enrollment | `http(s)://<host>[:<poort>]` zonder pad, query, fragment of inloggegevens; geen loopback, geen link-local (`169.254.0.0/16`, `fe80::/10`) en geen `0.0.0.0`/`::` (loopback alleen met een expliciete ontwikkelvlag) | Adres van de Hub |
 | `HUB_ENROLLMENT_TOKEN` | voor env-enrollment | `enr_` + 43 tekens base64url | Eenmalig token (60 min) |
-| `HUB_KEY_FINGERPRINT` | nee (de Hub zet hem altijd bij installatie via de API) | `XXXX-XXXX-XXXX-XXXX` (§4.5) | Verwachte sleutelset-vingerafdruk; aanwezig ⇒ verplicht te controleren |
+| `HUB_KEY_FINGERPRINT` | nee (de executor zet hem altijd bij installatie via de API, §8.3) | `XXXX-XXXX-XXXX-XXXX` (§4.5) | Verwachte sleutelset-vingerafdruk; aanwezig ⇒ verplicht te controleren |
 
 **Adresregels (vorm):** een IPv4-adres alleen als `a.b.c.d` (vier decimale delen 0–255, zonder voorloopnul); een host
 van alleen cijfers, punten en hex-delen die daar niet aan voldoet (bv. `127.1`, `2130706433`, `0x7f000001`, `010.0.0.1`,
@@ -647,9 +657,10 @@ env-enrollment *trust on first use*: de statuspagina en de Hub-UI tonen daarna b
 beheerder ze kan vergelijken.
 
 `HUB_URL`, `HUB_ENROLLMENT_TOKEN` en `HUB_KEY_FINGERPRINT` zijn **geen manifestparameters** en staan niet in
-`custom_app.env` (§9): de vertaling voegt ze bij `app.install`/`app.update` toe als de Hub koppelt (§8). Uitzondering
-zonder koppeling: my_house leest `HUB_URL` alleen voor "Terug naar de Hub" (§2.3 regel 5); daar voegt de vertaling
-alleen `HUB_URL` toe, nooit een token of vingerafdruk, en ook daar is het geen manifestparameter.
+`custom_app.env` (§9). De vertaling voegt ze nooit toe. De executor vult ze bij `app.install` in als de eigen witte lijst
+de app als koppelbare eigen dienst noemt (§8.3). Uitzondering zonder koppeling: my_house leest `HUB_URL` alleen voor
+"Terug naar de Hub" (§2.3 regel 5); daar komt alleen `HUB_URL`, nooit een token of vingerafdruk, en ook daar is het
+geen manifestparameter.
 
 ### 3.3 `POST /api/v1/services/enroll` — exact schema
 
@@ -1353,7 +1364,8 @@ aanroepen zonder D09.
   beheerdersroutes van de Hub (admin + audit) en de AI kan ze niet voorstellen of uitvoeren (03_RISICO_AUTONOMIE: geen
   wijzigingen in beveiligingsbeleid of privileges door de AI; geheimen roteren is R2). Alleen het meegeven van
   `HUB_*`-env en van door de Hub gegenereerde geheimen (§3.1: in de `values` van een catalogusapp, of volgens de tweede
-  uitzondering als omgevingsvariabele van een Custom App) bij `app.install`/`app.update` loopt mee in die (R2-)actie.
+  uitzondering als omgevingsvariabele van een Custom App) bij `app.install`/`app.update` loopt mee in die (R2-)actie,
+  uitsluitend via §8.3.
 - Blokkades (altijd, ook met goedkeuring): pool `DEGRADED`/onbekend of backup-gate rood → geen opslag-/massamedia-mutaties
   (EX11/EX12); boiler-schakelen (elke route; EX27); auto-delete van torrents/downloads/media/foto's/datasets; wijzigen van
   policy/rollen/privileges door AI; betaalde acties; elke rechtstreekse schrijfactie in de database van Emby, Jelly Leon
@@ -1499,6 +1511,99 @@ zijn eigen uitvoeringsregistratie en eigen readback. Een handmatige stap vereist
 beheerdersbevestiging in de Hub. Een vreemde voortgangsmelding of onverwachte ETag stopt de orkestratie.
 Zolang appstore, planner, Hub of executor het vereiste bewijs niet leveren of toetsen, gaat geen planstap naar
 uitvoering. De beschikbaarheidsmeting van §4.4 levert uitsluitend de daar beschreven versiestatus.
+
+### 8.3 Afzonderlijke geheime overdracht (M2)
+
+**Grondregel.** `ExecutionRequest`, hashes en duurzame uitvoerregistraties bevatten uitsluitend verwijzingen en
+onveranderlijke revisies. Na eigen verificatie haalt alleen de bedoelde executor waarden eenmalig op via afzonderlijk
+wederzijds geauthenticeerd, versleuteld en gepind transport, gebonden aan verzoek, approval, doel, methode en
+vervaltijd. Geen gedeelde database of hoofdsleutel; geen geheimwaarde in foutpaden, journaal of recept. De waarden
+staan ook nooit in preview, idempotentie-opslag, audit, events, connector-items, AI-invoer of logs, ook niet als hash
+of deel.
+
+**Twee gebonden typen.** Er zijn er precies twee. Het type van een plek volgt uitsluitend uit de eigen witte lijst
+(`policy/catalogus.yaml`, onder de `policy_hash` in Hub- én executor-image). Hub en executor bepalen het elk zelf. Geen
+veld van aanvrager, voorstel, manifest, planner of afgifte kiest of verandert een type of vorm.
+
+| Type | Plek | Vorm (executor toetst vóór invullen) | Opslag in de Hub |
+|---|---|---|---|
+| `appgeheim` | Een omgevingsvariabele van een standaard Custom App die de witte-lijstregel als kluisplek noemt; nooit `HUB_*` en nooit een accountnaam (§9) | `^[A-Za-z0-9][A-Za-z0-9_-]{42}$` (32 willekeurige bytes als base64url zonder opvulling; een waarde die met `-` begint, maakt de Hub opnieuw) | Versleuteld (AES-256-GCM met de eigen `vault.key`) in een eigen app-opslag per instantie, ref en revisie, gescheiden van de ruimtes van §3.10. Geen `last4`, geen hash of deel; alleen "gegenereerd" met datum en revisie |
+| `enrollment-token` | Alleen `HUB_ENROLLMENT_TOKEN` van een regel die de app als koppelbare eigen dienst noemt | `^enr_[A-Za-z0-9_-]{43}$` (§3.4) | Alleen de SHA-256 in de bestaande enrollment-opslag (§3.4). Pas bij de afgifte gemaakt, 60 min geldig en eenmalig (§3.6); nooit in de kluis, de app-opslag of een antwoord buiten de afgifte |
+
+Een witte-lijstregel noemt haar kluisplekken als `kluisplekken: [{env, type}]`; hooguit één plek heeft het type
+`enrollment-token` en dan is `env` `HUB_ENROLLMENT_TOKEN`. Een regel met die plek is een koppelbare eigen dienst. Een
+app die voor een appgeheim een andere vorm vraagt, wordt niet ondersteund.
+
+**Binding (aanvulling op §8.1).** `catalog_binding.vault_refs` bevat per appgeheim-plek precies één
+`{path, parameter, ref, revision}`: `path` is `values.envs[<i>].value`, waar op die plek precies `ref` staat
+(`vault://app/<vaste app_id>/<parameter>`), en `revision` is een UUID die de Hub bij het voorstel voor deze instantie
+maakt. `catalog_binding.koppeling` is `null` of, bij een koppelbare eigen dienst,
+`{"soort": "volledig", "hub_url": ..., "hub_key_fingerprint": ...}` (niet geheim). De preview toont "koppelt met de
+Hub" met dat adres en die vingerafdruk, nooit het token. Een ontbrekende, dubbele, extra of andere plek, een andere
+kluisverwijzing in de payload of `HUB_*` in de parameters (`reserved_env`) weigeren Hub én executor. Rotatie maakt een
+nieuwe revisie en vraagt een nieuwe preview en goedkeuring.
+
+**Afgifte.** De executor vraagt de waarden op met `POST /api/v1/executor/secret-claims` bij de Hub, over zijn bestaande
+verbinding (adresregels van §3.2, nooit een redirect, geen proxy), met zijn service-token (§4.4). Dat doet hij pas na
+alle controles van §8 en §8.1 en vlak vóór de schrijfaanroep. Het verzoek is strikt (een onbekend veld geeft `422`):
+`{request_id, request_sha256, nonce, approval_id, instance_id, refs: [{path, ref, revision}], token, ontvanger,
+issued_at, handtekening}`. `request_sha256` is de canonieke SHA-256 (§8) van het ontvangen ondertekende verzoek.
+`token` is `true` alleen bij een koppelbare eigen dienst. `ontvanger` is een publieke X25519-sleutel die de executor
+alleen voor deze opvraag maakt en alleen in het geheugen houdt. `handtekening` is een Ed25519-handtekening over de
+canonieke JSON van de overige velden met de eigen identiteit van de executor (§3.1), die de Hub bij het koppelen pinde
+(§3.9).
+
+De Hub controleert eerst de handtekening tegen die pin en dat het service-token bij `ai-server-manager-executor` hoort.
+Dan controleert hij de actuele autorisatie: het verzoek is in uitvoering met deze nonce en approval, de approval is niet
+ingetrokken of verlopen en `request_sha256` is gelijk aan wat de Hub zelf vlak vóór verzending vastlegde. `refs` en
+`token` moeten exact gelijk zijn aan wat aan het verzoek is gebonden. Een andere of extra ref of revisie weigert de hele
+opvraag: geen gedeeltelijke afgifte. De afgifte is geldig tot de eerst aflopende verzoek- of approvaltijd, en hooguit
+60 seconden na het vastleggen. Een atomaire claim (één per `request_id`) verhindert een tweede ontvanger. Pas daarna
+ontsleutelt de Hub de gebonden appgeheimen en maakt hij het enrollment-token, gebonden aan de vaste `app_id`.
+
+Het antwoord `200` is `{"afgifte": <Hub-dienst-JWT>}` (§4.3, `aud` `ai-server-manager-executor`, geldig tot het einde
+van de afgifte) met één extra claim `kluis_afgifte` = `{request_sha256, claim_sha256, enc, ct}`. Daarin is
+`claim_sha256` de canonieke SHA-256 van het verzoek zonder `handtekening`. `enc` en `ct` zijn base64url van HPKE
+(RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM) naar `ontvanger`, met info
+`asm-kluis-afgifte-v1` en als aad de tekst van `claim_sha256`. De klare tekst is de canonieke JSON
+`{"waarden": {<path>: <waarde>}, "token": <waarde of null>}`, zonder typen. De executor controleert de JWT met zijn
+gepinde Hub-sleutels zoals in §4.7, en daarna beide hashes. Weigeringen zijn `401` (§4.7), `403 afgifte_geweigerd`
+(handtekening, andere executor), `409 afgifte_past_niet` (verzoek, nonce, approval, refs of token), `409
+afgifte_al_geclaimd`, `410 afgifte_verlopen`, `422 validation_error` en `503`, altijd zonder waarde.
+
+**Sleutels.** Er komen geen nieuwe blijvende sleutels of certificaten bij. Beide kanten gebruiken de identiteiten die
+bij het koppelen door een beheerder zijn bevestigd: de identiteit van de executor en de JWT-sleutels van de Hub, met
+de bestaande rotatie (§3.8, §4.5). Geen trust on first use. De policy-sleutel wordt hiervoor nooit gebruikt.
+Ontkoppelen of intrekken (§3.8) blokkeert de afgifte meteen. De sleutel van `ontvanger` leeft alleen voor één opvraag.
+De klare tekst staat dus nooit onversleuteld op de verbinding, ook niet bij HTTP of achter een proxy.
+
+**Claim, crash en invullen.** Bewaarde claimgegevens bevatten geen waarde en geen ophaalbaar antwoord. Een herhaalde
+opvraag, een transportfout of een herstart na de claim levert geen nieuwe afgifte op. Een vervallen approval of een
+onbereikbare Hub betekent geen waarde en geen uitvoering. Bij onzekerheid volgt een nieuwe goedkeuring, nooit een
+blinde herhaling en nooit een nieuw token op hetzelfde akkoord. De executor toetst elke waarde aan de vorm van het type
+dat zijn eigen witte lijst aan die plek geeft, en aan de gevraagde plek. Past één waarde niet, of mist of is er een
+waarde te veel, dan weigert hij het hele verzoek met `kluis_vorm_ongeldig`, zonder schrijfaanroep en zonder de waarde
+te loggen. Alleen direct voor de goedgekeurde `app.create` vult hij de exacte plekken in een tijdelijke kopie in. Bij
+een koppelbare eigen dienst zet hij `HUB_URL` en `HUB_KEY_FINGERPRINT` uit zijn eigen koppeling. Wijkt
+`catalog_binding.koppeling` daarvan af, dan weigert hij met `koppeling_past_niet`. Een mislukte afgifte geeft
+`kluis_afgifte_mislukt` zonder schrijfaanroep. Tijdelijke kopieën gaan nooit naar generieke request- of foutlogging.
+
+**Markering en recept.** Bij elke geslaagde invulling legt de executor in zijn journaal vast welke instantie welke
+plekken kreeg (runtime-naam, `request_id`, de vingerafdruk van zijn gepinde TrueNAS-verbinding, per plek `env`, type en
+bij een appgeheim ref en revisie). Hij legt nooit een waarde of hash vast. De Hub houdt dezelfde markering in zijn
+register. Tot het recept met alleen verwijzingen bestaat, weigeren Hub én executor op zo'n instantie elke
+`app.update` met `image` en elke `app.rollback` met `herstel_van`, vóór `app.config`, met
+`kluisplekken_recept_ontbreekt`. Is de lijst van de executor onleesbaar, dan weigert hij elke actie over dat pad met
+dezelfde code. Verval of gebruik van het token heft de markering niet op. Alleen wat de executor zelf invulde, krijgt
+een markering: bestaande adapters (§2.3), my_house, een met de hand of met een koppelcode gekoppelde dienst en elke
+andere instantie houden hun bestaande uitkomst. Het recept met alleen verwijzingen legt op een appgeheim-plek
+`{path, type, ref, revision}` vast en op de tokenplek alleen `{path, type}`. Een terugzetting vult een appgeheim
+opnieuw in via een nieuwe afgifte voor die ref en revisie. De tokenplek blijft leeg, want het token is na de koppeling
+waardeloos (§3.1). De bouw daarvan hoort bij de update- en terugzetstap.
+
+**Manifest en appstore.** Ongewijzigd en geheimvrij: een manifest bevat nooit een kluisverwijzing of `HUB_*`, `accounts`
+blijft beschrijvend (§9, C-12). De vertaling voegt geen `HUB_*` toe; dat doet alleen de executor. De overdracht van een
+OIDC-`client_secret` valt hier niet onder (§3.1 b, `ai-server-manager:docs/adr/ADR-0033-oidc-clientgeheim-naar-de-hubkluis.md`).
 
 ## 9. Manifeststandaard (B08-001, eigenaar `appstore-en-fork`)
 
