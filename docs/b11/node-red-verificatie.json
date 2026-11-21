@@ -1,5 +1,5 @@
 {
-  "checked_on": "2026-11-11",
+  "checked_on": "2026-11-21",
   "tool": "tools/node_red_verify.py",
   "image": {
     "repository": "docker.io/nodered/node-red",
@@ -175,7 +175,7 @@
     {
       "id": "beheeraccount_kan_aanmelden",
       "ok": true,
-      "title_nl": "Het beheeraccount meldt aan met het bcrypt-wachtwoord uit het profiel",
+      "title_nl": "Het beheeraccount meldt aan met zijn bcrypt-wachtwoord",
       "detail": {
         "http": 200
       }
@@ -183,7 +183,7 @@
     {
       "id": "profiel_isolatie_in_orde",
       "ok": true,
-      "title_nl": "De isolatiecontrole van deze dienst meet het profiel als in orde",
+      "title_nl": "De isolatiecontrole van deze dienst meet een beveiligde Node-RED met eigen sleutel als in orde",
       "detail": {
         "status": "gemeten_in_orde",
         "controles": {
@@ -362,7 +362,7 @@
     {
       "id": "andere_sleutel_geweigerd",
       "ok": true,
-      "title_nl": "Met een andere credentialSecret weigert Node-RED het blok (400 credentials_load_failed)",
+      "title_nl": "Een Node-RED met een andere sleutel weigert het blok (400 credentials_load_failed)",
       "detail": {
         "reden": "credentials_niet_te_ontsleutelen"
       }
