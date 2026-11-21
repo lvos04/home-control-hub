@@ -15,11 +15,16 @@ NODE_RED_TAG = "5.0.9"
 NODE_RED_DIGEST = "sha256:2ccd38b4066648bd5e17430c50a2f8102c566a82fd4f2fc5c342e61664d6896f"
 NODE_RED_PORT = 1880
 #: de installatiegebruiker: het manifest van jelly-leon-platform (de installatieweg) draait Node-RED als 568:568
-#: (contract kop 2: één container "als 568:568 waar de image dat toestaat"). Dit noemt het profiel als gebruiker.
+#: (contract kop 2: één container "als 568:568 waar de image dat toestaat").
 NODE_RED_INSTALL_UID = 568
 #: de standaardgebruiker ``node-red`` van de officiële image (gemeten zonder ``--user``). Alleen de verwachte uitkomst van
 #: de meting ``gebruiker_niet_root`` in ``tools/node_red_verify.py``; geen installatievoorschrift.
 NODE_RED_IMAGE_UID = 1000
+
+#: kortste wachtwoord of token van het dienstaccount dat de beheerder zelf in Node-RED maakt en via
+#: ``PUT /integrations/v1/sources/node_red`` als ``<gebruiker>:<wachtwoord>`` invoert (ADR-0016 van appstore-en-fork,
+#: punt 3 ``door_beheerder``: de laatste 4 tekens zijn voor elke lezer zichtbaar)
+SERVICE_SECRET_MIN_LENGTH = 32
 
 # Node-typen die nooit in een flow mogen (B11-001: "custom exec-node is geblokkeerd"). In de gepinde image zit de
 # exec-node in het kernbestand 90-exec.js; met ``nodesExcludes`` wordt dat bestand niet geladen (gemeten).

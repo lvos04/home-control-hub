@@ -22,11 +22,14 @@ Echte Node-RED, echte Hub en echte apparaten: NIET GEVALIDEERD (echte NAS). Volg
 
 from __future__ import annotations
 
+import json
+import secrets
 import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import bcrypt
 import httpx
 
 from tests.e2e.conftest import Stack, TokenHeaders
@@ -41,6 +44,37 @@ PW2 = "E2E-tweede-broker-wachtwoord-8804"
 PLUG = {"type": "device", "id": "stekker-3"}
 APP_DOEL = {"type": "app", "id": "uptime-kuma"}
 STATE: dict[str, Any] = {}
+DIENST = "hub-dienst"
+DIENST_RECHTEN = ["flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read"]
+
+
+def _beveiliging() -> dict[str, Any]:
+    """Zoals de beheerder Node-RED zelf beveiligt (besluit C-12: deze dienst maakt geen profiel meer): een beheerder en
+    het dienstaccount als bcrypt-hash, zonder ``credentialSecret`` (Node-RED maakt zijn sleutel zelf). Alleen testwaarden."""
+    dienst, beheer = secrets.token_urlsafe(32), secrets.token_urlsafe(18)
+
+    def h(pw: str) -> str:
+        return bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=10)).decode()
+
+    admin_auth = {
+        "type": "credentials",
+        "users": [
+            {"username": DIENST, "password": h(dienst), "permissions": DIENST_RECHTEN},
+            {"username": "beheerder", "password": h(beheer), "permissions": "*"},
+        ],
+    }
+    extern = {
+        "autoInstall": False,
+        "palette": {"allowInstall": False, "allowUpdate": False, "allowUpload": False},
+        "modules": {"allowInstall": False},
+    }
+    args = [
+        f"--define=adminAuth={json.dumps(admin_auth, separators=(',', ':'))}",
+        '--define=nodesExcludes=["90-exec.js"]',
+        "--define=functionExternalModules=false",
+        f"--define=externalModules={json.dumps(extern, separators=(',', ':'))}",
+    ]
+    return {"arguments": args, "dienstwachtwoord": dienst, "beheerwachtwoord": beheer}
 
 
 class Apparaten:
@@ -192,17 +226,17 @@ def test_01_editor_alleen_beheerder_en_exec_flow_geblokkeerd(stack: Stack) -> No
 
     assert _wait(linked), "worker koppelde niet"
     admin = stack.token("admin")
-    r = httpx.post(f"{stack.hch}{A}/hardening-profile", json={}, headers=_idem(admin))
-    assert r.status_code == 201, r.text
-    profile = r.json()
+    # C-12: het profiel van deze dienst bestaat niet meer
+    assert httpx.post(f"{stack.hch}{A}/hardening-profile", json={}, headers=_idem(admin)).status_code == 404
+    profile = _beveiliging()
     STATE["profile"] = profile
-    # de beheerder zet de argumenten in het formulier van de Custom App en herstart Node-RED
+    # de beheerder beveiligt Node-RED zelf (een beheerder en het dienstaccount) en herstart het
     assert httpx.post(f"{stack.node_red}/sim/arguments", json={"arguments": profile["arguments"]}).json()["beveiligd"]
     creds = {BROKER: {"user": "nas", "password": PW1}}
     httpx.post(f"{stack.node_red}/sim/deploy", json={"flows": [*_flows_v1(), *_exec_flow()], "credentials": creds})
     r = httpx.put(
         f"{stack.hch}/integrations/v1/sources/node_red",
-        json={"base_url": stack.node_red, "enabled": True},
+        json={"base_url": stack.node_red, "enabled": True, "credential": f"{DIENST}:{profile['dienstwachtwoord']}"},
         headers=_idem(admin, **{"If-Match": "*"}),
     )
     assert r.status_code in (200, 201), r.text
@@ -510,13 +544,12 @@ def test_06_health_volgt_node_red_en_geen_geheimen_in_de_logs(stack: Stack) -> N
 
     assert stack.logs is not None
     profile = STATE["profile"]
-    secret_args = [a.split("=", 2)[2] for a in profile["arguments"] if a.startswith("--define=credentialSecret=")]
-    secrets = [PW1, PW2, profile["beheerwachtwoord"], STATE["token"], STATE["signature"], *secret_args]
-    assert len(secret_args) == 1 and all(len(s) >= 16 for s in secrets)
+    geheimen = [PW1, PW2, profile["beheerwachtwoord"], profile["dienstwachtwoord"], STATE["token"], STATE["signature"]]
+    assert all(len(s) >= 16 for s in geheimen)
     for name in ("api.log", "worker.log"):
         for p in stack.procs:
             assert p.poll() is None, f"{name}: proces is onverwacht gestopt"
         text = (stack.logs / name).read_text(encoding="utf-8", errors="replace")
         assert text.strip(), f"{name} is leeg; de controle zou niets bewijzen"
-        for secret in secrets:
-            assert secret not in text, f"geheim in {name}"
+        for geheim in geheimen:
+            assert geheim not in text, f"geheim in {name}"

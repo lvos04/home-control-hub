@@ -1,4 +1,4 @@
-"""B11-001 — beleid voor flows, isolatiecontrole en het beveiligingsprofiel van Node-RED.
+"""B11-001 — beleid voor flows en isolatiecontrole van Node-RED.
 
 Drie onderdelen, alle drie fail-closed:
 
@@ -17,38 +17,26 @@ Drie onderdelen, alle drie fail-closed:
    zelf doet, mqtt via een broker) kan geen scan zien; zie ADR-0016 kop 2.
 2. **Isolatiecontrole** (:func:`check_isolation`): meet via de admin-API of de editor een aanmelding vraagt, of een
    anonieme lezer 401 krijgt, of de ``exec``-node ontbreekt, of het installeren van modules uit staat, of credentials
-   met een eigen ``credentialSecret`` versleuteld zijn en of het dienstaccount alleen zijn minimale rechten heeft.
+   versleuteld zijn met de sleutel die Node-RED zelf maakt (``flowEncryptionType: "system"``; een ``credentialSecret``
+   uit het formulier is een afwijking, C-12) en of het dienstaccount alleen zijn minimale rechten heeft.
    Wat alleen op de NAS zelf te zien is (niet als root, geen Docker-socket, privé-netwerk) is ``niet_meetbaar`` en
    wordt **nooit** als in orde gemeld; dat staat in de checklist van ``deploy/truenas/NODE_RED_CUSTOM_APP.md``.
-3. **Beveiligingsprofiel** (:func:`build_profile`): de formuliervelden voor de standaard TrueNAS Custom App van
-   Node-RED (image + digest, poort, opslag, gebruiker, argumenten). De image neemt instellingen alleen aan als
-   argument ``--define=<sleutel>=<JSON>`` (gecontroleerd tegen de gepinde image; een omgevingsvariabele voor de
-   ``credentialSecret`` bestaat niet). Wachtwoorden staan er alleen als bcrypt-hash in.
+3. **Geen beveiligingsprofiel meer** (besluit C-12, ADR-0016 van appstore-en-fork, besluit 6; stap S-P3-360): deze
+   dienst maakt geen formulierargumenten, wachtwoordhashes of ``credentialSecret`` meer voor de Custom App van
+   Node-RED. Het formulier komt uit het Node-RED-manifest van jelly-leon-platform; het dienstaccount maakt de
+   beheerder in Node-RED en zijn aanmelding komt binnen via ``PUT /integrations/v1/sources/node_red``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
-import bcrypt
-from sqlalchemy.orm import Session
-
-from ...security.vault import Vault
 from ...timeutil import iso, utcnow
-from .catalog import (
-    FORBIDDEN_NODE_FILES,
-    FORBIDDEN_NODE_TYPES,
-    NODE_RED_DIGEST,
-    NODE_RED_IMAGE,
-    NODE_RED_INSTALL_UID,
-    NODE_RED_PORT,
-    NODE_RED_TAG,
-)
+from .catalog import FORBIDDEN_NODE_TYPES
 from .nodered import NodeRedClient, NodeRedError
 
 #: typen die bij de opbouw van Node-RED zelf horen en geen node van een module zijn
@@ -76,12 +64,10 @@ OUTBOUND_TYPES = frozenset(
 )
 #: kernnodes die berichten naar een ander tabblad sturen (veld ``links``: de id's van de link-nodes aan de andere kant)
 LINK_TYPES = frozenset({"link out", "link in", "link call"})
+#: naam van het dienstaccount; wordt ``accounts[].id`` zodra het Node-RED-manifest een dienstaccount heeft (C-12)
 SERVICE_USER = "hub-dienst"
-ADMIN_USER = "beheerder"
 #: precies wat deze dienst nodig heeft: flows lezen en (alleen bij herstel) zetten, nodes/instellingen/diagnose lezen
 SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read")
-PROFILE_REF = "vault://automation/node-red-profiel"
-BCRYPT_ROUNDS = 10
 MAX_FINDINGS = 50
 #: langste ``id`` en ``z`` die de dienst kan plaatsen (``automation_flow.source_flow_id`` is String(120)); langer is
 #: ``vorm_ongeldig`` (R-VEILIG-8: de echte Node-RED neemt een langere id aan)
@@ -522,7 +508,7 @@ CHECK_TITLES_NL = {
     "modules_toegestaan": "Alleen nodes uit toegestane modules zijn geladen",
     "palette_installatie_uit": "Modules installeren, bijwerken of uploaden via de editor staat uit",
     "function_modules_uit": "Function-nodes kunnen geen externe modules laden",
-    "credentials_versleuteld": "Credentials zijn versleuteld met een eigen credentialSecret",
+    "credentials_versleuteld": "Credentials zijn versleuteld met de sleutel die Node-RED zelf maakt",
     "dienstaccount_minimaal": "Het dienstaccount heeft alleen zijn minimale rechten",
     "niet_root": "De container draait niet als root",
     "geen_docker_socket": "Er is geen Docker-socket gekoppeld",
@@ -601,8 +587,9 @@ def check_isolation(client: NodeRedClient, allowed_modules: tuple[str, ...]) -> 
                 "function_modules_uit", "ok" if fn_ext is False else "afwijking", {"functionExternalModules": fn_ext}
             )
             enc = settings.get("flowEncryptionType")
+            # C-12: "system" is de sleutel die Node-RED zelf maakt; "user" betekent een credentialSecret uit het formulier
             rows["credentials_versleuteld"] = _row(
-                "credentials_versleuteld", "ok" if enc == "user" else "afwijking", {"flowEncryptionType": enc}
+                "credentials_versleuteld", "ok" if enc == "system" else "afwijking", {"flowEncryptionType": enc}
             )
             user = _as_dict(settings.get("user"))
             perms = user.get("permissions")
@@ -650,125 +637,3 @@ def check_isolation(client: NodeRedClient, allowed_modules: tuple[str, ...]) -> 
         "fout": error,
         "validatie": "Gemeten via de admin-API; een Node-RED op de echte NAS is NIET GEVALIDEERD (echte NAS).",
     }
-
-
-# ------------------------------------------------------------------------------------------------ beveiligingsprofiel
-def hash_password(password: str) -> str:
-    """bcrypt-hash zoals Node-RED (bcryptjs) hem voor ``adminAuth`` verwacht."""
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")
-
-
-def define_arguments(service_hash: str, admin_hash: str, credential_secret: str) -> list[str]:
-    """De argumenten voor de container van Node-RED: één instelling per argument, zonder shell."""
-    admin_auth = {
-        "type": "credentials",
-        "sessionExpiryTime": 3600,
-        "users": [
-            {"username": SERVICE_USER, "password": service_hash, "permissions": list(SERVICE_PERMISSIONS)},
-            {"username": ADMIN_USER, "password": admin_hash, "permissions": "*"},
-        ],
-    }
-    external = {
-        "autoInstall": False,
-        "palette": {"allowInstall": False, "allowUpdate": False, "allowUpload": False},
-        "modules": {"allowInstall": False},
-    }
-
-    def define(key: str, value: Any) -> str:
-        text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
-        return f"--define={key}={text}"
-
-    return [
-        define("adminAuth", admin_auth),
-        define("nodesExcludes", list(FORBIDDEN_NODE_FILES)),
-        define("functionExternalModules", False),
-        define("externalModules", external),
-        define("credentialSecret", credential_secret),
-        "--no-telemetry",
-    ]
-
-
-@dataclass
-class Profile:
-    created: bool
-    admin_password_rotated: bool
-    arguments: list[str]
-    admin_password: str | None  # alleen direct na het (opnieuw) maken; daarna bestaat alleen de hash
-    stored: dict[str, Any]
-
-    def form(self) -> dict[str, Any]:
-        """Formuliervelden zonder geheimen (de argumenten met de hashes en de credentialSecret komen er apart bij)."""
-        return {
-            "installatie": "TrueNAS → Apps → Discover Apps → Custom App (formulier; geen YAML)",
-            "image": {"repository": NODE_RED_IMAGE, "tag": NODE_RED_TAG, "digest": NODE_RED_DIGEST},
-            "poort": {"container": NODE_RED_PORT, "protocol": "tcp", "host": "keuze uit de onboarding (alleen LAN)"},
-            "opslag": {"mount_path": "/data", "soort": "eigen dataset voor Node-RED (keuze uit de onboarding)"},
-            # de installatiegebruiker van het manifest van jelly-leon-platform (S-P2-310); los van besluit C-12
-            "gebruiker": {"uid": NODE_RED_INSTALL_UID, "gid": NODE_RED_INSTALL_UID, "root": False},
-            "nooit": [
-                "geen Docker-socket koppelen",
-                "geen privileged-modus of extra capabilities",
-                "geen host-netwerk",
-                "poort niet buiten het LAN openzetten",
-            ],
-            "accounts": {
-                "dienst": {"gebruiker": SERVICE_USER, "rechten": list(SERVICE_PERMISSIONS)},
-                "beheer": {"gebruiker": ADMIN_USER, "rechten": "*"},
-            },
-            "gemaakt_op": self.stored.get("gemaakt_op"),
-            "beheerwachtwoord_gewijzigd_op": self.stored.get("beheer_gewijzigd_op"),
-            "validatie": "De argumenten zijn gecontroleerd tegen de gepinde image in een lokale container; "
-            "de installatie op de echte NAS is NIET GEVALIDEERD (echte NAS).",
-        }
-
-
-def _store(vault: Vault, session: Session, data: dict[str, Any]) -> None:
-    # de laatste sleutel is bewust geen geheim: de vault bewaart de laatste 4 tekens als herkenning
-    vault.put(session, PROFILE_REF, json.dumps({**data, "v": 1}, separators=(",", ":")))
-
-
-def load_profile(vault: Vault, session: Session) -> dict[str, Any] | None:
-    raw = vault.get(session, PROFILE_REF)
-    if not raw:
-        return None
-    data = json.loads(raw)
-    return data if isinstance(data, dict) else None
-
-
-def build_profile(vault: Vault, session: Session, *, new_admin_password: bool = False) -> tuple[Profile, str | None]:
-    """Maakt het profiel (één keer) of geeft het bestaande terug. Geeft ook het wachtwoord van het dienstaccount terug
-    als dat net gemaakt is, zodat de aanroeper het als credential van de bron kan opslaan (het wordt nooit getoond).
-
-    De ``credentialSecret`` wordt hier nooit vervangen: Node-RED kan bestaande credentials dan niet meer lezen."""
-    stored = load_profile(vault, session)
-    created = stored is None
-    service_password: str | None = None
-    admin_password: str | None = None
-    now = iso(utcnow())
-    if stored is None:
-        service_password = secrets.token_urlsafe(32)
-        admin_password = secrets.token_urlsafe(18)
-        stored = {
-            "dienst_hash": hash_password(service_password),
-            "beheer_hash": hash_password(admin_password),
-            "credential_secret": secrets.token_urlsafe(48),
-            "gemaakt_op": now,
-            "beheer_gewijzigd_op": now,
-        }
-        _store(vault, session, stored)
-    elif new_admin_password:
-        admin_password = secrets.token_urlsafe(18)
-        stored = {**stored, "beheer_hash": hash_password(admin_password), "beheer_gewijzigd_op": now}
-        stored.pop("v", None)
-        _store(vault, session, stored)
-    arguments = define_arguments(
-        str(stored["dienst_hash"]), str(stored["beheer_hash"]), str(stored["credential_secret"])
-    )
-    profile = Profile(
-        created=created,
-        admin_password_rotated=bool(new_admin_password and not created),
-        arguments=arguments,
-        admin_password=admin_password,
-        stored={k: v for k, v in stored.items() if k in ("gemaakt_op", "beheer_gewijzigd_op")},
-    )
-    return profile, service_password

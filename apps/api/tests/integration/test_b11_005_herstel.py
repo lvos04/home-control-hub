@@ -85,13 +85,6 @@ def cred_blob(node_red_fake: Any) -> str:
     return str(json.loads((node_red_fake.data_dir / "flows_cred.json").read_text(encoding="utf-8"))["$"])
 
 
-def define(profile: dict[str, Any], key: str) -> str:
-    for arg in profile["arguments"]:
-        if arg.startswith(f"--define={key}="):
-            return str(arg.split("=", 2)[2])
-    raise AssertionError(key)
-
-
 class Scene:
     """Twee toestanden: v1 (momentopname) en daarna een wijziging in de editor naar v2 (ook een momentopname)."""
 
@@ -130,7 +123,7 @@ class Scene:
             self.blob1,
             self.blob2,
             self.profile["beheerwachtwoord"],
-            define(self.profile, "credentialSecret"),
+            self.profile["dienstwachtwoord"],
         ]
 
 

@@ -14,9 +14,9 @@ stopt of wijzigt de app Node-RED zelf niet.
 > **NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.** (Het plan
 > staat in `ai-server-manager`, `docs/platform-v2/OVERDRACHT/UITVOERINGSPLAN/STAPPEN_P6.md`.) Wat wél is gemeten:
 > de bewaking van Home Control Hub tegen een Node-RED-simulator, en de aannames over Node-RED tegen de gepinde image
-> in lokale containers (`docs/b11/node-red-verificatie.json`). Die meting is gedaan met het eigen
-> beveiligingsprofiel van Home Control Hub (gebruiker 1000, eigen argumenten), **niet** met het manifest van
-> `jelly-leon-platform`. Jouw TrueNAS-versie (D01), poolnaam en dataset (D02) en NAS-adres (D03) zijn onbekend.
+> in lokale containers (`docs/b11/node-red-verificatie.json`). Die meting is gedaan met een eigen meetopstelling
+> (gebruiker 1000, eigen argumenten met een beheerder en het dienstaccount, zonder `credentialSecret`), **niet** met
+> het manifest van `jelly-leon-platform`. Jouw TrueNAS-versie (D01), poolnaam en dataset (D02) en NAS-adres (D03) zijn onbekend.
 
 ## Anonieme toegang (besluit C-11)
 
@@ -34,15 +34,27 @@ te zwakken. Tot er een dienstaccount is, wordt `anoniem_geweigerd` niet gemeten:
 
 ## Beheerder- en dienstaccount (besluit C-12)
 
-Zonder beheerder is de editor van Node-RED niet bruikbaar. Het manifest levert nog **geen beheerder**: de
-manifeststandaard kent nog geen manier om een account te maken zonder een geheim in het formulier te zetten. De
-manifeststandaard (`appstore-en-fork`) krijgt daarvoor een **voorziening zonder geheim in het Custom App-formulier**
-voor een beheerder en voor het dienstaccount waarmee Home Control Hub leest. Die voorziening wordt eerst ontworpen
-(stap S-P2-510 in `appstore-en-fork`) en daarna, na fase P2, gebouwd.
+Zonder beheerder is de editor van Node-RED niet bruikbaar. Besluit C-12 (`appstore-en-fork`,
+`docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md`): een beheerder en een dienstaccount
+komen er **zonder geheim in het Custom App-formulier**, via de manifeststandaard (veld `accounts`, stap S-P3-490). Voor
+Node-RED koos je "Wachten" (punt 7 van die ADR): het manifest van `jelly-leon-platform` heeft daarom nog **geen
+beheerder en geen dienstaccount** (stap S-P3-445). Er is dus nog geen dienstaccount waarmee Home Control Hub leest.
 
-Home Control Hub heeft een eigen beveiligingsprofiel (`POST /integrations/v1/automation/hardening-profile`). Dat is
-**geen installatiestap**: zet geen argumenten, wachtwoord-hashes of sleutels uit dat profiel in het formulier van
-Node-RED. Het profiel vervalt of wordt gelijkgetrokken met de voorziening zodra die er is.
+**Het eigen beveiligingsprofiel van Home Control Hub is vervallen** (stap S-P3-360, ADR-0016 punt 6). De route
+`POST /integrations/v1/automation/hardening-profile` bestaat niet meer (antwoord `404`); Home Control Hub maakt geen
+argumenten, wachtwoord-hashes of `credentialSecret` meer voor het formulier van Node-RED. Een eerder bewaard profiel in
+de kluis van Home Control Hub wordt niet weggegooid, maar ook niet meer gelezen.
+
+- **Heb je vroeger argumenten uit dat profiel in het formulier van Node-RED gezet?** Haal de `credentialSecret` dan
+  **niet** zomaar weg: zonder die sleutel kan Node-RED je bestaande credentials niet meer lezen. Home Control Hub laat
+  Node-RED ongemoeid; de isolatiemeting meldt zo'n `credentialSecret` wel als afwijking bij `credentials_versleuteld`
+  (in orde is alleen de sleutel die Node-RED zelf maakt). Overstappen betekent: de credentials van je nodes opnieuw
+  invoeren in een Node-RED volgens het manifest.
+- **Het dienstaccount, zodra er een weg is** (een nieuwe keuze bij punt 7): de beheerder maakt het in Node-RED zelf,
+  met precies de rechten die het manifest dan noemt. De aanmelding gaat daarna alleen naar de bron `node_red` van Home
+  Control Hub (`PUT /integrations/v1/sources/node_red`, als `<gebruiker>:<wachtwoord>`, het wachtwoord of token
+  minstens 32 tekens; korter wordt geweigerd). Home Control Hub bewaart haar versleuteld en toont alleen de laatste 4
+  tekens. Nooit in het formulier van Node-RED.
 
 Gevolg tot dan: Home Control Hub werkt alleen met een Node-RED die een aanmelding vraagt en een dienstaccount voor
 Home Control Hub heeft; het meldt zich aan met dat account. Een Node-RED volgens het manifest heeft nog geen
@@ -50,17 +62,17 @@ dienstaccount. Home Control Hub meet dan **niets**: de isolatie heet `onbekend` 
 lijst met controles is leeg (ook `anoniem_geweigerd` wordt niet gemeten), het uitlezen van flows legt de reden
 `geen_aanmelding` vast in de synchronisatietoestand, en het maken van een momentopname of een herstelvoorstel geeft
 `node_red_niet_ingesteld` met de reden `geen_aanmelding`. Het adres van de editor, de lijst met flows en de stand van
-de isolatie blijven gewoon zichtbaar. Dat is verwacht tot de voorziening
-van besluit C-12 er is. De melding bij `geen_aanmelding` zegt "maak eerst het beveiligingsprofiel": doe dat **niet**
-(het profiel is geen installatiestap, zie hierboven).
+de isolatie blijven gewoon zichtbaar. Dat is verwacht zolang Node-RED geen
+dienstaccount heeft (besluit C-12, punt 7: "Wachten"). De melding bij `geen_aanmelding` vraagt de aanmelding van het
+dienstaccount bij de bron `node_red`; die is er pas als er een dienstaccount is.
 
 ## Wat je in Home Control Hub instelt
 
 **Bron (nog niet beschikbaar).** Het koppelen van Node-RED is voor jou nog niet uit te voeren: het scherm
 *Automatisering* in de Hub, waar je het adres van Node-RED invult en de isolatie laat meten, is nog niet gebouwd, en
 er is nog geen dienstaccount (besluit C-12). Zodra beide er zijn, vul je daar bij de bron **Node-RED** (`node_red`)
-het LAN-adres in (`http://<NAS-adres>:<host-poort>`, de poort uit het manifest) en zet je de bron aan. Een wachtwoord
-of sleutel zet je nooit in een formulier. Zonder dienstaccount geeft de meting `onbekend` met `geen_aanmelding` (zie
+het LAN-adres en de aanmelding van het dienstaccount in (`http://<NAS-adres>:<host-poort>`, de poort uit het
+manifest) en zet je de bron aan. Een wachtwoord of sleutel zet je nooit in het formulier van een Custom App. Zonder dienstaccount geeft de meting `onbekend` met `geen_aanmelding` (zie
 "Gevolg tot dan").
 
 **Instellingen** (optioneel; omgevingsvariabelen in het formulier van de app **home-control-hub**, zie ook
@@ -115,7 +127,8 @@ Loop ze na de installatie en na elke wijziging van het formulier van Node-RED na
 | Melding | Oplossing |
 |---|---|
 | Hub: *Node-RED is nog niet als bron ingesteld* (`node_red_niet_ingesteld`) | Kijk naar de reden. Ontbreekt het adres of staat de bron uit: vul het adres in en zet de bron aan (zodra het scherm er is). Reden `geen_aanmelding`: zie de volgende rij. |
-| Isolatie `onbekend` met `geen_aanmelding` (*Er zijn geen aanmeldgegevens voor Node-RED opgeslagen*) | Verwacht bij een Node-RED volgens het manifest, tot de voorziening van besluit C-12 er is (er is nog geen dienstaccount). Maak **niet** het beveiligingsprofiel en zet geen wachtwoord in een formulier. |
+| Isolatie `onbekend` met `geen_aanmelding` (*Er zijn geen aanmeldgegevens voor Node-RED opgeslagen*) | Verwacht bij een Node-RED volgens het manifest: er is nog geen dienstaccount (besluit C-12, "Wachten"). Het beveiligingsprofiel bestaat niet meer; zet geen wachtwoord in een formulier. |
+| Isolatie: afwijking bij `credentials_versleuteld` | Node-RED gebruikt een `credentialSecret` uit het formulier (een oud profiel). Haal hem niet zomaar weg: dan zijn je bestaande credentials onleesbaar. Zie "Beheerder- en dienstaccount". |
 | Hub: `niet_beveiligd` | Node-RED vraagt geen aanmelding. Controleer of de app volgens het manifest is geïnstalleerd; stop Node-RED tot dat zo is. Zolang zijn alle flows geblokkeerd met reden `synchronisatie_mislukt` (zie de rij daarover). |
 | Hub: *Node-RED is niet bereikbaar* (`node_red_unavailable`) | App gestopt, verkeerde poort of verkeerd adres. De Hub probeert het zelf opnieuw. |
 | Isolatie: afwijking bij `anoniem_geweigerd` | Alleen te zien zodra er een dienstaccount is. Het manifest heeft sinds stap S-P2-410 geen anoniem lezen meer (besluit C-11): controleer of Node-RED volgens het huidige manifest is geïnstalleerd; zie "Anonieme toegang". |

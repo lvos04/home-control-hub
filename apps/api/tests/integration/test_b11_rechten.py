@@ -1,7 +1,7 @@
 """B11 — rechten op de schrijvende routes van de beheer-API (stap S-P2-310, bouwpunt 5).
 
 Indeling (ADR-0016 kop 2, aanvulling "Rechten op de beheer-API"; keuze van de regisseur op 2026-11-12): beleid en
-toegang (beveiligingsprofiel, eigenaar, triggers, grenzen, flow-tokens; ook het adres van de editor) alleen voor de
+toegang (eigenaar, triggers, grenzen, flow-tokens; ook het adres van de editor) alleen voor de
 beheerder; bediening (pauzeren en hervatten, isolatie meten, momentopname, opnieuw aanbieden, proefrun) voor de
 beheerder en de operator; events aanbieden en de uitkomst van een actieverzoek melden alleen voor de Hub (dienst-JWT).
 Een viewer of een kind krijgt op elke schrijvende route ``403``; een operator op elke route die alleen voor de
@@ -32,7 +32,6 @@ WRITING = {"POST", "PUT", "PATCH", "DELETE"}
 
 #: (methode, pad) -> de auditregel die de route bij succes vastlegt
 ADMIN_ONLY = {
-    ("POST", f"{A}/hardening-profile"): "automation.hardening_profile.issued",
     ("PUT", f"{A}/flows/{{flow_id}}/owner"): "automation.flow.owner_changed",
     ("PUT", f"{A}/flows/{{flow_id}}/triggers"): "automation.flow.triggers_changed",
     ("PUT", f"{A}/flows/{{flow_id}}/rate-limits"): "automation.flow.rate_limits_changed",
@@ -77,7 +76,6 @@ def _request(linked: Any, auth: Any, flow_id: str, route: tuple[str, str], heade
         request_id=uuid.uuid4(),
     )
     bodies: dict[str, Any] = {
-        "/hardening-profile": {},
         "/owner": {"owner": "user-2", "eigenaren": []},
         "/state": {"status": "gepauzeerd", "reden": "test"},
         "/triggers": {"triggers": [{"event_type": "backup.run.failed", "schema_version": "1.0", "filter": {}}]},
@@ -123,7 +121,7 @@ def test_every_writing_route_of_the_automation_api_has_a_place_in_the_role_table
         for method in operations
         if method.upper() in WRITING
     }
-    assert len(found) >= 13, "de lijst met routes is niet leeg of half gelezen"
+    assert len(found) >= 12, "de lijst met routes is niet leeg of half gelezen"  # 13 tot C-12 (S-P3-360)
     table = set(ADMIN_ONLY) | set(ADMIN_OR_OPERATOR) | set(HUB_ONLY)
     assert found == table, {"niet_in_de_indeling": sorted(found - table), "bestaat_niet": sorted(table - found)}
     # een route met include_in_schema=False staat niet in de OpenAPI-beschrijving; daarom ook uit de routers zelf

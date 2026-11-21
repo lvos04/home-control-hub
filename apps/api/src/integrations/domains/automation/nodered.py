@@ -48,7 +48,7 @@ API_HEADERS = {"Node-RED-API-Version": "v2"}
 REASONS_NL = {
     "niet_geconfigureerd": "Node-RED is nog niet als bron ingesteld (adres ontbreekt).",
     "uitgeschakeld": "De bron Node-RED staat uit.",
-    "geen_aanmelding": "Er zijn geen aanmeldgegevens voor Node-RED opgeslagen (maak eerst het beveiligingsprofiel).",
+    "geen_aanmelding": "Er zijn geen aanmeldgegevens voor Node-RED opgeslagen (voer de aanmelding van het dienstaccount in bij de bron node_red).",
     "aanmelding_ongeldig": "De opgeslagen aanmeldgegevens voor Node-RED hebben niet de vorm gebruikersnaam:wachtwoord.",
     "ongeldig_adres": "Het adres van Node-RED is ongeldig.",
     "onbereikbaar": "Node-RED is niet bereikbaar.",
@@ -65,7 +65,7 @@ REASONS_NL = {
     "redirect": "Node-RED antwoordde met een doorverwijzing; die wordt bewust niet gevolgd.",
     "versie_conflict": "De flows in Node-RED zijn intussen gewijzigd; er is niets overschreven.",
     "credentials_niet_te_ontsleutelen": "Node-RED kan de credentials uit de momentopname niet ontsleutelen (een "
-    "andere credentialSecret); de flows zijn niet gewijzigd.",
+    "andere sleutel); de flows zijn niet gewijzigd.",
     "flows_geweigerd": "Node-RED weigerde de flows; er is niets gewijzigd.",
     "synchronisatie_mislukt": "De synchronisatie met Node-RED is vastgelopen; alle flows van Node-RED zijn geblokkeerd "
     "tot een synchronisatie weer slaagt en een beheerder ze hervat.",

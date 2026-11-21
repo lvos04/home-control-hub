@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import secrets
 import sys
 import time
 import uuid
@@ -24,7 +25,7 @@ from sqlalchemy import create_engine, text
 
 from integrations.config import Settings
 from tests.fakes.authentik_fake import AuthentikFake
-from tests.fakes.node_red_fake import NodeRedFake
+from tests.fakes.node_red_fake import TEST_SERVICE_USER, NodeRedFake, hardening_arguments, hash_password
 
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 TEST_DB_NAME = os.environ.get("HCH_TEST_DB_NAME", "hch_test_api")
@@ -388,21 +389,25 @@ def setup_node_red(
     flows: list[dict[str, Any]] | None = None,
     credentials: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Zoals de beheerder het doet: beveiligingsprofiel opvragen, Node-RED met die argumenten (her)starten en de bron
-    instellen. Geeft het profiel terug (met het eenmalig getoonde beheerwachtwoord)."""
-    r = client.post("/integrations/v1/automation/hardening-profile", json={}, headers=idem(auth("admin")))
-    assert r.status_code == 201, r.text
-    profile: dict[str, Any] = r.json()
+    """Zoals de beheerder het doet (besluit C-12): Node-RED zelf beveiligen met een beheerder en het dienstaccount
+    (zonder ``credentialSecret``: Node-RED maakt zijn sleutel zelf) en daarna de bron instellen met de aanmelding van
+    het dienstaccount. Geeft de testwachtwoorden en de argumenten terug."""
+    service_password, admin_password = secrets.token_urlsafe(32), secrets.token_urlsafe(18)
+    profile: dict[str, Any] = {
+        "arguments": hardening_arguments(hash_password(service_password), hash_password(admin_password)),
+        "beheerwachtwoord": admin_password,
+        "dienstwachtwoord": service_password,
+    }
     if harden:
         fake_hub.node_red.apply_arguments(profile["arguments"])
     if flows is not None:
         fake_hub.node_red.deploy(flows, credentials)
     r = client.put(
         "/integrations/v1/sources/node_red",
-        json={"base_url": NODE_RED_URL, "enabled": True},
+        json={"base_url": NODE_RED_URL, "enabled": True, "credential": f"{TEST_SERVICE_USER}:{service_password}"},
         headers=idem(auth("admin"), **{"If-Match": "*"}),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code in (200, 201), r.text
     return profile
 
 

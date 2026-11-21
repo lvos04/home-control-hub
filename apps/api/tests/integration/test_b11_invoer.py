@@ -97,7 +97,6 @@ def _admin_cases(flow_id: str, s: str) -> dict[str, tuple[str, str, str, str]]:
     out = {name: (m, p, raw, raw.replace(s, "")) for name, (m, p, raw) in cases.items()}
     # een onbekende veldnaam met het teken; zonder dat veld is de body geldig
     out["onbekende_veldnaam"] = ("PUT", f"{f}/owner", owner[:-1] + f',"x{s}":1}}', owner)
-    out["profiel_veldnaam"] = ("POST", f"{A}/hardening-profile", f'{{"x{s}":true}}', "{}")
     return out
 
 
@@ -456,7 +455,11 @@ def test_unstorable_text_in_a_source_is_a_422_and_stores_nothing(linked: Any, au
     niets bewaard (geen bron, geen credential, geen audit, geen event) en het teken staat niet in het antwoord.
     Dezelfde Idempotency-Key met gewone tekst werkt daarna gewoon."""
     path = "/integrations/v1/sources/node_red"
-    body = {"base_url": NODE_RED_URL + "/x", "enabled": True, "credential": "geheim-van-de-test"}
+    body = {
+        "base_url": NODE_RED_URL + "/x",
+        "enabled": True,
+        "credential": "hub-dienst:geheim-van-de-test-met-genoeg-tekens-12345",
+    }
     good = json.dumps(body)
     part = {"base_url": "/x", "credential": "de-test"}[where]
     raw = good.replace(part, part + BAD[bad])

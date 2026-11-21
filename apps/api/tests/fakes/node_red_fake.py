@@ -5,15 +5,17 @@ De vorm van de antwoorden volgt de admin-API van de gepinde image ``nodered/node
 
 - zonder ``adminAuth``: ``GET /auth/login`` → ``{}``, alles anoniem leesbaar, exec-node geladen, ``externalModules: {}``,
   ``functionExternalModules: true``, ``flowEncryptionType: "system"``, diagnostics ``adminAuth: "UNSET"``;
-- met het beveiligingsprofiel (``--define=...``): anoniem 401, ``GET /auth/login`` → ``{"type": "credentials", ...}``,
+- beveiligd met ``--define=...`` (:func:`hardening_arguments`: zoals de beheerder Node-RED in een test inricht; geen
+  installatieweg, die is het manifest van jelly-leon-platform, besluit C-12): anoniem 401, ``GET /auth/login`` → ``{"type": "credentials", ...}``,
   ``POST /auth/token`` (formulier, lege scope; fout wachtwoord → 403; scope ``*`` voor een beperkt account → 403),
   ``POST /auth/revoke``, ``GET /flows`` (v2) → ``{"flows", "rev"}``, ``POST /flows`` (v2) met ``rev`` (verouderd → 409
-  ``version_mismatch``), credentials als ``{"$": "<32 hex><base64>"}`` (andere ``credentialSecret`` → 400
+  ``version_mismatch``), credentials als ``{"$": "<32 hex><base64>"}`` (andere sleutel → 400
   ``credentials_load_failed``), ``GET /flows`` geeft nooit credentials terug, een flow met een niet-geladen ``exec``-node
   wordt door ``POST /flows`` aangenomen, ``POST /nodes`` (palette) → 404 als installeren uit staat.
 
-De "versleuteling" van het credentials-bestand is hier een eenvoudige, omkeerbare codering die aan de
-``credentialSecret`` gebonden is; het gaat om het gedrag (onleesbaar voor de dienst, geweigerd bij een andere sleutel),
+De "versleuteling" van het credentials-bestand is hier een eenvoudige, omkeerbare codering die aan de sleutel
+gebonden is: een ``credentialSecret`` als die gezet is (``flowEncryptionType: "user"``), anders de sleutel die
+Node-RED zelf maakt (``system_secret``, ``flowEncryptionType: "system"``); het gaat om het gedrag (onleesbaar voor de dienst, geweigerd bij een andere sleutel),
 niet om echte cryptografie. Resultaten met deze simulator heten "Sim-getest"; een echte Node-RED op de NAS is
 NIET GEVALIDEERD (echte NAS).
 """
@@ -76,6 +78,48 @@ CORE_SETS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 #: bestand → node-set (voor ``nodesExcludes``)
 SET_FILES = {"90-exec.js": "node-red/exec"}
+#: beheeraccount dat een test in Node-RED zet (de beheerder kiest de naam zelf; deze dienst kent hem niet)
+TEST_ADMIN_USER = "beheerder"
+#: dienstaccount en rechten zoals deze dienst ze verwacht (``policy.SERVICE_USER``, ``policy.SERVICE_PERMISSIONS``)
+TEST_SERVICE_USER = "hub-dienst"
+TEST_SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read")
+
+
+def hash_password(password: str) -> str:
+    """bcrypt-hash zoals Node-RED (bcryptjs) hem in ``adminAuth`` verwacht."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("ascii")
+
+
+def hardening_arguments(service_hash: str, admin_hash: str, credential_secret: str | None = None) -> list[str]:
+    """ALLEEN voor tests: de ``--define``-argumenten waarmee een test de nep-Node-RED beveiligt zoals een beheerder dat
+    in Node-RED zelf doet. Geen productiecode en geen installatieweg: deze dienst maakt sinds besluit C-12 geen
+    formulierargumenten meer (S-P3-360). Zonder ``credentialSecret`` (de standaard) maakt Node-RED zijn sleutel zelf."""
+    admin_auth = {
+        "type": "credentials",
+        "sessionExpiryTime": 3600,
+        "users": [
+            {"username": TEST_SERVICE_USER, "password": service_hash, "permissions": list(TEST_SERVICE_PERMISSIONS)},
+            {"username": TEST_ADMIN_USER, "password": admin_hash, "permissions": ALL_PERMISSIONS},
+        ],
+    }
+    external = {
+        "autoInstall": False,
+        "palette": {"allowInstall": False, "allowUpdate": False, "allowUpload": False},
+        "modules": {"allowInstall": False},
+    }
+
+    def define(key: str, value: Any) -> str:
+        return f"--define={key}={value if isinstance(value, str) else json.dumps(value, separators=(',', ':'))}"
+
+    args = [
+        define("adminAuth", admin_auth),
+        define("nodesExcludes", list(SET_FILES)),
+        define("functionExternalModules", False),
+        define("externalModules", external),
+    ]
+    if credential_secret is not None:
+        args.append(define("credentialSecret", credential_secret))
+    return [*args, "--no-telemetry"]
 
 
 def _rev(flows: list[dict[str, Any]]) -> str:
@@ -104,6 +148,8 @@ class NodeRedFake:
     function_external_modules: bool = True
     external_modules: dict[str, Any] = field(default_factory=dict)
     credential_secret: str | None = None
+    #: de sleutel die Node-RED zelf maakt als er geen ``credentialSecret`` is (zoals ``.config.runtime.json``)
+    system_secret: str = field(default_factory=lambda: secrets.token_hex(32))
     flows: list[dict[str, Any]] = field(default_factory=list)
     #: de (onversleutelde) inloggegevens per node zoals alleen Node-RED ze kent; nooit via de API terug te lezen
     credentials: dict[str, Any] = field(default_factory=dict)
@@ -159,10 +205,12 @@ class NodeRedFake:
 
     # ------------------------------------------------------------------ credentials-bestand
     def _key_id(self, secret: str | None = None) -> str:
-        return hashlib.sha256(("nep-credentialSecret:" + (secret or self.credential_secret or "")).encode()).hexdigest()
+        return hashlib.sha256(
+            ("nep-sleutel:" + (secret or self.credential_secret or self.system_secret)).encode()
+        ).hexdigest()
 
     def encrypted_credentials(self) -> dict[str, str]:
-        """``{"$": "<32 hex IV><base64>"}`` — dezelfde vorm als het echte bestand; gebonden aan de credentialSecret."""
+        """``{"$": "<32 hex IV><base64>"}`` — dezelfde vorm als het echte bestand; gebonden aan de sleutel."""
         iv = secrets.token_hex(16)
         payload = json.dumps({"k": self._key_id(), "c": self.credentials}, separators=(",", ":")).encode()
         mask = hashlib.sha256((iv + self._key_id()).encode()).digest()
@@ -192,11 +240,7 @@ class NodeRedFake:
             return
         self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self.data_dir / "flows_cred.json"
-        if self.credential_secret:
-            path.write_text(json.dumps(self.encrypted_credentials()), encoding="utf-8")
-        else:
-            # zonder eigen credentialSecret: hier als onversleuteld bestand (een afwijking van het profiel)
-            path.write_text(json.dumps(self.credentials), encoding="utf-8")
+        path.write_text(json.dumps(self.encrypted_credentials()), encoding="utf-8")
 
     # ------------------------------------------------------------------ gegevens
     def node_sets(self) -> list[dict[str, Any]]:

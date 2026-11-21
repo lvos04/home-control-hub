@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from integrations.domains.automation import policy
 from integrations.worker import Worker
 from tests import b11
 from tests.b11 import A
@@ -38,7 +39,8 @@ def test_admin_gets_the_editor_address(linked: Any, fake_hub: Any, auth: Any, no
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["url"] == NODE_RED_URL
-    assert body["aanmelden_als"] == "beheerder"
+    # C-12: de beheerder kiest zijn naam zelf in Node-RED; deze dienst noemt geen accountnaam meer
+    assert "aanmelden_als" not in body
 
 
 def test_editor_needs_a_login(linked: Any) -> None:
@@ -66,7 +68,7 @@ def test_node_red_itself_refuses_anonymous_and_read_only_writes(
 
 
 # ------------------------------------------------------------------------------------------------------------ isolatie
-def test_isolation_is_measured_in_order_with_the_profile(
+def test_isolation_is_measured_in_order_when_node_red_is_hardened(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
 ) -> None:
     setup_node_red(linked, fake_hub, auth, flows=simple_flow())
@@ -85,7 +87,7 @@ def test_isolation_is_measured_in_order_with_the_profile(
 def test_unhardened_node_red_is_a_deviation_and_raises_an_event(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
 ) -> None:
-    setup_node_red(linked, fake_hub, auth, harden=False, flows=simple_flow())
+    profile = setup_node_red(linked, fake_hub, auth, harden=False, flows=simple_flow())
     r = linked.post(f"{A}/isolation/check", headers=idem(auth("admin")))
     assert r.status_code == 200, r.text
     report = r.json()
@@ -95,8 +97,7 @@ def test_unhardened_node_red_is_a_deviation_and_raises_an_event(
     # een tweede meting met dezelfde uitkomst meldt het niet opnieuw
     linked.post(f"{A}/isolation/check", headers=idem(auth("admin")))
     assert len(b11.outbox(linked, "automation.isolation.degraded")) == 1
-    # na het toepassen van het profiel: herstel wordt gemeld
-    profile = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"))).json()
+    # nadat de beheerder Node-RED zelf beveiligd heeft: herstel wordt gemeld
     node_red_fake.apply_arguments(profile["arguments"])
     report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
     assert report["status"] == "gemeten_in_orde", report
@@ -148,9 +149,8 @@ def test_isolation_without_a_service_account_is_unknown_not_measured(
     assert node_red_fake.writes == []
 
 
-def test_viewer_cannot_measure_isolation_or_get_a_profile(linked: Any, auth: Any) -> None:
+def test_viewer_cannot_measure_isolation(linked: Any, auth: Any) -> None:
     assert linked.post(f"{A}/isolation/check", headers=idem(auth("viewer"))).status_code == 403
-    assert linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("operator"))).status_code == 403
 
 
 # ----------------------------------------------------------------------------------------------------------- exec-node
@@ -769,72 +769,139 @@ def test_policy_lists_the_forbidden_nodes(linked: Any, auth: Any) -> None:
     assert not any("zonder admin-goedkeuring" in t for t in texts), texts
 
 
-# ------------------------------------------------------------------------------------------------- geheimen blijven weg
-def test_profile_secrets_are_shown_once_and_stored_nowhere(
+# -------------------------------------------------------------------------- besluit C-12: het profiel is vervallen (S-P3-360)
+@pytest.mark.parametrize("role", ["admin", "operator", "viewer"])
+@pytest.mark.parametrize("body", [{}, {"nieuw_beheerwachtwoord": True}])
+def test_c12_a_the_hardening_profile_route_is_gone(linked: Any, auth: Any, role: str, body: dict[str, Any]) -> None:
+    """Negatief (a): de oude route geeft 404, voor elke rol, en legt niets vast."""
+    r = linked.post(f"{A}/hardening-profile", json=body, headers=idem(auth(role)))
+    assert r.status_code == 404, r.text
+    assert not any("hardening" in path for path in linked.app.openapi()["paths"])
+    assert not any(row["action"] == "automation.hardening_profile.issued" for row in b11.audit_rows(linked))
+
+
+def test_c12_a_no_answer_contains_a_hash_password_or_credential_secret(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Negatief (a): na het instellen (beheerder en dienstaccount in Node-RED, aanmelding via de bron) bevat geen
+    antwoord, audit, event of idempotentie-opslag een testwachtwoord, een bcrypt-hash, een ``--define`` of een
+    ``credentialSecret`` als formulierargument."""
     caplog.set_level(logging.DEBUG)
-    herhaalsleutel = "7d0c7f0e-4b1f-4a55-9d53-0c7d5c0f6a01"  # vaste Idempotency-Key van deze test (geen geheim)
-    r = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=herhaalsleutel))
-    assert r.status_code == 201, r.text
-    profile = r.json()
-    password = profile["beheerwachtwoord"]
-    assert password and len(password) >= 20
-    secrets = [password, *[a for a in profile["arguments"] if "credentialSecret" in a or "$2" in a]]
-    assert len(secrets) >= 3, "wachtwoord, credentialSecret en minstens één wachtwoordhash"
-
-    # dezelfde Idempotency-Key: het bewaarde antwoord bevat het wachtwoord en de argumenten niet meer
-    again = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"), key=herhaalsleutel))
-    assert again.status_code == 201
-    assert again.json()["beheerwachtwoord"] is None
-    assert again.json()["arguments"] is None
-    assert "herhaling_nl" in again.json()
-
-    # een nieuw verzoek toont de argumenten opnieuw (nodig voor het formulier) maar het wachtwoord nooit meer
-    second = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin")))
-    assert second.status_code == 200
-    assert second.json()["beheerwachtwoord"] is None
-    assert second.json()["arguments"] == profile["arguments"]
-
-    stored = b11.everything_stored(linked)
-    for secret in secrets:
-        assert secret not in stored
-        assert secret not in caplog.text
-    for value in profile["arguments"]:
-        tail = value.split("=", 1)[-1]
-        if len(tail) >= 24:
-            assert tail not in stored
+    profile = setup_node_red(linked, fake_hub, auth, flows=simple_flow())
+    hashes = next(json.loads(a.split("=", 2)[2])["users"] for a in profile["arguments"] if "adminAuth=" in a)
+    secrets = [profile["dienstwachtwoord"], profile["beheerwachtwoord"], *(u["password"] for u in hashes)]
+    assert all(len(v) >= 20 for v in secrets)
+    answers = [
+        linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))),
+        linked.post(f"{A}/snapshots", headers=idem(auth("admin"))),
+        *(
+            linked.get(path, headers=auth("admin"))
+            for path in (
+                "/integrations/v1/sources",
+                "/integrations/v1/sources/node_red",
+                f"{A}/editor",
+                f"{A}/isolation",
+                f"{A}/policy",
+                f"{A}/flows",
+            )
+        ),
+    ]
+    assert all(r.status_code in (200, 201) for r in answers), [r.text for r in answers]
+    texts = [r.text for r in answers] + [b11.everything_stored(linked), caplog.text]
+    for text in texts:
+        for value in secrets:
+            assert value not in text
+        assert "$2b$" not in text and "--define" not in text
+        assert "credentialSecret=" not in text and '"credentialSecret":' not in text
 
 
-def test_new_admin_password_replaces_the_old_one(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
-    first = setup_node_red(linked, fake_hub, auth)
-    r = linked.post(f"{A}/hardening-profile", json={"nieuw_beheerwachtwoord": True}, headers=idem(auth("admin")))
-    assert r.status_code == 200, r.text
-    second = r.json()
-    assert second["beheerwachtwoord_vervangen"] is True
-    assert second["beheerwachtwoord"] and second["beheerwachtwoord"] != first["beheerwachtwoord"]
-    assert second["arguments"] != first["arguments"]
+@pytest.mark.parametrize(
+    ("credential", "status"),
+    [
+        ("hub-dienst:" + "k" * 31, 422),  # te kort (ADR-0016 van appstore-en-fork, punt 3: minstens 32)
+        ("k" * 40, 422),  # geen '<gebruiker>:<wachtwoord>'
+        (":" + "k" * 40, 422),  # geen gebruiker
+        ("hub-dienst:" + "k" * 32, 200),
+    ],
+)
+def test_c12_service_login_needs_a_secret_of_at_least_32_characters(
+    linked: Any, auth: Any, credential: str, status: int
+) -> None:
+    r = linked.put(
+        "/integrations/v1/sources/node_red",
+        json={"base_url": NODE_RED_URL, "enabled": True, "credential": credential},
+        headers=idem(auth("admin"), **{"If-Match": "*"}),
+    )
+    assert r.status_code in ((200, 201) if status == 200 else (status,)), r.text
+    if status == 422:
+        assert r.json()["details"] == {"veld": "credential"} and credential not in r.text
+        assert (
+            linked.get("/integrations/v1/sources/node_red", headers=auth("admin")).json()["runtime"][
+                "credential_present"
+            ]
+            is False
+        )
 
 
-# --------------------------------------------------------------------------------------------- installatiegebruiker
-def test_profile_names_the_installation_user_of_the_manifest_not_the_image_default(
+def test_c12_b_anonymous_access_is_still_reported(linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
+    """Negatief (b), besluit C-11: met een dienstaccount meet de controle ``anoniem_geweigerd`` 401 op ``/flows``,
+    ``/nodes`` en ``/settings``; zonder ``adminAuth`` (anoniem leesbaar) is het een afwijking."""
+    profile = setup_node_red(linked, fake_hub, auth, harden=False)
+    report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
+    row = next(c for c in report["checks"] if c["id"] == "anoniem_geweigerd")
+    assert row["status"] == "afwijking" and set(row["detail"]["http"].values()) == {200}, row
+    node_red_fake.apply_arguments(profile["arguments"])
+    report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
+    row = next(c for c in report["checks"] if c["id"] == "anoniem_geweigerd")
+    assert row["status"] == "ok" and row["detail"]["http"] == {"/flows": 401, "/nodes": 401, "/settings": 401}
+
+
+@pytest.mark.parametrize("rechten", ["*", [*policy.SERVICE_PERMISSIONS, "nodes.write"]])
+def test_c12_c_a_service_account_with_more_rights_is_a_deviation(
+    linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, rechten: Any
+) -> None:
+    """Negatief (c): meer rechten dan ``SERVICE_PERMISSIONS`` (alle rechten, of ``nodes.write``) meldt de
+    isolatiecontrole als ``dienstaccount_minimaal``."""
+    setup_node_red(linked, fake_hub, auth)
+    assert node_red_fake.admin_auth is not None
+    node_red_fake.admin_auth["users"][0]["permissions"] = rechten
+    node_red_fake.tokens.clear()
+    report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
+    assert report["status"] == "afwijking" and report["afwijkingen"] == ["dienstaccount_minimaal"], report
+
+
+def test_c12_d_existing_vault_items_and_credential_secret_stay_byte_equal(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any
 ) -> None:
-    """S-P2-310 bouwpunt 6: waar deze dienst een installatiegebruiker noemt (``gebruiker`` in het antwoord van het
-    beveiligingsprofiel), is dat 568:568, zoals het manifest van jelly-leon-platform (de installatieweg; contract kop 2:
-    één container "als 568:568 waar de image dat toestaat"). Niet 1000, de standaardgebruiker van de image (die blijft
-    alleen de meting ``gebruiker_niet_root`` in ``docs/b11/node-red-verificatie.json``). De argumenten, de accounts en
-    de ``credentialSecret`` van het profiel veranderen hier niet (besluit C-12)."""
-    first = setup_node_red(linked, fake_hub, auth)
-    assert first["gebruiker"] == {"uid": 568, "gid": 568, "root": False}
-    again = linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin")))
-    assert again.status_code == 200, again.text
-    assert again.json()["gebruiker"] == {"uid": 568, "gid": 568, "root": False}
-    assert again.json()["arguments"] == first["arguments"]
-    assert again.json()["accounts"] == {
-        "dienst": {
-            "gebruiker": "hub-dienst",
-            "rechten": ["flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read"],
-        },
-        "beheer": {"gebruiker": "beheerder", "rechten": "*"},
-    }
+    """Negatief (d): een installatie van vóór C-12 (profiel in de kluis, Node-RED met een ``credentialSecret`` uit het
+    formulier) blijft na de wijziging byte-gelijk: het kluisitem wordt niet gelezen, vervangen of verwijderd, de
+    sleutel en het credentials-bestand van Node-RED veranderen niet. De isolatiecontrole meldt de ``credentialSecret``
+    wel eerlijk als afwijking (C-12); hem weghalen zou de credentials onleesbaar maken, dus deze dienst doet niets."""
+    from sqlalchemy import select
+
+    from integrations.models import VaultSecret
+
+    old_ref = "vault://automation/node-red-profiel"
+    with linked.app.state.db.sessions() as session:
+        linked.app.state.vault.put(session, old_ref, '{"dienst_hash":"x","credential_secret":"oud-geheim","v":1}')
+        session.commit()
+    profile = setup_node_red(linked, fake_hub, auth, harden=False, flows=simple_flow(), credentials={"n": {"p": "q"}})
+    node_red_fake.apply_arguments([*profile["arguments"], "--define=credentialSecret=oude-sleutel-uit-het-formulier"])
+    cred_file = node_red_fake.data_dir / "flows_cred.json"
+
+    def vault_rows() -> dict[str, tuple[bytes, bytes, int]]:
+        with linked.app.state.db.sessions() as session:
+            return {
+                r.ref: (bytes(r.nonce), bytes(r.ciphertext), r.version) for r in session.scalars(select(VaultSecret))
+            }
+
+    before = (vault_rows(), cred_file.read_bytes(), node_red_fake.credential_secret)
+    report = linked.post(f"{A}/isolation/check", headers=idem(auth("admin"))).json()
+    assert report["afwijkingen"] == ["credentials_versleuteld"], report
+    b11.snapshot(linked, auth)
+    for path in ("/integrations/v1/sources/node_red", f"{A}/editor", f"{A}/isolation"):
+        assert linked.get(path, headers=auth("admin")).status_code == 200
+    assert linked.post(f"{A}/hardening-profile", json={}, headers=idem(auth("admin"))).status_code == 404
+    after = (vault_rows(), cred_file.read_bytes(), node_red_fake.credential_secret)
+    assert old_ref in before[0] and after == before
+    assert node_red_fake.writes == []

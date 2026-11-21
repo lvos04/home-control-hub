@@ -8,9 +8,10 @@ Wat er gebeurt (alleen op de ontwikkelmachine; geen NAS, geen echte apparaten):
    willekeurige poort op 127.0.0.1, zonder Docker-socket, zonder extra capabilities en als de standaardgebruiker van
    de image:
    - ``kaal``: zonder instellingen (zo ziet een onbeveiligde Node-RED eruit);
-   - ``profiel``: met precies de argumenten die deze dienst voor het formulier van de Custom App maakt
-     (``policy.define_arguments``);
-   - ``andere-sleutel``: hetzelfde profiel met een andere ``credentialSecret``.
+   - ``profiel``: beveiligd met een beheerder en het dienstaccount (:func:`beveilig_argumenten`), zonder
+     ``credentialSecret``: Node-RED maakt zijn sleutel zelf (besluit C-12). Dit is een meetopstelling, geen
+     installatieweg en geen formulier: deze dienst maakt sinds S-P3-360 geen profiel meer;
+   - ``andere-sleutel``: dezelfde argumenten; deze container maakt zijn eigen, andere sleutel.
 2. de eigen code van deze dienst (``NodeRedClient``, ``policy.check_isolation``, ``policy.scan``) praat met die
    containers; elke aanname uit ``nodered.py``/``policy.py``/``restore.py`` wordt één controle in het rapport.
 3. de containers (en hun anonieme volumes) worden altijd weer verwijderd.
@@ -33,11 +34,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+import bcrypt
 import httpx
 
 from integrations.config import Settings
 from integrations.domains.automation import policy
 from integrations.domains.automation.catalog import (
+    FORBIDDEN_NODE_FILES,
     FORBIDDEN_NODE_TYPES,
     NODE_RED_DIGEST,
     NODE_RED_IMAGE,
@@ -53,6 +56,40 @@ SETTINGS = Settings()
 CRED_BLOB_RE = re.compile(r"^[0-9a-f]{32}[A-Za-z0-9+/]+=*$")
 
 CHECKS: list[dict[str, Any]] = []
+ADMIN_USER = "beheerder"  # alleen in deze meetopstelling; de beheerder kiest zijn naam zelf in Node-RED
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("ascii")
+
+
+def beveilig_argumenten(service_hash: str, admin_hash: str) -> list[str]:
+    """``--define``-argumenten van de meetopstelling: een beheerder en het dienstaccount, exec-node uit, palette dicht.
+    Zonder ``credentialSecret`` (C-12)."""
+    admin_auth = {
+        "type": "credentials",
+        "sessionExpiryTime": 3600,
+        "users": [
+            {
+                "username": policy.SERVICE_USER,
+                "password": service_hash,
+                "permissions": list(policy.SERVICE_PERMISSIONS),
+            },
+            {"username": ADMIN_USER, "password": admin_hash, "permissions": "*"},
+        ],
+    }
+    external = {
+        "autoInstall": False,
+        "palette": {"allowInstall": False, "allowUpdate": False, "allowUpload": False},
+        "modules": {"allowInstall": False},
+    }
+    return [
+        "--define=adminAuth=" + json.dumps(admin_auth, separators=(",", ":")),
+        "--define=nodesExcludes=" + json.dumps(list(FORBIDDEN_NODE_FILES)),
+        "--define=functionExternalModules=false",
+        "--define=externalModules=" + json.dumps(external, separators=(",", ":")),
+        "--no-telemetry",
+    ]
 
 
 def check(check_id: str, ok: bool, title_nl: str, **detail: Any) -> bool:
@@ -242,11 +279,9 @@ def verify_plain() -> None:
 def verify_profile() -> None:
     service_password = secrets.token_urlsafe(32)
     admin_password = secrets.token_urlsafe(18)
-    secret_a = secrets.token_urlsafe(48)
-    secret_b = secrets.token_urlsafe(48)
-    service_hash, admin_hash = policy.hash_password(service_password), policy.hash_password(admin_password)
-    base = start("profiel", policy.define_arguments(service_hash, admin_hash, secret_a))
-    other = start("andere-sleutel", policy.define_arguments(service_hash, admin_hash, secret_b))
+    service_hash, admin_hash = hash_password(service_password), hash_password(admin_password)
+    base = start("profiel", beveilig_argumenten(service_hash, admin_hash))
+    other = start("andere-sleutel", beveilig_argumenten(service_hash, admin_hash))
 
     # een meting van de image (gestart zonder --user), geen installatievoorschrift: de installatie volgt het manifest
     # van jelly-leon-platform en draait als 568:568 (catalog.NODE_RED_INSTALL_UID)
@@ -286,11 +321,11 @@ def verify_profile() -> None:
         "Het dienstaccount krijgt geen token met scope '*'",
         http=star.status_code,
     )
-    admin = token_for(base, policy.ADMIN_USER, admin_password, scope="*")
+    admin = token_for(base, ADMIN_USER, admin_password, scope="*")
     check(
         "beheeraccount_kan_aanmelden",
         admin.status_code == 200,
-        "Het beheeraccount meldt aan met het bcrypt-wachtwoord uit het profiel",
+        "Het beheeraccount meldt aan met zijn bcrypt-wachtwoord",
         http=admin.status_code,
     )
     admin_token = admin.json()["access_token"]
@@ -301,7 +336,7 @@ def verify_profile() -> None:
     check(
         "profiel_isolatie_in_orde",
         report["status"] == "gemeten_in_orde" and all(s == "ok" for s in measured.values()),
-        "De isolatiecontrole van deze dienst meet het profiel als in orde",
+        "De isolatiecontrole van deze dienst meet een beveiligde Node-RED met eigen sleutel als in orde",
         status=report["status"],
         controles=measured,
         niet_meetbaar=report["niet_meetbaar"],
@@ -487,7 +522,7 @@ def verify_profile() -> None:
             flows_state_http=state.status_code,
         )
 
-    # --- andere credentialSecret: Node-RED weigert het blok en verandert niets
+    # --- andere sleutel (elke container maakt zijn eigen): Node-RED weigert het blok en verandert niets
     with NodeRedClient(other, policy.SERVICE_USER, service_password, SETTINGS) as client2:
         before = client2.get_flows()
         try:
@@ -498,7 +533,7 @@ def verify_profile() -> None:
         check(
             "andere_sleutel_geweigerd",
             refused == "credentials_niet_te_ontsleutelen",
-            "Met een andere credentialSecret weigert Node-RED het blok (400 credentials_load_failed)",
+            "Een Node-RED met een andere sleutel weigert het blok (400 credentials_load_failed)",
             reden=refused,
         )
         check(

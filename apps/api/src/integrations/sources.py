@@ -27,6 +27,7 @@ from . import API_PREFIX, audit, events
 from .config import Settings
 from .deps import check_if_match, etag, get_session, if_match, trace_id
 from .domains import DOMAINS, SourceSpec
+from .domains.automation.catalog import SERVICE_SECRET_MIN_LENGTH
 from .domains.automation.catalog import SOURCES as AUTOMATION_SOURCES
 from .domains.energy.catalog import SOURCES as ENERGY_SOURCES
 from .domains.energy.client import (
@@ -248,6 +249,16 @@ def put_source(
     refusal = unstorable_text({"credential": body.credential})
     if refusal is not None:
         raise refusal
+    if source_id == "node_red" and body.credential:
+        user, sep, secret = body.credential.partition(":")
+        if not (sep and user and len(secret) >= SERVICE_SECRET_MIN_LENGTH):
+            raise ApiError(
+                422,
+                "validation_error",
+                "De aanmelding van Node-RED is '<gebruiker>:<wachtwoord>' met een wachtwoord of token van minstens "
+                f"{SERVICE_SECRET_MIN_LENGTH} tekens.",
+                {"veld": "credential"},
+            )
     # Houd de verzoekhash van bestaande configuraties van andere bronnen stabiel.
     payload = body.model_dump(exclude={"my_house_pairing"} if source_id != "my_house" else set())
     payload["credential"] = bool(body.credential)  # nooit de waarde in de verzoek-hash/opslag

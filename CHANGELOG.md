@@ -1,5 +1,18 @@
 # Wijzigingen
 
+## C-12 — Node-RED-beveiligingsprofiel vervallen (2026-11-21, S-P3-360)
+
+- De route `POST /integrations/v1/automation/hardening-profile` en de argumentenbouwer (`policy.define_arguments`,
+  `build_profile`, `Profile`) zijn weg (besluit C-12, ADR-0016 van `appstore-en-fork`, besluit 6): deze dienst zet geen
+  wachtwoord-hash, gebruiker of `credentialSecret` meer in een formulierargument. De route geeft 404.
+- `credentials_versleuteld` is alleen in orde met de sleutel die Node-RED zelf maakt (`flowEncryptionType: "system"`);
+  een `credentialSecret` uit het formulier is een afwijking. `anoniem_geweigerd` (C-11) blijft.
+- De aanmelding van het dienstaccount komt alleen via `PUT /integrations/v1/sources/node_red` als
+  `<gebruiker>:<wachtwoord>`, met een wachtwoord of token van minstens 32 tekens.
+- Het kluisitem van het oude profiel en een `credentialSecret` die Node-RED al gebruikt, blijven ongemoeid.
+- `GET /automation/editor` noemt geen accountnaam (`aanmelden_als`) meer.
+- NIET GEVALIDEERD (echte NAS): Node-RED heeft volgens het manifest nog geen dienstaccount ("Wachten", C-12 punt 7).
+
 ## Onderhoud — manifestvalidator (2026-11-17, KLEIN-103)
 
 - CI gebruikt nu `appstore-en-fork@a994c2a51f45b81b2c48c6533b0ccf51ba857f5a` in plaats van

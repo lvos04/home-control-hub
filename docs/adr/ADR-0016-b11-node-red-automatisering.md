@@ -23,8 +23,9 @@ Deze ronde bouwt de vijf werkpakketten:
 - De aannames over Node-RED zelf zijn daarnaast nagemeten tegen de **gepinde officiële image** in lokale
   Docker-containers op de ontwikkelmachine (`tools/node_red_verify.py`, 39 controles, uitkomst in
   `docs/b11/node-red-verificatie.json`). De simulator volgt precies die gemeten feiten
-  (`test_fake_matches_the_verified_image_facts`). Die meting is gedaan met het eigen profiel van deze dienst
-  (gebruiker 1000, eigen argumenten), niet met het manifest van `jelly-leon-platform` (zie besluit 1).
+  (`test_fake_matches_the_verified_image_facts`). Die meting is gedaan met een eigen meetopstelling (gebruiker 1000,
+  eigen argumenten met een beheerder en het dienstaccount, sinds S-P3-360 zonder `credentialSecret`), niet met het
+  manifest van `jelly-leon-platform` (zie besluit 1).
 - NIET GEVALIDEERD (echte NAS): niet als Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.
 - **NIET GEVALIDEERD (echte NAS):** de installatie via het Custom App-formulier, de netwerkafscherming op de NAS, de
   dataset-rechten, een echte Hub die actieverzoeken beoordeelt en echte apparaten.
@@ -57,7 +58,26 @@ Deze ronde bouwt de vijf werkpakketten:
   Custom App-formulier"). De manifeststandaard (`appstore-en-fork`) krijgt een voorziening voor een beheerder en een
   dienstaccount zonder geheim in het formulier (ontwerp in stap S-P2-510, bouw na fase P2); het profiel vervalt
   daarna of wordt daaraan gelijkgetrokken. Tot dan wordt het profiel niet gewijzigd of uitgebreid, en het is geen
-  installatiestap. Wat hieronder over het profiel staat, beschrijft de bestaande code.
+  installatiestap. Wat hieronder over het profiel staat, beschrijft de code tot stap S-P3-360.
+- **Besluit C-12, uitgevoerd (aanvulling 2026-11-21, S-P3-360): het profiel is vervallen.** Het ontwerp-ADR van
+  `appstore-en-fork` (`docs/adr/ADR-0016-beheerder-en-dienstaccount-zonder-geheim-in-het-formulier.md`, besluit 6 en
+  "Gevolgen per repo" punt 5) zegt "Het profiel van home-control-hub vervalt": elke vorm ervan zet hashes, gebruikers
+  of een `credentialSecret` in het formulier. Daarom zijn `policy.define_arguments`, `policy.build_profile`,
+  `policy.Profile`, `policy.hash_password`, `policy.load_profile`, `PROFILE_REF`, `ADMIN_USER` en de route
+  `POST /integrations/v1/automation/hardening-profile` weg (de route geeft 404; OpenAPI-export bijgewerkt). Ook
+  `GET /automation/editor` noemt geen accountnaam (`aanmelden_als`) meer: de beheerder kiest die zelf in Node-RED. Het
+  bestaande kluisitem `vault://automation/node-red-profiel` wordt niet verwijderd en niet meer gelezen; een
+  `credentialSecret` die een Node-RED al gebruikt, laat deze dienst ongemoeid (weghalen maakt de credentials
+  onleesbaar). De isolatiecontrole `credentials_versleuteld` is nu alleen in orde bij `flowEncryptionType: "system"`
+  (de sleutel die Node-RED zelf maakt); `user` (een `credentialSecret` uit het formulier) is een afwijking.
+  `anoniem_geweigerd` (C-11) en de overige controles blijven. Het dienstaccount maakt de beheerder in Node-RED; de
+  aanmelding komt alleen binnen via `PUT /integrations/v1/sources/node_red` als `<gebruiker>:<wachtwoord>` met een
+  wachtwoord of token van minstens 32 tekens (`catalog.SERVICE_SECRET_MIN_LENGTH`; ADR-0016 van `appstore-en-fork`
+  punt 3), versleuteld in de eigen vault, nooit in een log of antwoord. Voor Node-RED koos de gebruiker "Wachten"
+  (punt 7): het manifest heeft nog geen `accounts`, dus `SERVICE_USER` (`hub-dienst`) en `SERVICE_PERMISSIONS` blijven
+  de eigen waarden; ze worden `accounts[].id` en `accounts[].rechten` (met een repotest tegen het manifest) zodra dat
+  manifest een dienstaccount heeft. Tests: `test_b11_001_isolatie.py::test_c12_*` en
+  `test_node_red_client.py::test_credential_secret_from_the_form_is_a_deviation`.
 - Image `docker.io/nodered/node-red`, tag `5.0.9`, vastgezet op de digest van de multi-arch-index
   (`catalog.NODE_RED_DIGEST`); dezelfde digest als in het manifest van `jelly-leon-platform` (daar tag `5.0.9-24`).
 - Het profiel zet de instellingen als **argumenten** (`--define=<sleutel>=<waarde>`, één per regel, zonder shell).
@@ -95,7 +115,7 @@ Deze ronde bouwt de vijf werkpakketten:
   zelf vraagt daarnaast een eigen aanmelding. Deze dienst is geen proxy voor de editor.
 - **Rechten op de beheer-API (aanvulling 2026-11-12, S-P2-310):** de staptekst van S-P2-310 vroeg "elke schrijvende
   route alleen voor de beheerder". Gekozen is de bestaande indeling, die daar bewust van afwijkt:
-  - alleen de **beheerder**: beleid en toegang, dus het beveiligingsprofiel, de eigenaar, de triggers, de grenzen en
+  - alleen de **beheerder**: beleid en toegang, dus (tot S-P3-360) het beveiligingsprofiel, de eigenaar, de triggers, de grenzen en
     het uitgeven en intrekken van flow-tokens (en het adres van de editor);
   - de **beheerder of de operator**: bediening, dus een flow pauzeren of hervatten, de isolatie meten, een
     momentopname maken, een vastgelopen aflevering opnieuw aanbieden en een proefrun starten. Geen van deze routes
@@ -341,7 +361,8 @@ Deze ronde bouwt de vijf werkpakketten:
   (geen eigen `credentialSecret`) staat de sleutel in dezelfde dataset (`.config.runtime.json`), en een koppeling
   van die dataset geeft deze dienst (ook 568) leestoegang tot de sleutel. De installatiedocumenten raden die
   koppeling daarom af; een koppeling zonder de sleutel volgt pas na een besluit (voorziening C-12, S-P2-510). De
-  meting in `docs/b11/node-red-verificatie.json` is gedaan met het eigen profiel, waar de sleutel een argument was.
+  meting in `docs/b11/node-red-verificatie.json` is sinds S-P3-360 gedaan zonder `credentialSecret` (de sleutel die
+  Node-RED zelf maakt), net als bij het manifest.
 - **Diff:** alleen nodes en veldnamen, nooit waarden.
 - **Herstellen is een voorstel plus een ondertekende opdracht:**
   1. `POST /connector/v1/propose` met `automation.flows.restore` maakt een voorstel (R2) met diff, `preview_hash` en
@@ -480,8 +501,9 @@ Waar het contract niets zegt of zichzelf tegenspreekt, is de veiligste lezing ge
 10. **Instellingen van een derde app via het formulier:** met het profiel van deze dienst kan dat alleen met
     `--define`-argumenten, waardoor een geheim in de formulierwaarden staat (zie besluit 1). Opgelost door besluit
     C-12: de installatieweg is het manifest van `jelly-leon-platform` (zonder gebruikers en zonder
-    `credentialSecret`), en de manifeststandaard krijgt een voorziening voor een beheerder en een dienstaccount
-    zonder geheim in het formulier (ontwerp S-P2-510 in `appstore-en-fork`, bouw na P2). Tot die voorziening er is,
-    heeft een volgens het manifest geïnstalleerde Node-RED geen beheerder en geen dienstaccount voor deze dienst.
+    `credentialSecret`), en de manifeststandaard heeft een voorziening voor een beheerder en een dienstaccount
+    zonder geheim in het formulier (ontwerp S-P2-510, bouw S-P3-490 in `appstore-en-fork`). Het profiel van deze
+    dienst is vervallen (S-P3-360). Zolang de gebruiker voor Node-RED "Wachten" houdt, heeft een volgens het manifest
+    geïnstalleerde Node-RED geen beheerder en geen dienstaccount voor deze dienst.
 11. **B11-003 "zonder admin"** is gelezen als: nooit via een flow.
 12. **B11-004** kan alleen het pad via de flow-API afschermen (zie besluit 5).

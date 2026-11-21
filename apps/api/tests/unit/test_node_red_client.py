@@ -23,25 +23,32 @@ from integrations.domains.automation.nodered import (
     NodeRedError,
     api_error,
 )
-from tests.fakes.node_red_fake import NodeRedFake, exec_flow, simple_flow
+from tests.fakes.node_red_fake import (
+    TEST_ADMIN_USER,
+    NodeRedFake,
+    exec_flow,
+    hardening_arguments,
+    hash_password,
+    simple_flow,
+)
 
 BASE = "http://nodered.test:1880"
 SERVICE_PW = "dienst-wachtwoord-voor-de-test"
 ADMIN_PW = "beheer-wachtwoord-voor-de-test"
-SECRET = "credential-secret-voor-de-test"
+SECRET = "credential-secret-voor-de-test"  # alleen om te tonen dat een credentialSecret een afwijking is (C-12)
 SETTINGS = Settings()
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 @pytest.fixture(scope="module")
 def hashes() -> tuple[str, str]:
-    return policy.hash_password(SERVICE_PW), policy.hash_password(ADMIN_PW)
+    return hash_password(SERVICE_PW), hash_password(ADMIN_PW)
 
 
 @pytest.fixture
 def fake(hashes: tuple[str, str], tmp_path: Path) -> NodeRedFake:
     f = NodeRedFake(data_dir=tmp_path / "nr")
-    f.apply_arguments(policy.define_arguments(hashes[0], hashes[1], SECRET))
+    f.apply_arguments(hardening_arguments(hashes[0], hashes[1]))
     return f
 
 
@@ -108,7 +115,7 @@ def test_hardened_fake_refuses_anonymous_and_limits_the_service_account(fake: No
     }
     # het dienstaccount mag geen modules installeren (geen nodes.write); de beheerder krijgt 404 (palette uit)
     assert t.post("/nodes", json={"module": "x"}, headers=h).status_code == 401
-    admin = fake.login(policy.ADMIN_USER, ADMIN_PW, "*")
+    admin = fake.login(TEST_ADMIN_USER, ADMIN_PW, "*")
     assert admin is not None
     assert t.post("/nodes", json={"module": "x"}, headers={"Authorization": f"Bearer {admin}"}).status_code == 404
     assert "exec" not in policy.type_modules(t.get("/nodes", headers=h).json())
@@ -199,9 +206,9 @@ def test_credentials_blob_round_trip_and_other_secret(fake: NodeRedFake, hashes:
     c.post_flows(rev, flows, credentials=blob)
     assert fake.credentials == {flows[1]["id"]: {"user": "mqtt", "password": secret_value}}
     assert fake.writes[-1]["met_credentials"] is True
-    # een Node-RED met een andere credentialSecret weigert het blok en verandert niets
+    # een andere Node-RED (met een eigen, zelfgemaakte sleutel) weigert het blok en verandert niets
     other = NodeRedFake()
-    other.apply_arguments(policy.define_arguments(hashes[0], hashes[1], "een-andere-sleutel"))
+    other.apply_arguments(hardening_arguments(hashes[0], hashes[1]))
     c2 = client_for(other)
     with pytest.raises(NodeRedError) as err:
         c2.post_flows(c2.get_flows().rev, flows, credentials=blob)
@@ -325,7 +332,7 @@ def test_api_error_mapping_covers_every_reason_class() -> None:
 
 
 # ------------------------------------------------------------------------------------------- isolatie (B11-001)
-def test_isolation_of_the_hardening_profile_is_measured_in_order(fake: NodeRedFake) -> None:
+def test_isolation_of_a_hardened_node_red_with_its_own_key_is_measured_in_order(fake: NodeRedFake) -> None:
     report = policy.check_isolation(client_for(fake), ("node-red",))
     assert report["status"] == "gemeten_in_orde" and report["afwijkingen"] == [] and report["fout"] is None
     by_id = {r["id"]: r["status"] for r in report["checks"]}
@@ -347,7 +354,7 @@ def test_isolation_of_an_open_node_red_is_a_deviation() -> None:
 
 def _args(hashes: tuple[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for arg in policy.define_arguments(hashes[0], hashes[1], SECRET):
+    for arg in hardening_arguments(hashes[0], hashes[1]):
         if arg.startswith("--define="):
             key, _, raw = arg.removeprefix("--define=").partition("=")
             out[key] = raw
@@ -360,7 +367,6 @@ def _args(hashes: tuple[str, str]) -> dict[str, Any]:
         ("nodesExcludes", "exec_node_afwezig"),
         ("functionExternalModules", "function_modules_uit"),
         ("externalModules", "palette_installatie_uit"),
-        ("credentialSecret", "credentials_versleuteld"),
     ],
 )
 def test_each_missing_argument_is_its_own_deviation(hashes: tuple[str, str], drop: str, expected: str) -> None:
@@ -389,7 +395,7 @@ def test_foreign_module_and_wide_service_account_are_deviations(fake: NodeRedFak
     fake.extra_sets[0]["enabled"] = False
     assert policy.check_isolation(client_for(fake), ("node-red",))["status"] == "gemeten_in_orde"
     # het dienstaccount met alle rechten is een afwijking (de dienst zou de editor kunnen beheren)
-    report = policy.check_isolation(client_for(fake, password=ADMIN_PW, user=policy.ADMIN_USER), ("node-red",))
+    report = policy.check_isolation(client_for(fake, password=ADMIN_PW, user=TEST_ADMIN_USER), ("node-red",))
     assert report["afwijkingen"] == ["dienstaccount_minimaal"]
 
 
@@ -400,16 +406,21 @@ def test_isolation_is_unknown_when_node_red_is_unreachable(fake: NodeRedFake) ->
     assert {r["status"] for r in report["checks"] if r["id"] in policy.MEASURED} == {"onbekend"}
 
 
-def test_define_arguments_never_need_a_shell(hashes: tuple[str, str]) -> None:
-    args = policy.define_arguments(hashes[0], hashes[1], SECRET)
-    assert args[-1] == "--no-telemetry" and all(a.startswith("--") for a in args)
-    parsed = _args(hashes)
-    admin_auth = json.loads(parsed["adminAuth"])
-    assert [u["username"] for u in admin_auth["users"]] == [policy.SERVICE_USER, policy.ADMIN_USER]
-    assert admin_auth["users"][0]["permissions"] == list(policy.SERVICE_PERMISSIONS)
-    assert all(u["password"].startswith("$2b$10$") for u in admin_auth["users"])
-    assert SERVICE_PW not in " ".join(args) and ADMIN_PW not in " ".join(args)  # alleen hashes
-    assert json.loads(parsed["nodesExcludes"]) == ["90-exec.js"]
+def test_credential_secret_from_the_form_is_a_deviation(hashes: tuple[str, str]) -> None:
+    """C-12 (ADR-0016 van appstore-en-fork, "Gevolgen per repo" punt 5): in orde is alleen de sleutel die Node-RED zelf
+    maakt (``system``); een ``credentialSecret`` uit het formulier (``user``) is een afwijking."""
+    fake = NodeRedFake()
+    fake.apply_arguments(hardening_arguments(hashes[0], hashes[1], credential_secret=SECRET))
+    report = policy.check_isolation(client_for(fake), ("node-red",))
+    assert report["status"] == "afwijking" and report["afwijkingen"] == ["credentials_versleuteld"]
+    row = next(r for r in report["checks"] if r["id"] == "credentials_versleuteld")
+    assert row["detail"] == {"flowEncryptionType": "user"} and SECRET not in json.dumps(report)
+
+
+def test_profile_builder_is_gone_from_the_policy() -> None:
+    """C-12: de argumentenbouwer van het profiel bestaat niet meer (S-P3-360, profiel vervallen)."""
+    for name in ("define_arguments", "build_profile", "Profile", "hash_password", "load_profile", "PROFILE_REF"):
+        assert not hasattr(policy, name), name
 
 
 # ---------------------------------------------------------------------------------------------- flowscan (B11-001)

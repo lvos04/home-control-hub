@@ -123,7 +123,7 @@ Node-RED zelf is een eigen standaard Custom App; de installatieweg is het manife
 | B13-001: herstelregister, noodtoegang LAN/VPN, zelftest met Authentik offline, versleutelde herstelkit | `domains/sso/` |
 | B13-002…005: Authentik-client (alleen lezen, gecontroleerd tegen de officiële schema's), voorstellen, SSO-mapping, audit, export/gate/herstelcheck | `domains/sso/authentik/`, `oidc_hub.py`, `proposals.py`, `mapping.py`, `authaudit.py`, `backup.py` |
 | Nep-Authentik voor tests (vorm van de officiële API) en schemacontrole | `apps/api/tests/fakes/authentik_fake.py`, `tools/authentik_schema_check.py` |
-| B11-001: Node-RED-client (alleen de admin-API, geen redirects), isolatiemeting, flowbeleid (exec-node en modules buiten de allowlist blokkeren), beveiligingsprofiel (geen installatiestap; vervalt of wordt gelijkgetrokken volgens besluit C-12, ADR-0016) | `domains/automation/nodered.py`, `policy.py`, `catalog.py` |
+| B11-001: Node-RED-client (alleen de admin-API, geen redirects), isolatiemeting, flowbeleid (exec-node en modules buiten de allowlist blokkeren), geen eigen beveiligingsprofiel meer (vervallen volgens besluit C-12, S-P3-360, ADR-0016) | `domains/automation/nodered.py`, `policy.py`, `catalog.py` |
 | B11-002: eventtypencatalogus, inbox, afleveren per flow in volgorde met herhalen en dead-letter | `domains/automation/eventcatalog.py`, `inbox.py` |
 | B11-003: flow-API met flow-tokens; actieverzoeken worden `flow.action.requested` voor de Hub, nooit een eigen uitvoering | `domains/automation/flowapi.py`, `actions.py` |
 | B11-004: proefrun met vaste voorbeeld-events | `domains/automation/simulate.py`, `samples.py` |

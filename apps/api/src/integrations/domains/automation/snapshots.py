@@ -229,8 +229,8 @@ def read_credentials(data_dir: Path | None) -> CredentialsBlob:
     :data:`NOT_READ_ONLY` en wordt het bestand niet geopend. Zo telt credentials-herstel nooit als beschikbaar met een
     koppeling waarin deze dienst zou kunnen schrijven.
 
-    Alleen de versleutelde vorm ``{"$": "<iv><base64>"}`` wordt aangenomen; een onversleuteld bestand (Node-RED zonder
-    ``credentialSecret``) wordt bewust niet meegenomen: dat is een afwijking van het beveiligingsprofiel.
+    Alleen de versleutelde vorm ``{"$": "<iv><base64>"}`` wordt aangenomen (Node-RED versleutelt zelf, ook zonder
+    ``credentialSecret``: ``flowEncryptionType: "system"``); een onversleuteld bestand wordt bewust niet meegenomen.
 
     Node-RED schrijft zelf in die datamap; daarom wordt het bestand nooit via een symbolische koppeling gevolgd
     (``O_NOFOLLOW`` ten opzichte van de geopende map), moet het een gewoon bestand zijn (``fstat``; een FIFO blokkeert

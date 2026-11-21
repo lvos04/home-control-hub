@@ -251,7 +251,7 @@ def propose(
     else:
         warnings.append(
             "Het credentials-bestand uit de momentopname vervangt alle huidige inloggegevens van nodes. Het is "
-            "versleuteld met de credentialSecret van Node-RED; is die sindsdien gewijzigd, dan weigert Node-RED het "
+            "versleuteld met de sleutel van Node-RED; is die sindsdien gewijzigd, dan weigert Node-RED het "
             "herstel en verandert er niets."
         )
     diff = snapshots.diff_flows(current.flows, target_flows)
@@ -933,7 +933,7 @@ def _record_outcome(
         return _refuse(
             409,
             "credentials_niet_te_ontsleutelen",
-            "Node-RED kan het credentials-bestand uit de momentopname niet ontsleutelen (andere credentialSecret); "
+            "Node-RED kan het credentials-bestand uit de momentopname niet ontsleutelen (andere sleutel); "
             "het herstel is geweigerd.",
             trace_id,
             details,

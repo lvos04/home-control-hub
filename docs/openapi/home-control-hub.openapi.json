@@ -1189,18 +1189,6 @@
         "title": "OwnerIn",
         "type": "object"
       },
-      "ProfileIn": {
-        "additionalProperties": false,
-        "properties": {
-          "nieuw_beheerwachtwoord": {
-            "default": false,
-            "title": "Nieuw Beheerwachtwoord",
-            "type": "boolean"
-          }
-        },
-        "title": "ProfileIn",
-        "type": "object"
-      },
       "ProposeIn": {
         "additionalProperties": false,
         "description": "ActionProposal (contract §8). ``risk_claim`` is informatief en wordt **genegeerd** voor de beslissing (EX18).",
@@ -3970,65 +3958,6 @@
           }
         },
         "summary": "Versies van een flow (nieuwste eerst)",
-        "tags": [
-          "automation"
-        ]
-      }
-    },
-    "/integrations/v1/automation/hardening-profile": {
-      "post": {
-        "operationId": "post_hardening_profile_integrations_v1_automation_hardening_profile_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProfileIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Post Hardening Profile Integrations V1 Automation Hardening Profile Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Beveiligingsprofiel voor de Custom App van Node-RED (formuliervelden en argumenten)",
         "tags": [
           "automation"
         ]

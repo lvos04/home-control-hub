@@ -2,7 +2,7 @@
 
 Rechten (least privilege):
 - lezen (flows, catalogus, isolatie, proefruns, verzoeken): ``admin``, ``operator`` en ``viewer``;
-- het adres van de Node-RED-editor, het beveiligingsprofiel, eigenaar/triggers/grenzen en flow-tokens: alleen ``admin``;
+- het adres van de Node-RED-editor, eigenaar/triggers/grenzen en flow-tokens: alleen ``admin``;
 - pauzeren/hervatten, momentopname, isolatiemeting, proefrun en opnieuw aanbieden: ``admin`` of ``operator``;
 - events aanbieden en de uitkomst van een actieverzoek melden: alleen de Hub (dienst-JWT).
 
@@ -27,7 +27,6 @@ from ... import API_PREFIX, audit, events
 from ...deps import get_session, if_match, trace_id
 from ...errors import ApiError, not_found
 from ...idempotency import idempotency_key, run_idempotent
-from ...models import IntegrationSource
 from ...pagination import decode_cursor, encode_cursor, limit_param
 from ...redact import looks_like_secret
 from ...security.auth import (
@@ -39,7 +38,7 @@ from ...security.auth import (
     require_reader,
     require_roles,
 )
-from ...sources import source_ref, source_view
+from ...sources import source_view
 from ...timeutil import iso, utcnow
 from .. import DOMAIN_TITLES_NL
 from . import actions, eventcatalog, inbox, nodered, policy, simulate, snapshots
@@ -374,96 +373,6 @@ def post_isolation_check(
     return run_idempotent(request, session, principal, key, {}, action)
 
 
-class ProfileIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    #: maakt een nieuw wachtwoord voor het beheeraccount van de editor (de container moet daarna opnieuw starten met
-    #: de nieuwe argumenten)
-    nieuw_beheerwachtwoord: bool = False
-
-
-def _mask_profile(body: Any) -> Any:
-    """De bewaarde kopie voor de Idempotency-Key bevat nooit het wachtwoord of de argumenten met de sleutel."""
-    masked = dict(body)
-    masked["arguments"] = None
-    masked["beheerwachtwoord"] = None
-    masked["herhaling_nl"] = (
-        "Herhaald antwoord: het wachtwoord en de argumenten worden niet bewaard. Vraag het profiel opnieuw op met een "
-        "nieuwe Idempotency-Key voor de argumenten; het wachtwoord is alleen de eerste keer getoond."
-    )
-    return masked
-
-
-@router.post(
-    "/hardening-profile",
-    summary="Beveiligingsprofiel voor de Custom App van Node-RED (formuliervelden en argumenten)",
-)
-def post_hardening_profile(
-    body: ProfileIn,
-    request: Request,
-    session: Session = Depends(get_session),
-    principal: Principal = Depends(require_admin),
-    key: uuid.UUID = Depends(idempotency_key),
-    tid: str = Depends(trace_id),
-) -> Any:
-    def action() -> Result:
-        vault = request.app.state.vault
-        profile, service_password = policy.build_profile(vault, session, new_admin_password=body.nieuw_beheerwachtwoord)
-        replaced_login = False
-        if service_password is not None:
-            # het dienstaccount is net gemaakt: deze dienst bewaart de aanmelding zelf en toont haar nooit
-            row = session.get(IntegrationSource, nodered.SOURCE_ID)
-            if row is None:
-                row = IntegrationSource(
-                    source_id=nodered.SOURCE_ID, domain="automation", updated_by=principal.audit_id, version=1
-                )
-                session.add(row)
-            else:
-                replaced_login = bool(row.credential_ref)
-                row.version += 1
-                row.updated_by = principal.audit_id
-            ref = source_ref(nodered.SOURCE_ID)
-            vault.put(session, ref, f"{policy.SERVICE_USER}:{service_password}")
-            row.credential_ref = ref
-        audit.record(
-            session,
-            domain="automation",
-            action="automation.hardening_profile.issued",
-            entity_type="source",
-            entity_id=nodered.SOURCE_ID,
-            principal=principal,
-            trace_id=tid,
-            message_nl="Beveiligingsprofiel voor Node-RED "
-            + ("aangemaakt." if profile.created else "opnieuw getoond.")
-            + (" Het beheerwachtwoord is vervangen." if profile.admin_password_rotated else ""),
-            details={
-                "aangemaakt": profile.created,
-                "beheerwachtwoord_vervangen": profile.admin_password_rotated,
-                "aanmelding_bron_vervangen": replaced_login,
-            },
-        )
-        out = {
-            **profile.form(),
-            "aangemaakt": profile.created,
-            "beheerwachtwoord_vervangen": profile.admin_password_rotated,
-            "aanmelding_bron_vervangen": replaced_login,
-            # één argument per regel in het formulier van de Custom App; bevat de wachtwoordhashes en de
-            # credentialSecret en hoort daarom nergens anders dan in dat formulier
-            "arguments": profile.arguments,
-            "beheerwachtwoord": profile.admin_password,
-            "beheerwachtwoord_nl": ONCE if profile.admin_password else "al eerder getoond; alleen de hash is bewaard",
-            "dienstaccount_nl": "De aanmelding van het dienstaccount staat in de kluis van deze dienst en wordt "
-            "nooit getoond.",
-            "vervolg_nl": [
-                "Installeer Node-RED als Custom App met deze formuliervelden en argumenten.",
-                "Stel daarna het adres van Node-RED in bij de bron 'node_red' en zet de bron aan.",
-                "Meet de isolatie (POST /integrations/v1/automation/isolation/check).",
-            ],
-        }
-        return (201 if profile.created else 200), out, {}
-
-    return run_idempotent(request, session, principal, key, body.model_dump(), action, stored=_mask_profile)
-
-
 @router.get("/editor", summary="Adres van de Node-RED-editor (alleen beheerder)")
 def get_editor(session: Session = Depends(get_session), _p: Principal = Depends(require_admin)) -> dict[str, Any]:
     row = snapshots.source_row(session)
@@ -472,7 +381,6 @@ def get_editor(session: Session = Depends(get_session), _p: Principal = Depends(
     isolation = snapshots.isolation_state(session)
     return {
         "url": row.base_url,
-        "aanmelden_als": policy.ADMIN_USER,
         "isolatie": isolation["status"],
         "toegang_nl": [
             "Alleen een beheerder krijgt dit adres; een lezer of operator krijgt 403.",

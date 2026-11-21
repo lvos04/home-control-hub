@@ -1147,8 +1147,8 @@ def test_credentials_file_is_read_with_a_hard_limit(
 
 # -------------------------------------------------------------------------------- installatiegebruiker (S-P2-310)
 def test_installation_user_is_568_and_the_image_default_is_only_a_measurement() -> None:
-    """S-P2-310 bouwpunt 6. Het formulier van het profiel noemt de installatiegebruiker van het manifest van
-    jelly-leon-platform (568:568). De standaardgebruiker van de image (1000, gemeten zonder ``--user``) is een aparte
+    """S-P2-310 bouwpunt 6. De installatiegebruiker is die van het manifest van jelly-leon-platform (568:568; het
+    profiel met een formulier is sinds C-12 vervallen, S-P3-360). De standaardgebruiker van de image (1000, gemeten zonder ``--user``) is een aparte
     waarde: alleen de verwachte uitkomst van de meting ``gebruiker_niet_root`` in het verificatierapport, geen
     installatievoorschrift. Zou iemand de twee gelijkzetten (de installatiegebruiker 1000, of de meting 568), dan
     faalt deze test."""
@@ -1157,10 +1157,6 @@ def test_installation_user_is_568_and_the_image_default_is_only_a_measurement() 
 
     from integrations.domains.automation import catalog
 
-    form = policy.Profile(
-        created=True, admin_password_rotated=False, arguments=[], admin_password=None, stored={}
-    ).form()
-    assert form["gebruiker"] == {"uid": 568, "gid": 568, "root": False}
     assert catalog.NODE_RED_INSTALL_UID == 568 and catalog.NODE_RED_IMAGE_UID == 1000
     report = json.loads(
         (Path(__file__).resolve().parents[4] / "docs/b11/node-red-verificatie.json").read_text(encoding="utf-8")

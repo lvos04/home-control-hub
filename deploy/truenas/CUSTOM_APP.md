@@ -159,14 +159,15 @@ voor Node-RED. Wat je hier instelt staat in `deploy/truenas/NODE_RED_CUSTOM_APP.
    er een dienstaccount is, meet deze app dat: geeft een Node-RED anoniem toch flows, nodes of instellingen terug, dan
    geeft de controle `anoniem_geweigerd` een afwijking.
 2. Een beheerder en het dienstaccount voor deze app komen er via een voorziening zonder geheim in het formulier
-   (besluit C-12; ontwerp in `appstore-en-fork`, bouw na fase P2). Het beveiligingsprofiel van deze app is **geen**
-   installatiestap: zet geen argumenten, wachtwoord-hashes of sleutels in het formulier van Node-RED.
+   (besluit C-12; `appstore-en-fork`). Voor Node-RED geldt nog "Wachten": het manifest heeft geen beheerder en geen
+   dienstaccount. Het beveiligingsprofiel van deze app is vervallen (S-P3-360): zet geen argumenten,
+   wachtwoord-hashes of sleutels in het formulier van Node-RED.
 3. **Nog niet beschikbaar:** het LAN-adres van Node-RED invullen bij de bron *Node-RED* en de isolatie laten meten.
    Het scherm *Automatisering* in de Hub is nog niet gebouwd en er is nog geen dienstaccount (besluit C-12). Een
    wachtwoord of sleutel zet je nooit in een formulier.
 4. Zonder dienstaccount meet de app niets: de isolatie heet `onbekend` met de fout `geen_aanmelding` (ook
-   `anoniem_geweigerd` wordt dan niet gemeten). Dat is verwacht tot de voorziening van besluit C-12 er is; maak dan
-   **niet** het beveiligingsprofiel. Wat de app niet kan meten (niet als root, geen Docker-socket, alleen LAN) loop je
+   `anoniem_geweigerd` wordt dan niet gemeten). Dat is verwacht zolang Node-RED geen dienstaccount heeft (besluit
+   C-12). Wat de app niet kan meten (niet als root, geen Docker-socket, alleen LAN) loop je
    zelf na met de controlelijst in dat document.
 
 Flows voeren zelf niets uit: een flow vraagt een actie aan, de Hub beslist. De boiler schakelen, iets verwijderen en
