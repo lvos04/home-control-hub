@@ -1527,7 +1527,7 @@ veld van aanvrager, voorstel, manifest, planner of afgifte kiest of verandert ee
 
 | Type | Plek | Vorm (executor toetst vóór invullen) | Opslag in de Hub |
 |---|---|---|---|
-| `appgeheim` | Een omgevingsvariabele van een standaard Custom App die de witte-lijstregel als kluisplek noemt; nooit `HUB_*` en nooit een accountnaam (§9) | `^[A-Za-z0-9][A-Za-z0-9_-]{42}$` (32 willekeurige bytes als base64url zonder opvulling; een waarde die met `-` begint, maakt de Hub opnieuw) | Versleuteld (AES-256-GCM met de eigen `vault.key`) in een eigen app-opslag per instantie, ref en revisie, gescheiden van de ruimtes van §3.10. Geen `last4`, geen hash of deel; alleen "gegenereerd" met datum en revisie |
+| `appgeheim` | Een omgevingsvariabele van een standaard Custom App die de witte-lijstregel als kluisplek noemt; nooit `HUB_*` en nooit een accountnaam (§9) | `^[A-Za-z0-9][A-Za-z0-9_-]{42}$` (32 willekeurige bytes als base64url zonder opvulling; een waarde die met `-` of `_` begint, maakt de Hub opnieuw) | Versleuteld (AES-256-GCM met de eigen `vault.key`) in een eigen app-opslag per instantie, ref en revisie, gescheiden van de ruimtes van §3.10. Geen `last4`, geen hash of deel; alleen "gegenereerd" met datum en revisie |
 | `enrollment-token` | Alleen `HUB_ENROLLMENT_TOKEN` van een regel die de app als koppelbare eigen dienst noemt | `^enr_[A-Za-z0-9_-]{43}$` (§3.4) | Alleen de SHA-256 in de bestaande enrollment-opslag (§3.4). Pas bij de afgifte gemaakt, 60 min geldig en eenmalig (§3.6); nooit in de kluis, de app-opslag of een antwoord buiten de afgifte |
 
 Een witte-lijstregel noemt haar kluisplekken als `kluisplekken: [{env, type}]`; hooguit één plek heeft het type
@@ -1564,8 +1564,8 @@ ontsleutelt de Hub de gebonden appgeheimen en maakt hij het enrollment-token, ge
 Het antwoord `200` is `{"afgifte": <Hub-dienst-JWT>}` (§4.3, `aud` `ai-server-manager-executor`, geldig tot het einde
 van de afgifte) met één extra claim `kluis_afgifte` = `{request_sha256, claim_sha256, enc, ct}`. Daarin is
 `claim_sha256` de canonieke SHA-256 van het verzoek zonder `handtekening`. `enc` en `ct` zijn base64url van HPKE
-(RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM) naar `ontvanger`, met info
-`asm-kluis-afgifte-v1` en als aad de tekst van `claim_sha256`. De klare tekst is de canonieke JSON
+(RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM) naar `ontvanger`, met als info
+`asm-kluis-afgifte-v1:` gevolgd door de tekst van `claim_sha256`. De klare tekst is de canonieke JSON
 `{"waarden": {<path>: <waarde>}, "token": <waarde of null>}`, zonder typen. De executor controleert de JWT met zijn
 gepinde Hub-sleutels zoals in §4.7, en daarna beide hashes. Weigeringen zijn `401` (§4.7), `403 afgifte_geweigerd`
 (handtekening, andere executor), `409 afgifte_past_niet` (verzoek, nonce, approval, refs of token), `409
