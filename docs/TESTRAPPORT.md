@@ -707,3 +707,5 @@ De lijst voor de Hub beschrijft het terugzetten van de volledige flowset. Hij be
 beide checksums, aantallen nodes en de keuze voor credentials. Het veld `flow_diff` bevat de details per node en
 veld. De status en de uitvoeringsdatum zijn via het voorstel terug te lezen. De proeven met de echte NAS en met
 credentials uit een echte alleen-lezen datakoppeling staan open.
+
+Forgejo-run 17 op herstelcommit `fb643b0` was groen voor Python, statuspagina en image. [CI-run 17](https://git.medialeon.nl/leon/home-control-hub/actions/runs/17)
