@@ -612,3 +612,43 @@ schermlezer en telefoon.
   Automatische geheimoverdracht en uitvoering wachten op ADR-0033 O1/O2, een vertrouwde bron voor de doelbinding,
   toetsing aan het actuele beleid, live precondities en de gezamenlijke vervolgproeven. Echte Authentik en NAS blijven
   NIET GEVALIDEERD.
+
+## S-P2-340 deel 1 — Bron-ID, doel van het herstel en interop met de echte Hub-code (2026-11-23)
+
+- **Bron-ID.** `apps/api/tests/integration/test_bron_id.py` heeft drie proeven, alle drie Sim-getest:
+  - Na een teruggezette back-up begint het outboxvolgnummer opnieuw, maar de bron-ID blijft uniek.
+  - Een `409 bron_id_conflict` van de Hub-inbox maakt het event `dead_letter`, zonder `delivered_at`.
+  - Een identieke herlevering (`200`) telt als afgeleverd.
+  - Zonder de wijziging falen twee van de drie proeven.
+  - De Hub-simulator volgt de echte inbox van `ai-server-manager` (S-P2-140): dezelfde sleutel met andere inhoud
+    geeft `409`.
+- **Doel van het herstel.** `test_b11_005_herstel.py` en `test_execreq.py` gebruiken het Hub-doel
+  `{"app_id": "home-control-hub", "resource": "node_red"}`.
+  - Een doel met `host_id` `nas-primary` wordt uitgevoerd.
+  - Deze doelen worden geweigerd met `422 parameters_ongeldig`: de oude vorm, een andere host, een andere app, een
+    extra veld en een ander doel.
+  - Zonder de wijziging falen vijf proeven.
+- **Interop.** `make interop` draaide tegen een `git archive` van `ai-server-manager` origin (commit `e275d18`)
+  met een eigen venv. Uitkomst: 1 geslaagd, 4 overgeslagen.
+  - Een flow vraagt `notification.send` aan met `risk_claim` R3. De echte Hub-code maakt er een voorstel van met
+    actor `flow`, R0 en status `klaar`, en voert het niet vanzelf uit.
+  - De bron-ID in de Hub is de `event_id`, en Node-RED krijgt geen schrijfopdracht.
+  - Node-RED is daarbij de simulator. Met de oude bron-ID faalt de proef.
+  - Niet in CI: de proef vraagt de Hub-code als lokale werkkopie.
+- **Lokale poorten.** Elk van de volgende gaf exit 0:
+  - `make lint`
+  - ruff-formaat
+  - `make openapi` zonder drift
+  - `pip-audit`
+  - de Peil-vergelijking
+  - `contract_kopie.py controleer`
+  - `contract_kopie.py vergelijk --bron` met een bijgewerkte werkkopie
+  - de migratie omhoog, terug en weer omhoog (revisie 0009)
+  - `jl-manifest validate --strict`: geldig, met 0 fouten en 1 waarschuwing
+- **Online contractvergelijking.** `make contract-drift` faalt online met 404, omdat GitHub sinds de overstap naar
+  Forgejo een verouderde spiegel is. De vergelijking met de bijgewerkte werkkopie is in orde.
+- **Nog niet gedaan** (deel 2, na S-P2-140b in `ai-server-manager`):
+  - het image en de rooktest;
+  - de interop voor een door de echte Hub ondertekend herstelverzoek (4b/4c).
+
+  De statuspagina is niet gewijzigd, dus zijn `test-ui` en de ontwerpreview niet gedraaid.

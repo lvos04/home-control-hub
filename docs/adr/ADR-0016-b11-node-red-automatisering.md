@@ -224,6 +224,11 @@ Deze ronde bouwt de vijf werkpakketten:
   geweigerd (beide `keten_te_lang`; `inbox.MAX_CHAIN` = 8).
 - Een event met classificatie `sensitive` (de hoogste van de drie klassen van §7: `public`, `internal`,
   `sensitive`) gaat nooit naar een flow; het wordt wel bewaard (reden `classificatie_sensitive`).
+- **Bron-ID van de eigen events (S-P2-340):** `source_event_id` is de `event_id`, niet het outboxvolgnummer. Na het
+  terugzetten van een back-up begint dat volgnummer opnieuw, en de Hub weigert een bekende bron-ID met andere inhoud
+  (`409 bron_id_conflict`, S-P2-140 van `ai-server-manager`). Een 409 van de Hub-inbox maakt het event meteen
+  `dead_letter` met `bron_id_conflict` (zichtbaar in health en connector), nooit stil `delivered`. Een identieke
+  herlevering geeft `200` en telt als afgeleverd.
 - **Bron van de events:** `POST …/automation/events` neemt alleen een dienst-JWT van de Hub aan. De eigen events van
   deze dienst (outbox) biedt de worker zelf aan de flows aan.
 
@@ -481,10 +486,15 @@ Waar het contract niets zegt of zichzelf tegenspreekt, is de veiligste lezing ge
 2. **§7 kent geen pad waarlangs de Hub events van andere apps doorstuurt** naar deze dienst, en geen regel dat de
    Hub `correlation_id` of de keten van flows doorgeeft. Gebouwd is de ontvangende kant; zonder Hub-zijde komen er
    alleen eigen events bij flows.
-3. **De payload van `flow.action.requested` staat niet in §7** en de Hub heeft er nog geen verwerker voor. Tot dan
-   blijft elk verzoek op `aangevraagd` staan.
-4. **`automation.flows.restore` staat niet in de actietabel van §8.** Een echte Hub kan er nu geen geldig
-   ExecutionRequest voor uitgeven; herstel werkt dus alleen tegen de simulator.
+3. **De payload van `flow.action.requested` staat niet in §7.** De Hub verwerkt hem sinds S-P2-140 van
+   `ai-server-manager` (`hub.actions.flows`, positieve witte lijst). De interoptest (S-P2-340) laat een flowverzoek
+   bij de echte Hub-code een gewoon voorstel met actor `flow` worden. Node-RED zelf is daarbij de simulator.
+4. **`automation.flows.restore` staat niet in de actietabel van §8.** Het Hub-beleid krijgt de actie in S-P2-140b
+   van `ai-server-manager`. Tot dan kan een echte Hub er geen ExecutionRequest voor uitgeven en werkt herstel alleen
+   tegen de simulator. Het doel volgt het contractbesluit van `ai-server-manager` (S-P2-340): de Hub-vorm voor doel
+   `eigenaar`, `{"app_id": "home-control-hub", "resource": "node_red"}`, eventueel met `host_id` `nas-primary`.
+   Elk ander doel, ook de oude vorm `{"type": "source", "id": "node_red"}`, is `422 parameters_ongeldig`
+   (`restore.target_ok`).
 5. **De `policy_hash`** in een ExecutionRequest kan een eigenaar-connector niet tegen een policybestand controleren;
    alleen de vorm en de samenhang worden gecontroleerd. De stap "policy-hash gelijk aan het eigen beleid"
    (`policy_hash_verschilt`, 409) uit `ai-server-manager/docs/EXECUTION_REQUEST.md` ontbreekt daarom hier.

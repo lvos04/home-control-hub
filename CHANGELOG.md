@@ -1,5 +1,24 @@
 # Wijzigingen
 
+## S-P2-340 deel 1 — bron-ID, doel van het herstel en interop met de echte Hub (2026-11-23)
+
+- Uitgaande events hebben als `source_event_id` de `event_id` in plaats van het outboxvolgnummer. Na het terugzetten
+  van een back-up blijft de bron-ID uniek. Contractmelding van S-P2-140 in `ai-server-manager`.
+- Een `409` van de Hub-inbox (`bron_id_conflict`) maakt het event `dead_letter` met `bron_id_conflict` in plaats van
+  het stil als afgeleverd te tellen. De Hub-simulator geeft nu dezelfde 409 als de echte inbox.
+- `automation.flows.restore` gebruikt het doel van het Hub-beleid (doel `eigenaar`; contractbesluit van
+  `ai-server-manager`): `{"app_id": "home-control-hub", "resource": "node_red"}`, eventueel met `host_id`
+  `nas-primary`. Andere doelen, ook de oude vorm `{"type": "source", "id": "node_red"}`, geven `422 parameters_ongeldig`
+  bij voorstel en uitvoering.
+- `tests/interop/test_real_hub.py`: een flow vraagt `notification.send` aan en de echte Hub-code maakt er een voorstel
+  van (actor `flow`, R0, niet vanzelf uitgevoerd), met de event-ID als bron-ID. De oude controle "apply geeft 501"
+  was sinds B11-005 achterhaald. Nu: een leeg verzoek geeft `422 execution_request_ongeldig`.
+- Het manifest en `deploy/truenas/CUSTOM_APP.md` beschrijven de Node-RED-instellingen al (S-P3-360, KLEIN-03): adres
+  via de bron `node_red`, en `HCH_NODE_RED_DATA_DIR` en `HCH_NODE_RED_ALLOWED_MODULES` als optionele variabelen.
+  Ongewijzigd.
+- Nog niet in deze stap: image en rooktest, en de interop voor een door de echte Hub ondertekend herstelverzoek
+  (S-P2-340 deel 2, na S-P2-140b).
+
 ## C-12 — Node-RED-beveiligingsprofiel vervallen (2026-11-21, S-P3-360)
 
 - De route `POST /integrations/v1/automation/hardening-profile` en de argumentenbouwer (`policy.define_arguments`,
