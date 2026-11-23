@@ -154,6 +154,9 @@ python3 tools/contract_kopie.py vergelijk --bron ../ai-server-manager
 make ontwerpreview          # draaiende dienst + Hub-simulator: 14 toestanden × 320–1440 × licht/donker (axe WCAG 2.2 AA,
                             # contrast, doelen, focus, tekstafstand, Peil-statusregels) + browsertest herkomst
                             # (tests/ui/herkomst.mjs) → tests/ui/review-uit/
+make interop HUB_PY=<venv>/bin/python   # alleen lokaal: tegen de echte Hub-code (een git archive van ai-server-
+                            # manager met een eigen venv); koppelen, sleutels, rotatie, ontkoppelen en een flowverzoek
+                            # dat bij de Hub een voorstel wordt (Node-RED is daarbij de simulator)
 ```
 
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met

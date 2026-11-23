@@ -16,6 +16,11 @@ rotatie op verzoek van de beheerder (§3.8); dienst-JWT van de Hub mag ``hub-lin
 ``not_linked`` (ook bij herhalen); opnieuw koppelen met een nieuw token (zelfde ``service_id``) en intrekken door de
 Hub → ``revoked``. De dienst-JWT wordt met de sleutelring van de Hub zelf gemaakt (``hub.keys.KeyRing``): de route
 ``POST /api/v1/services/{id}/unlink`` van de Hub vraagt een gemeten dienstadres (D03 + inventaris) dat hier niet bestaat.
+
+B11 (S-P2-340): een flow in Node-RED (de nep-Node-RED van de dienst-E2E, ``tests/e2e/sim_node_red.py``; Node-RED zelf
+is hier Sim-getest) vraagt met een flow-token ``notification.send`` aan; het event ``flow.action.requested`` komt door
+de inbox van de echte Hub en wordt daar een gewoon voorstel met actor ``flow`` (``hub.actions.flows``), zonder dat deze
+dienst iets uitvoert. De bron-ID van elk event is de ``event_id`` (uniek, ook na herstel).
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ import pytest
 from sqlalchemy import create_engine, text
 
 HUB_PYTHON = os.environ.get("HCH_REAL_HUB_PYTHON", "")
+E2E_DIR = Path(__file__).resolve().parents[1] / "e2e"
+A = "/integrations/v1/automation"
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
 APP_ID = "home-control-hub"
 HUB_DB, SVC_DB = "hch_interop_hub", "hch_interop_dienst"
@@ -97,8 +104,12 @@ class Lab:
             "HCH_HUB_HEARTBEAT_S": "2",
             "HCH_HUB_KEY_POLL_S": "2",
             "HCH_AUTHENTIK_SYNC_INTERVAL_S": "0",
+            "HCH_NODE_RED_SYNC_INTERVAL_S": "2",
             "HUB_URL": self.hub_url,
         }
+        self.nr_port = _free_port()
+        self.nr_url = f"http://127.0.0.1:{self.nr_port}"
+        self.nr_env = {**clean, "PYTHONPATH": str(E2E_DIR), "SIM_NODE_RED_DATA_DIR": str(root / "node-red-data")}
         self.http = httpx.Client(base_url=self.hub_url, timeout=15, trust_env=False)
         self.csrf = ""
 
@@ -142,6 +153,13 @@ class Lab:
         self.start("worker", [sys.executable, "-m", "integrations", "worker"], env)
         _wait(lambda: httpx.get(f"{self.api_url}/healthz", timeout=2, trust_env=False).status_code == 200)
 
+    def start_node_red(self) -> None:
+        """De nep-Node-RED van de dienst-E2E als echt HTTP-proces (Sim-getest)."""
+        (self.root / "node-red-data").mkdir(exist_ok=True)
+        cmd = [sys.executable, "-m", "uvicorn", "sim_node_red:app", "--host", "127.0.0.1", "--port", str(self.nr_port)]
+        self.start("node-red", cmd, self.nr_env)
+        _wait(lambda: httpx.get(f"{self.nr_url}/sim/state", timeout=2, trust_env=False).status_code == 200)
+
     # ------------------------------------------------------------------ Hub als beheerder
     def hub_post(self, path: str, body: Any = None, idem: bool = False) -> httpx.Response:
         headers = {"X-CSRF-Token": self.csrf}
@@ -175,6 +193,21 @@ class Lab:
             check=True,
         ).stdout.strip()
 
+    def hub_action(self, action_request_id: str) -> dict[str, Any] | None:
+        """Het voorstel dat de echte Hub van een flowverzoek maakte (vaste request_id: ``hub.actions.flows``)."""
+        script = (
+            "import sys, uuid; from hub.actions.flows import request_id_voor; "
+            "print(request_id_voor(sys.argv[1], uuid.UUID(sys.argv[2])))"
+        )
+        rid = subprocess.run(
+            [HUB_PYTHON, "-c", script, APP_ID, action_request_id], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        r = self.http.get(f"/api/v1/actions/{rid}")
+        if r.status_code == 404:  # nog niet afgeleverd
+            return None
+        assert r.status_code == 200, r.text
+        return dict(r.json())
+
     def service_record(self) -> dict[str, Any]:
         items = self.http.get("/api/v1/services").json()["items"]
         return next(i for i in items if i["app_id"] == APP_ID)
@@ -183,11 +216,15 @@ class Lab:
     def link(self) -> dict[str, Any]:
         return dict(json.loads((self.svc_data / "secrets" / "hub-link.json").read_text()))
 
-    def api(self, method: str, path: str, token: str, idem: bool = False) -> httpx.Response:
+    def api(
+        self, method: str, path: str, token: str, idem: bool = False, body: Any = None, if_match: bool = False
+    ) -> httpx.Response:
         headers = {"Authorization": f"Bearer {token}"}
         if idem:
             headers["Idempotency-Key"] = str(uuid.uuid4())
-        return httpx.request(method, f"{self.api_url}{path}", headers=headers, timeout=10, trust_env=False)
+        if if_match:
+            headers["If-Match"] = "*"
+        return httpx.request(method, f"{self.api_url}{path}", headers=headers, json=body, timeout=10, trust_env=False)
 
 
 @pytest.fixture(scope="module")
@@ -254,7 +291,8 @@ def test_real_hub_lifecycle(lab: Lab) -> None:
     assert lab.api("GET", "/connector/v1/discover", tok).status_code == 200
     hub_link = lab.api("GET", "/connector/v1/hub-link", tok).json()
     assert hub_link["keyset_fingerprint"] == grant["keyset_fingerprint"] and hub_link["rotation_sequence"] == 0
-    assert lab.api("POST", "/connector/v1/apply", tok, idem=True).status_code == 501
+    r = lab.api("POST", "/connector/v1/apply", tok, idem=True, body={})  # leeg verzoek: geweigerd, niets uitgevoerd
+    assert r.status_code == 422 and r.json()["code"] == "execution_request_ongeldig", r.text
     r = lab.api("POST", "/connector/v1/rollback", tok, idem=True)
     assert r.status_code == 401 and r.json()["details"]["reason"] == "token_replayed"
     real_token = lab.link()["service_token"]
@@ -272,6 +310,9 @@ def test_real_hub_lifecycle(lab: Lab) -> None:
     assert r.status_code == 202, r.text
     _wait(lambda: (d := lab.link())["service_token_last4"] != old_last4 and d.get("confirmed_at"))
     assert lab.service_record()["rotatie"]["aangevraagd_op"] is None
+
+    # 4b. B11 (S-P2-340): een flow vraagt een actie aan; de echte Hub maakt er een voorstel van met actor flow
+    flow_request_becomes_a_hub_proposal(lab)
 
     # 5. dienst-JWT van de Hub: hub-link lezen en ontkoppelen; daarna weigert de dienst elke Hub-JWT (§3.8, §4.3)
     assert lab.api("GET", "/connector/v1/hub-link", lab.hub_service_jwt(link["service_id"])).status_code == 200
@@ -294,3 +335,74 @@ def test_real_hub_lifecycle(lab: Lab) -> None:
     _wait(lambda: lab.link()["state"] == "ingetrokken")
     r = lab.api("GET", "/connector/v1/discover", lab.user_jwt())
     assert r.status_code == 401 and r.json()["details"]["reason"] == "revoked"
+
+
+def flow_request_becomes_a_hub_proposal(lab: Lab) -> None:
+    """S-P2-340 bouwpunt 4(a): ``flow.action.requested`` wordt bij de echte Hub-code een voorstel (B11-003, B01-008)."""
+    from tests.e2e.test_automation_e2e import DIENST, TAB, _beveiliging, _flows_v1
+
+    lab.start_node_red()
+    profile = _beveiliging()  # de beheerder beveiligt Node-RED zelf (besluit C-12); alleen testwaarden
+    assert httpx.post(f"{lab.nr_url}/sim/arguments", json={"arguments": profile["arguments"]}).json()["beveiligd"]
+    assert httpx.post(f"{lab.nr_url}/sim/deploy", json={"flows": _flows_v1(), "credentials": {}}).status_code == 200
+    bron = {"base_url": lab.nr_url, "enabled": True, "credential": f"{DIENST}:{profile['dienstwachtwoord']}"}
+    r = lab.api("PUT", "/integrations/v1/sources/node_red", lab.user_jwt(), idem=True, body=bron, if_match=True)
+    assert r.status_code in (200, 201), r.text
+
+    def flow() -> dict[str, Any] | None:
+        items = lab.api("GET", f"{A}/flows", lab.user_jwt()).json()["items"]
+        return next((i for i in items if i["source_flow_id"] == TAB), None)
+
+    f = _wait(flow)
+    assert f["status"] == "actief", f
+    r = lab.api("PUT", f"{A}/flows/{f['id']}/owner", lab.user_jwt(), True, {"owner": "beheer", "eigenaren": []}, True)
+    assert r.status_code == 200, r.text
+    r = lab.api(
+        "POST",
+        f"{A}/flows/{f['id']}/tokens",
+        lab.user_jwt(),
+        True,
+        {"label": "interop", "allowed_actions": ["notification.send"]},
+    )
+    assert r.status_code == 201, r.text
+    flow_token = r.json()["flow_token"]
+    verzoek = {
+        "action_id": "notification.send",
+        "target": {},
+        "parameters": {"titel": "Interop", "tekst": "Flowverzoek tegen de echte Hub-code"},
+        "reason": "Interoptest S-P2-340",
+        "risk_claim": "R3",  # telt nooit mee (EX18)
+    }
+    r = lab.api("POST", f"{A}/flow-api/actions", flow_token, idem=True, body=verzoek)
+    assert r.status_code == 202 and r.json()["status"] == "aangevraagd", r.text
+    action_request_id = r.json()["id"]
+
+    try:
+        voorstel = _wait(lambda: lab.hub_action(action_request_id))
+    except AssertionError:
+        audit = lab.http.get("/api/v1/audit", params={"limit": 20}).text
+        raise AssertionError(f"geen voorstel bij de Hub; audit: {audit[:3000]}") from None
+    assert voorstel["actor"] == {"type": "flow", "id": f"flow:{f['id']}"}, voorstel
+    assert voorstel["action_id"] == "notification.send" and voorstel["risk_claim"] is None
+    # dezelfde classificatie als een voorstel van een mens: R0, geen goedkeuring nodig, niet vanzelf uitgevoerd
+    assert (voorstel["status"], voorstel["risk_class"], voorstel["goedkeuring_nodig"]) == ("klaar", "R0", False), (
+        voorstel
+    )
+    # het event kwam door de inbox van de echte Hub (afgeleverd, geen dead-letter) met de event-ID als bron-ID
+    eng = create_engine(lab.svc_env["HCH_DATABASE_URL"])
+    try:
+        with eng.connect() as c:
+            rows = list(
+                c.execute(
+                    text(
+                        "SELECT event_id, delivery_status FROM outbox_event WHERE event_type = 'flow.action.requested'"
+                    )
+                )
+            )
+    finally:
+        eng.dispose()
+    assert [r[1] for r in rows] == ["delivered"], rows
+    hub_events = lab.http.get("/api/v1/events", params={"event_type": "flow.action.requested"}).json()["items"]
+    assert [(e["event_id"], e["source_event_id"]) for e in hub_events] == [(str(rows[0][0]), str(rows[0][0]))]
+    # deze dienst voert zelf niets uit: Node-RED kreeg geen enkele schrijfactie
+    assert httpx.get(f"{lab.nr_url}/sim/state").json()["writes"] == []
