@@ -3,7 +3,11 @@
 Events worden in dezelfde transactie als de wijziging vastgelegd. De worker pusht ze naar
 ``POST {HUB_URL}/api/v1/events/inbox`` (service-token) met backoff; na 10 mislukte pogingen → ``dead_letter``
 (zichtbaar via de connector en de Hub). De Hub kan ook pollen via ``GET /connector/v1/events?cursor=``.
-Geen exact-once-aanname: de Hub dedupliceert op ``event_id``.
+Geen exact-once-aanname: de Hub dedupliceert op ``event_id`` en op (``source_app``, ``source_event_id``). De bron-ID is
+de ``event_id`` zelf, niet het outboxvolgnummer: na het terugzetten van een back-up begint dat volgnummer opnieuw en zou
+een nieuw event een bron-ID van een eerder event krijgen (de Hub weigert dat met ``409 bron_id_conflict``). Weigert de Hub
+toch met 409, dan wordt het event meteen ``dead_letter`` met ``bron_id_conflict`` (zichtbaar in health en connector),
+nooit stil "afgeleverd".
 
 Grenzen van de Hub-inbox worden **vóór verzending** gecontroleerd (1.3 §7), zodat een event niet pas als dead-letter
 opvalt: precies drie segmenten; eigen domeinen ``sso``, ``energy``, ``network``, ``automation``, ``flow``; gedeeld
@@ -141,7 +145,7 @@ def envelope(ev: OutboxEvent) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "event_id": str(ev.event_id),
         "source_app": APP_ID,
-        "source_event_id": str(ev.seq),
+        "source_event_id": str(ev.event_id),  # uniek, ook na herstel (zie moduletekst)
         "event_type": ev.event_type,
         "entity": {"type": ev.entity_type, "id": ev.entity_id},
         "timestamp_utc": iso(ev.timestamp_utc),
@@ -169,6 +173,13 @@ def mark_delivered(ev: OutboxEvent) -> None:
     ev.delivery_status = "delivered"
     ev.delivered_at = utcnow()
     ev.last_error = None
+
+
+def mark_conflict(ev: OutboxEvent) -> None:
+    """De Hub kent dit event-ID of deze bron-ID al met andere inhoud (409): opnieuw sturen helpt niet."""
+    ev.attempts += 1
+    ev.last_error = "bron_id_conflict"
+    ev.delivery_status = "dead_letter"
 
 
 def mark_failed(ev: OutboxEvent, error: str) -> None:

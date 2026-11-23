@@ -687,7 +687,16 @@ class HubSim:
         if problems:  # zoals de echte Hub: 422 bij een ongeldige envelope
             self.rejected.append({"event_type": event.get("event_type"), "problems": problems})
             return _err(422, "validation_error", "Ongeldige envelope.", problems=problems)
-        if any(e["event_id"] == event["event_id"] for e in self.inbox):
+        # zoals de echte Hub (R-VEILIG-5 van S-P2-140): dezelfde event_id of bron-ID met andere inhoud is 409
+        same = [
+            e
+            for e in self.inbox
+            if e["event_id"] == event["event_id"]
+            or (e["source_app"], e["source_event_id"]) == (event["source_app"], event["source_event_id"])
+        ]
+        if same and any(e != event for e in same):
+            return _err(409, "bron_id_conflict", "Er is al een ander event met deze event_id of bron-ID.")
+        if same:
             return Reply(200, {"status": "duplicaat"}, self._rotation_header(svc, tok))
         self.inbox.append(event)
         return Reply(202, {"status": "ontvangen"}, self._rotation_header(svc, tok))

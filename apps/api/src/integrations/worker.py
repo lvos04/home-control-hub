@@ -123,8 +123,11 @@ class Worker:
                     err = "niet_gekoppeld" if resp is None else f"http_{resp.status_code}"
                 if resp is None and err == "niet_gekoppeld":
                     break  # intussen ontkoppeld of ingetrokken (bv. 401 + services/self 401): niets meer pushen
-                ok = resp is not None and resp.status_code in (200, 201, 202, 204, 409)  # 409 = al ontvangen
-                if ok:
+                ok = resp is not None and resp.status_code in (200, 201, 202, 204)  # 200 = al ontvangen (duplicaat)
+                if resp is not None and resp.status_code == 409:
+                    events.mark_conflict(ev)  # bron_id_conflict: andere inhoud onder dezelfde sleutel (zichtbaar)
+                    self.state.stats["push_failed"] += 1
+                elif ok:
                     events.mark_delivered(ev)
                     self.state.stats["pushed"] += 1
                 else:
