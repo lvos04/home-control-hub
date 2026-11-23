@@ -155,10 +155,14 @@ python3 tools/contract_kopie.py vergelijk --bron ../ai-server-manager
 make ontwerpreview          # draaiende dienst + Hub-simulator: 14 toestanden × 320–1440 × licht/donker (axe WCAG 2.2 AA,
                             # contrast, doelen, focus, tekstafstand, Peil-statusregels) + browsertest herkomst
                             # (tests/ui/herkomst.mjs) → tests/ui/review-uit/
-make interop HUB_PY=<venv>/bin/python   # alleen lokaal: tegen de echte Hub-code (een git archive van ai-server-
-                            # manager met een eigen venv); koppelen, sleutels, rotatie, ontkoppelen en een flowverzoek
-                            # dat bij de Hub een voorstel wordt (Node-RED is daarbij de simulator)
+make interop HUB_PY=<venv>/bin/python   # lokale Hub, connector en Node-RED-simulator
 ```
+
+Voor de B11-interop is `ai-server-manager@f37bcf8` getoetst. Maak een `git archive` van die commit en installeer
+`apps/policy` en `apps/api` uit het archief met `pip install -e` in de eigen venv. De proef gebruikt ook de
+back-upfixture uit dat archief. Hij volgt een flowverzoek tot het Hub-voorstel en een goedgekeurd R2-herstel tot
+de readback. De connector weigert hetzelfde ondertekende verzoek zodra één letter verandert. De vier
+energieproeven gebruiken daarnaast het lokale pakket `shc_api` van `my_house` met zijn afhankelijkheden.
 
 Integratietests gebruiken een lokale PostgreSQL 16 (`HCH_TEST_ADMIN_URL`, standaard `postgres@127.0.0.1:5432`) met
 databases `hch_test_*`. `deploy/dev/compose.yaml` is alleen voor ontwikkeling — **geen** installatiemethode.

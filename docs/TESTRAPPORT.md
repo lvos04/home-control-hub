@@ -681,3 +681,29 @@ De contracteigenaar bepaalt welke vorm beide diensten moeten gebruiken.
 
 Forgejo-run 15 op `e6b6d2b` bevestigde de bouw en de rooktest van het image. De herstelproef tegen de
 echte Hub-code draaide lokaal. [CI-run 15](https://git.medialeon.nl/leon/home-control-hub/actions/runs/15)
+
+## S-P2-340 herstel — ondertekend flowherstel (2026-11-23)
+
+De API en worker van de connector draaiden lokaal naast de Node-RED-simulator en de Hub uit
+`ai-server-manager@f37bcf89436ecf900360e37a19d223a9a66badc4`, met eigen testdatabases. De Hub kreeg een
+lokale testinventaris en zijn eigen fixture voor de externe app-back-ups. Zolang een geverifieerde back-up van
+de Hub-testdatabase ontbrak, weigerde de Hub de goedkeuring met HTTP 409. Daarna maakte de Hub een echte dump
+van zijn testdatabase en controleerde hij de R2-voorwaarden opnieuw.
+
+| Proef | Waarneming |
+|---|---|
+| Regressiepatch op `db2d171` | De connector gaf 201 met een object als diff. De Hub gaf 409 `doel_onbekend`. De simulator registreerde nul schrijfacties. |
+| Lijstdiff met het oude uitvoeringsantwoord | De simulator registreerde één schrijfactie. De Hub ontving een onvolledig bewijs en gaf 502 `uitkomst_onbekend`. |
+| 4(a) Flowverzoek | De Hub ontving `flow.action.requested` en maakte een voorstel met actor `flow`. |
+| 4(b) Herstel met R2-goedkeuring | De Hub ondertekende het verzoek. De simulator registreerde één schrijfactie. De readback bevatte de aangevraagde snapshot-ID en checksum. De Hub registreerde `uitgevoerd` met de bijbehorende eindhash. |
+| 4(c) Hetzelfde verzoek met één gewijzigde letter | Met een verse dienst-JWT en idempotentiesleutel gaf de connector 403 `forbidden` met reden `handtekening_ongeldig`. Flows, revisie en schrijfregister bleven gelijk. |
+| Afwezige of afwijkende readback na schrijven | De connector gaf in beide gevallen 502 `herstel_niet_bevestigd`. Hij registreerde de uitkomst als onbekend en stuurde geen succesevent. |
+| Image zonder ingestelde Node-RED-bron | Alle 38 rookcontroles groen. De B11-rij toonde **Niet ingesteld**. |
+| Rooktest met een extra proces als UID 0 in de eigen testcontainer | Exit 1. Alleen de controle van de procesrechten faalde. |
+| Installatiemanifest | Strikte validatie met de release-uitzondering voor de imagedigest. De validator weigerde beide Docker-socketvarianten. |
+| API-tests | 1.677 groen in de volledige run. De ene overgeslagen Peil-bronvergelijking slaagde afzonderlijk met de gepinde bron. Alle 90 tests in het herstelbestand slaagden op de eindversie. |
+
+De lijst voor de Hub beschrijft het terugzetten van de volledige flowset. Hij bevat de gevraagde momentopname,
+beide checksums, aantallen nodes en de keuze voor credentials. Het veld `flow_diff` bevat de details per node en
+veld. De status en de uitvoeringsdatum zijn via het voorstel terug te lezen. De proeven met de echte NAS en met
+credentials uit een echte alleen-lezen datakoppeling staan open.

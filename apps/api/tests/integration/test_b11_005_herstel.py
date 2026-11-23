@@ -300,8 +300,25 @@ def test_proposal_changes_nothing_and_needs_a_signed_request(
     assert view["risk_class_min"] == "R2" and view["requires_backup"] is False
     assert view["preview_hash"].startswith("sha256:") and len(view["preview_hash"]) == 71
     assert view["resource_etag"] == "sha256:" + scene.snap2["checksum_sha256"]
-    assert view["diff"]["aantallen"] == {"toegevoegd": 0, "verwijderd": 1, "gewijzigd": 1, "ongewijzigd": 4}
-    assert view["diff"]["waarden_getoond"] is False
+    counts = {"toegevoegd": 0, "verwijderd": 1, "gewijzigd": 1, "ongewijzigd": 4}
+    assert view["diff"] == [
+        {
+            "object": "node_red",
+            "key": scene.snap1["id"],
+            "operation": "terugzetten",
+            "changes": [
+                {
+                    "field": "checksum_sha256",
+                    "before": scene.snap2["checksum_sha256"],
+                    "after": scene.snap1["checksum_sha256"],
+                },
+            ],
+            "aantallen": counts,
+            "credentials_terugzetten": True,
+        },
+    ]
+    assert view["flow_diff"]["aantallen"] == counts
+    assert view["flow_diff"]["waarden_getoond"] is False
     assert view["credentials"] == {
         "credentials_present": True,
         "status": "meegenomen",
@@ -389,6 +406,11 @@ def test_undo_restores_flows_and_credentials_without_logging_secrets(
     assert body["before_hash"] == "sha256:" + scene.snap2["checksum_sha256"]
     assert body["after_hash"] == "sha256:" + scene.snap1["checksum_sha256"]
     assert body["readback"]["gelezen"] is True and body["readback"]["gelijk_aan_momentopname"] is True
+    assert body["readback"]["snapshot_id"] == request["proposal"]["parameters"]["snapshot_id"]
+    assert body["readback"]["checksum_sha256"] == body["after_hash"].removeprefix("sha256:")
+    assert body["request_id"] == request["approval"]["request_id"]
+    assert body["policy_hash"] == request["policy_decision"]["policy_hash"]
+    assert body["methode"] == RESTORE
     assert body["credentials_teruggezet"] is True
     assert "NIET GEVALIDEERD (echte NAS)" in body["validatie"]
 
@@ -402,6 +424,7 @@ def test_undo_restores_flows_and_credentials_without_logging_secrets(
     # vastgelegd: wie, wat, vóór en na — en de weg terug
     row = scene.restore_row(view["proposal_id"])
     assert row["status"] == "uitgevoerd" and row["applied_at"]
+    assert body["uitgevoerd_op"] == row["applied_at"]
     assert row["result"]["goedgekeurd_door"] == "beheerder-1"
     assert row["result"]["bevestigd_via"] == "antwoord_en_readback"
     snaps = {s["id"]: s for s in linked.get(f"{A}/snapshots", headers=auth("viewer")).json()["items"]}
@@ -451,6 +474,33 @@ def test_response_lost_after_writing_is_confirmed_by_readback(scene: Scene) -> N
     assert r.json()["readback"]["gelijk_aan_momentopname"] is True
     assert scene.restore_row(view["proposal_id"])["result"]["bevestigd_via"] == "readback"
     assert scene.nr.flows == flows_v1() and len(scene.nr.writes) == 1
+
+
+@pytest.mark.parametrize("readable", [False, True], ids=["ontbrekend", "afwijkend"])
+def test_unconfirmed_readback_keeps_the_outcome_unknown(
+    scene: Scene, linked: Any, monkeypatch: pytest.MonkeyPatch, readable: bool
+) -> None:
+    view = scene.propose()
+    original = scene.nr.handle
+
+    def handle(req: httpx.Request) -> httpx.Response:
+        if scene.nr.writes and req.method == "GET" and req.url.path == "/flows":
+            if readable:
+                return httpx.Response(200, json={"rev": scene.nr.rev, "flows": flows_v2()})
+            return httpx.Response(503)
+        return original(req)
+
+    monkeypatch.setattr(scene.nr, "handle", handle)
+    response = scene.apply(scene.sign(view))
+    assert (response.status_code, response.json()["code"]) == (502, "herstel_niet_bevestigd")
+    details = response.json()["details"]
+    assert details["uitkomst"] == "onbekend"
+    assert details["readback"]["gelezen"] is readable
+    assert details["readback"]["gelijk_aan_momentopname"] is (False if readable else None)
+    result = scene.restore_row(view["proposal_id"])["result"]
+    assert result["uitkomst"] == "onbekend"
+    assert result["reden"] == ("readback_wijkt_af" if readable else "readback_ontbreekt")
+    assert len(scene.nr.writes) == 1 and not b11.outbox(linked, "automation.restore.applied")
 
 
 # ------------------------------------------------------------ R-VEILIG-9: herstel en worker tegelijk (één slot op het register)

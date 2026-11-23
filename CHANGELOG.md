@@ -1,5 +1,13 @@
 # Wijzigingen
 
+## S-P2-340 herstel — flowherstel via de Hub (2026-11-23)
+
+- Een herstelvoorstel bevat een lijst met de gevraagde momentopname, de checksums van beide flowsets, de aantallen
+  gewijzigde nodes en de keuze voor credentials. De veldnamen per node blijven beschikbaar in `flow_diff`.
+- Na een bevestigde readback ontvangt de Hub de verzoek-ID, methode, beleidshash, uitvoeringstijd en eindhash.
+  Bij een ontbrekende of afwijkende readback meldt de connector een onbekende uitkomst. In de lokale interopproef
+  accepteerde de Hub het herstel en weigerde de connector een kopie met één gewijzigde letter.
+
 ## S-P2-340 deel 2 — rooktest en herstelvoorstel (2026-11-23)
 
 - De rooktest controleert op een verse installatie de status van **Node-RED-automatisering (B11)**. Zonder ingestelde bron moet precies die rij **Niet ingesteld** tonen.

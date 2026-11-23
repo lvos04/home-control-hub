@@ -15,12 +15,14 @@ tweede mutatie niet (§4.6); service-token inkomend geweigerd (§4.3); ``key-rot
 rotatie op verzoek van de beheerder (§3.8); dienst-JWT van de Hub mag ``hub-link`` lezen en ontkoppelen, daarna 401
 ``not_linked`` (ook bij herhalen); opnieuw koppelen met een nieuw token (zelfde ``service_id``) en intrekken door de
 Hub → ``revoked``. De dienst-JWT wordt met de sleutelring van de Hub zelf gemaakt (``hub.keys.KeyRing``): de route
-``POST /api/v1/services/{id}/unlink`` van de Hub vraagt een gemeten dienstadres (D03 + inventaris) dat hier niet bestaat.
+``POST /connector/v1/hub-link/unlink`` wordt zo rechtstreeks getoetst met een verse dienst-JWT.
 
 B11 (S-P2-340): een flow in Node-RED (de nep-Node-RED van de dienst-E2E, ``tests/e2e/sim_node_red.py``; Node-RED zelf
 is hier Sim-getest) vraagt met een flow-token ``notification.send`` aan; het event ``flow.action.requested`` komt door
 de inbox van de echte Hub en wordt daar een gewoon voorstel met actor ``flow`` (``hub.actions.flows``), zonder dat deze
-dienst iets uitvoert. De bron-ID van elk event is de ``event_id`` (uniek, ook na herstel).
+dienst iets uitvoert. De bron-ID van elk event is de ``event_id`` (uniek, ook na herstel). Een beheerder keurt
+vervolgens een R2-herstel goed. De Hub ondertekent het verzoek en bevestigt de readback. Hetzelfde verzoek met één
+gewijzigd teken wordt door de connector geweigerd.
 """
 
 from __future__ import annotations
@@ -34,7 +36,10 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
 import httpx
@@ -45,6 +50,7 @@ HUB_PYTHON = os.environ.get("HCH_REAL_HUB_PYTHON", "")
 E2E_DIR = Path(__file__).resolve().parents[1] / "e2e"
 A = "/integrations/v1/automation"
 ADMIN_DB_URL = os.environ.get("HCH_TEST_ADMIN_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/postgres")
+HUB_FIXTURE = Path(__file__).with_name("hub_herstelproef.py")
 APP_ID = "home-control-hub"
 HUB_DB, SVC_DB = "hch_interop_hub", "hch_interop_dienst"
 
@@ -134,9 +140,7 @@ class Lab:
         code = re.search(r"SETUPCODE[^:]*:\s*([0-9A-Z-]+)", out)
         assert code, out
         subprocess.run([HUB_PYTHON, "-m", "hub", "migrate"], env=self.hub_env, check=True, capture_output=True)
-        self.start(
-            "hub", [HUB_PYTHON, "-m", "hub", "api", "--host", "127.0.0.1", "--port", str(self.hub_port)], self.hub_env
-        )
+        self.start("hub", [HUB_PYTHON, str(HUB_FIXTURE), "api", str(self.hub_port)], self.hub_env)
         _wait(lambda: self.http.get("/api/v1/setup/status").status_code == 200)
         return code.group(1)
 
@@ -311,8 +315,10 @@ def test_real_hub_lifecycle(lab: Lab) -> None:
     _wait(lambda: (d := lab.link())["service_token_last4"] != old_last4 and d.get("confirmed_at"))
     assert lab.service_record()["rotatie"]["aangevraagd_op"] is None
 
-    # 4b. B11 (S-P2-340): een flow vraagt een actie aan; de echte Hub maakt er een voorstel van met actor flow
+    # B11, 4(a): een flowverzoek wordt bij de Hub een voorstel met actor flow. 4(b/c): ondertekend herstel en weigering.
     flow_request_becomes_a_hub_proposal(lab)
+    with observe_connector(lab) as (port, apply_requests):
+        restore_via_hub(lab, port, apply_requests)
 
     # 5. dienst-JWT van de Hub: hub-link lezen en ontkoppelen; daarna weigert de dienst elke Hub-JWT (§3.8, §4.3)
     assert lab.api("GET", "/connector/v1/hub-link", lab.hub_service_jwt(link["service_id"])).status_code == 200
@@ -406,3 +412,108 @@ def flow_request_becomes_a_hub_proposal(lab: Lab) -> None:
     assert [(e["event_id"], e["source_event_id"]) for e in hub_events] == [(str(rows[0][0]), str(rows[0][0]))]
     # deze dienst voert zelf niets uit: Node-RED kreeg geen enkele schrijfactie
     assert httpx.get(f"{lab.nr_url}/sim/state").json()["writes"] == []
+
+
+@contextmanager
+def observe_connector(lab: Lab) -> Iterator[tuple[int, list[dict[str, Any]]]]:
+    """Stuurt de twee lokale connectoroproepen ongewijzigd door. Alleen de apply-body blijft in het testgeheugen."""
+    applied: list[dict[str, Any]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            if self.path not in ("/connector/v1/propose", "/connector/v1/apply"):
+                self.send_error(404)
+                return
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path == "/connector/v1/apply":
+                applied.append(json.loads(body))
+            headers = {key: self.headers[key] for key in ("Content-Type", "Authorization", "Idempotency-Key")}
+            reply = httpx.post(lab.api_url + self.path, content=body, headers=headers, trust_env=False, timeout=10)
+            self.send_response(reply.status_code)
+            self.send_header("Content-Type", reply.headers["Content-Type"])
+            self.end_headers()
+            self.wfile.write(reply.content)
+
+    with HTTPServer(("localhost", 0), Handler) as server:
+        worker = Thread(target=server.serve_forever)
+        worker.start()
+        try:
+            yield server.server_port, applied
+        finally:
+            server.shutdown()
+            worker.join()
+
+
+def restore_via_hub(lab: Lab, connector_port: int, apply_requests: list[dict[str, Any]]) -> None:
+    """Een beheerder vraagt bij de Hub om herstel van de eerste stand van de lokale simulator."""
+    from tests.e2e.test_automation_e2e import _flows_v1, _flows_v2
+
+    snapshot = lab.api("POST", f"{A}/snapshots", lab.user_jwt(), idem=True)
+    assert snapshot.status_code == 201
+    with httpx.Client(base_url=lab.nr_url, trust_env=False) as nr:
+        current = nr.post("/sim/deploy", json={"flows": _flows_v2(), "credentials": {}})
+        assert current.status_code == 200 and nr.get("/sim/state").json()["flows"] == _flows_v2()
+
+    subprocess.run(
+        [HUB_PYTHON, str(HUB_FIXTURE), "inventaris", APP_ID, str(connector_port)], env=lab.hub_env, check=True
+    )
+    body = {
+        "action_id": "automation.flows.restore",
+        "target": {"app_id": APP_ID, "resource": "node_red"},
+        "parameters": {"snapshot_id": snapshot.json()["snapshot"]["id"]},
+        "reason": "Herstel de eerste stand van de simulator",
+    }
+    preview = lab.api("POST", "/connector/v1/propose", lab.user_jwt(), idem=True, body=body)
+    assert preview.status_code == 201
+    assert preview.json()["target"] == body["target"] and preview.json()["parameters"] == body["parameters"]
+    response = lab.hub_post("/api/v1/actions", body, idem=True)
+    state = httpx.get(f"{lab.nr_url}/sim/state", trust_env=False).json()
+    assert state["flows"] == _flows_v2() and state["writes"] == []
+    if response.status_code != 201:
+        pytest.fail(
+            f"Connector HTTP {preview.status_code} (diff={type(preview.json()['diff']).__name__}); "
+            f"Hub HTTP {response.status_code} {response.json()['code']} "
+            f"({response.json()['details'].get('reason_code')}); Node-RED: 0 schrijfacties",
+            pytrace=False,
+        )
+    proposal = response.json()
+    assert (proposal["status"], proposal["risk_class"]) == ("wacht_op_goedkeuring", "R2")
+    action = f"/api/v1/actions/{proposal['request_id']}"
+    approval = {field: proposal[field] for field in ("preview_hash", "resource_etag", "policy_hash")}
+    assert "backup_gate_rood" in {b["code"] for b in proposal["blokkades"]}
+    denied = lab.hub_post(f"{action}/approve", approval, idem=True)
+    assert (denied.status_code, denied.json()["code"]) == (409, "actie_geblokkeerd")
+    assert not apply_requests
+    subprocess.run([HUB_PYTHON, "-m", "hub", "backup-now"], env=lab.hub_env, check=True, capture_output=True)
+    approved = lab.hub_post(f"{action}/approve", approval, idem=True)
+    assert approved.status_code == 200, approved.json().get("details")
+    result = lab.hub_post(f"{action}/execute", idem=True)
+    if result.status_code != 200:
+        state = httpx.get(f"{lab.nr_url}/sim/state", trust_env=False).json()
+        pytest.fail(
+            f"Hub HTTP {result.status_code} {result.json().get('code')}; Node-RED: {len(state['writes'])} schrijfactie(s)"
+        )
+    assert result.json()["status"] == "uitgevoerd"
+    proof = result.json()["resultaat"]
+    readback = proof["readback"]
+    assert readback["gelezen"] is True and readback["gelijk_aan_momentopname"] is True
+    assert readback["snapshot_id"] == snapshot.json()["snapshot"]["id"]
+    assert readback["checksum_sha256"] == snapshot.json()["snapshot"]["checksum_sha256"]
+    assert proof["after_hash"] == "sha256:" + readback["checksum_sha256"]
+    assert proof["before_hash"] == proposal["resource_etag"]
+    assert proof["policy_hash"] == approval["policy_hash"] and proof["methode"] == body["action_id"]
+    state = httpx.get(f"{lab.nr_url}/sim/state", trust_env=False).json()
+    assert state["flows"] == _flows_v1() and len(state["writes"]) == 1
+
+    # 4(c): verander één letter in het ondertekende bericht. Een verse dienst-JWT en Idempotency-Key zorgen
+    # dat de antwoordcache en de JWT-replaycontrole de controle op de handtekening niet afdekken.
+    (signed,) = apply_requests
+    assert signed["approval"]["request_id"] == proposal["request_id"]
+    assert signed["proposal"]["reason"] == body["reason"]
+    signed["proposal"]["reason"] = "h" + signed["proposal"]["reason"][1:]
+    bearer = lab.hub_service_jwt(lab.link()["service_id"])
+    refused = lab.api("POST", "/connector/v1/apply", bearer, idem=True, body=signed)
+    assert (refused.status_code, refused.json()["code"]) == (403, "forbidden")
+    assert refused.json()["details"]["reason"] == "handtekening_ongeldig"
+    after = httpx.get(f"{lab.nr_url}/sim/state", trust_env=False).json()
+    assert (after["flows"], after["rev"], after["writes"]) == (state["flows"], state["rev"], state["writes"])

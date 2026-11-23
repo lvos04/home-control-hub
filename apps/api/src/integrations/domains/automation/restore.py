@@ -61,7 +61,7 @@ from ...errors import ApiError, forbidden, not_found
 from ...security import execreq
 from ...security.auth import Principal
 from ...security.vault import Vault
-from ...timeutil import iso
+from ...timeutil import iso, utcnow
 from . import nodered, policy, snapshots
 from .models import AutomationExecutionNonce, AutomationRestore, AutomationSnapshot
 from .nodered import SOURCE_ID, NodeRedError, client_from_source
@@ -126,6 +126,8 @@ def target_ok(target: Any) -> bool:
 
 def restore_view(row: AutomationRestore) -> dict[str, Any]:
     plan = row.plan or {}
+    flow_diff = plan.get("diff", {})
+    credentials = plan.get("credentials", {})
     return {
         "proposal_id": str(row.id),
         "action_id": ACTION_ID,
@@ -134,14 +136,26 @@ def restore_view(row: AutomationRestore) -> dict[str, Any]:
         "parameters": {"snapshot_id": str(row.target_snapshot_id)},
         "preview_hash": _prefixed(row.preview_hash),
         "resource_etag": _prefixed(row.base_checksum),
-        "diff": plan.get("diff", {}),
+        # De eigenaar vervangt de volledige flowset. Deze preview past ook bij grote flows binnen de 8 KiB
+        # van de Hub. De beheerder kan de verschillen per node en veld apart inzien, ook bij oudere voorstellen.
+        "diff": [
+            {
+                "object": SOURCE_ID,
+                "key": str(row.target_snapshot_id),
+                "operation": "terugzetten",
+                "changes": [{"field": "checksum_sha256", "before": row.base_checksum, "after": row.target_checksum}],
+                "aantallen": flow_diff.get("aantallen", {}),
+                "credentials_terugzetten": credentials.get("terugzetten"),
+            }
+        ],
+        "flow_diff": flow_diff,
         "blast_radius": plan.get("blast_radius", {}),
         "risk_claim": MIN_RISK_CLASS,
         "risk_class_min": MIN_RISK_CLASS,
         "rollback_recipe": plan.get("rollback_recipe", {}),
         "requires_backup": False,
         "warnings": plan.get("waarschuwingen", []),
-        "credentials": plan.get("credentials", {}),
+        "credentials": credentials,
         "notes_nl": plan.get("notes_nl", []),
         "status": row.status,
         "apply_status": APPLY_STATUS,
@@ -696,7 +710,7 @@ def apply(
         credentials_sent=send_credentials is not None,
         credentials_note=credentials_note,
         trace_id=trace_id,
-        now=now,
+        now=utcnow(),
     )
 
 
@@ -814,22 +828,20 @@ def _record_outcome(
     now: datetime,
 ) -> Result:
     after_checksum = policy.flows_checksum(after.flows) if after is not None else None
+    matches_snapshot = after_checksum == snapshot.checksum_sha256 == row.target_checksum if after is not None else None
     readback: dict[str, Any] = {
         "gelezen": after is not None,
+        "snapshot_id": str(snapshot.id),
         "checksum_sha256": after_checksum,
         "node_red_rev": after.rev if after is not None else None,
-        "gelijk_aan_momentopname": after_checksum == row.target_checksum if after_checksum else None,
+        "gelijk_aan_momentopname": matches_snapshot,
         "gelijk_aan_toestand_vooraf": after_checksum == before_checksum if after_checksum else None,
     }
     hashes = {
         "before_hash": _prefixed(before_checksum),
         "after_hash": _prefixed(after_checksum) if after_checksum else None,
     }
-    if (
-        after is not None
-        and after_checksum == row.target_checksum
-        and (write_error is None or write_error.reason in UPSTREAM_UNKNOWN)
-    ):
+    if after is not None and matches_snapshot and (write_error is None or write_error.reason in UPSTREAM_UNKNOWN):
         # het slot op het flowregister vóór latest_snapshot en de flows (R-VEILIG-9): een synchronisatie die tegelijk
         # loopt, schrijft dan niet dezelfde flowversie
         snapshots.lock_register(session)
@@ -850,9 +862,16 @@ def _record_outcome(
         row.status = "uitgevoerd"
         row.applied_at = now
         row.post_snapshot_id = uuid.UUID(result.snapshot_id) if result.snapshot_id else None
-        row.result = {
+        proof = {
+            "request_id": approval["request_id"],
+            "methode": ACTION_ID,
+            "policy_hash": approval["policy_hash"],
+            "uitgevoerd_op": iso(row.applied_at),
             **hashes,
             "readback": readback,
+        }
+        row.result = {
+            **proof,
             "credentials_teruggezet": credentials_sent,
             **({"credentials_niet_teruggezet": credentials_note} if credentials_note else {}),
             "bevestigd_via": "readback" if write_error is not None else "antwoord_en_readback",
@@ -898,8 +917,7 @@ def _record_outcome(
             "status": "uitgevoerd",
             "proposal_id": str(row.id),
             "action_id": ACTION_ID,
-            "readback": readback,
-            **hashes,
+            **proof,
             "pre_snapshot_id": str(row.pre_snapshot_id),
             "post_snapshot_id": str(row.post_snapshot_id),
             "credentials_teruggezet": credentials_sent,
@@ -915,10 +933,15 @@ def _record_outcome(
 
     # niet (aantoonbaar) geslaagd: eerlijk melden wat er gemeten is
     unchanged = after_checksum is not None and after_checksum == before_checksum
-    reason = write_error.reason if write_error is not None else "readback_wijkt_af"
-    extra = {**hashes, "ongewijzigd": unchanged if after is not None else None}
+    readback_reason = "readback_wijkt_af" if after is not None else "readback_ontbreekt"
+    reason = write_error.reason if write_error is not None else readback_reason
+    refused = write_error is not None and (
+        unchanged or write_error.reason in ("versie_conflict", "credentials_niet_te_ontsleutelen")
+    )
+    outcome = "mislukt" if refused else "onbekend"
+    extra = {**hashes, "ongewijzigd": unchanged if after is not None else None, "uitkomst": outcome}
     _fail(session, row, reason=reason, trace_id=trace_id, now=now, extra=extra)
-    _set_outcome(session, request_nonce, "mislukt")
+    _set_outcome(session, request_nonce, outcome)
     audit.record(
         session,
         domain="automation",
@@ -927,7 +950,9 @@ def _record_outcome(
         entity_id=str(row.id),
         principal=principal,
         trace_id=trace_id,
-        message_nl="Herstel van de flows in Node-RED is niet gelukt.",
+        message_nl="Herstel van de flows in Node-RED is niet gelukt."
+        if refused
+        else "De uitkomst van het herstel is onbekend.",
         details={"reden": reason, "snapshot_id": str(snapshot.id), **extra},
     )
     session.flush()  # zie hierboven: binnen de blokkade van _finish_apply (R-TECH-2)
@@ -972,7 +997,7 @@ def _record_outcome(
         "Het herstel is niet bevestigd door de readback. Controleer de flows in Node-RED; de toestand van vóór het "
         "herstel staat in de momentopname 'voor_herstel'.",
         trace_id,
-        details,
+        {**details, "uitkomst": outcome},
     )
 
 
