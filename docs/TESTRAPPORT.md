@@ -676,4 +676,8 @@ De contracteigenaar bepaalt welke vorm beide diensten moeten gebruiken.
 | Rooktest in een eigen container met één extra proces als UID 0 | Exit 1. Precies de procescontrole faalde, de overige 37 controles waren groen. |
 | Unit- en integratietests op een eigen PostgreSQL 16 | 1.676 tests groen. |
 | `make e2e` met de simulators | 20 tests groen. |
+| Bestaande `make interop` tegen `13a0ccf` | De levenscyclusproef met `flow.action.requested` was groen. Vier energietests werden overgeslagen omdat `shc_api` ontbrak. |
 | Strikte manifestvalidatie en de twee Docker-socketvarianten | Het manifest was geldig. De validator weigerde beide varianten. |
+
+Forgejo-run 15 op `e6b6d2b` bevestigde de bouw en de rooktest van het image. De herstelproef tegen de
+echte Hub-code draaide lokaal. [CI-run 15](https://git.medialeon.nl/leon/home-control-hub/actions/runs/15)
