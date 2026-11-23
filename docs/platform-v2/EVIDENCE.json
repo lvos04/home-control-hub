@@ -5,9 +5,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_b13_001_recovery.py::test_break_glass_testable_while_authenticator_offline; apps/api/tests/integration/test_b13_001_recovery.py::test_full_recovery_journey_and_readiness; apps/api/tests/integration/test_b13_001_recovery.py::test_recovery_kit_export_verify_without_secrets; apps/api/tests/integration/test_b13_001_recovery.py::test_register_refuses_secrets_and_sso_only_break_glass; apps/api/tests/integration/test_b13_001_recovery.py::test_emergency_access_rules; apps/api/tests/unit/test_recovery_rules.py; tests/e2e/test_service_e2e.py::test_03_b13_001_break_glass_with_authentik_offline; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_every_route_requires_auth_and_a_role; apps/api/tests/integration/test_review_p0.py::test_kit_verify_rejects_hostile_parameters_without_500; apps/api/tests/integration/test_review_p0.py::test_status_page_shows_only_recovery_level; deploy/allinone/smoke-test.sh (23/23); contract 1.2: commit ff2d85c, a872e7f (ADR-0010 besluit 18, ADR-0003 bijgewerkt); HC11: apps/api/tests/integration/test_review_p0.py::test_status_page_shows_only_recovery_level (statuspagina in Peil toont alleen het totaalniveau, geen accounts of aandachtspunten); ontwerpreview (ADR-0012): commit b4b4875; apps/api/tests/unit/test_statuspagina_peil.py::test_recovery_level_always_has_a_reason; contract 1.3 (100.64.0.0/10 alleen met toestemming): commit 6431bba; apps/api/tests/integration/test_b13_001_recovery.py::test_cgnat_only_with_explicit_admin_permission",
   "blokkade": "Echte acceptatie vereist: lokale noodlogin in de Hub (ai-server-manager; nog niet gebouwd), Authentik-installatie (I09, D17 onbekend) en een echte oefening op de NAS — NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
-  "opmerking": "Herstelregister zonder geheimen; minstens twee herstelmethodes waarvan één zonder SSO; noodaccount kan niet SSO-only zijn; noodtoegang alleen LAN/VPN-bereiken met sessieduur en herbevestiging; zelftest slaagt met Authentik offline; versleutelde herstelkit (geen sleutels); audit + events. MFA alleen als attestatie. Na review: herstelkit-openen begrensd (geen 500/geheugenuitputting), statuspagina toont alleen het totaalniveau. Contract 1.2 (HC10): de noodlogin zelf zit in de Hub (§4.1, H6) en hangt niet van deze dienst af; deze dienst blijft register en adviseur en sso.recovery.readiness_changed blijft de bron voor de Hub-cache (die alleen mag verscherpen). Ontwerpreview: de statuspagina geeft bij elk totaalniveau van het herstelregister een vaste reden (Onbekend: \"nog niet volledig ingevuld of getest\"), zonder accountnamen of aandachtspunten. Contract 1.3 §4.1: 100.64.0.0/10 (CGNAT/Tailscale) telt standaard niet als privé; alleen met cgnat_toegestaan (C1.3-HCH-10).",
+  "opmerking": "Herstelregister zonder geheimen; minstens twee herstelmethodes waarvan één zonder SSO; noodaccount kan niet SSO-only zijn; noodtoegang alleen LAN/VPN-bereiken met sessieduur en herbevestiging; zelftest slaagt met Authentik offline; versleutelde herstelkit (geen sleutels); audit + events. MFA alleen als attestatie. Na review: herstelkit-openen begrensd (geen 500/geheugenuitputting), statuspagina toont alleen het totaalniveau. Contract 1.2 (HC10): de noodlogin zelf zit in de Hub (§4.1, H6) en hangt niet van deze dienst af; deze dienst blijft register en adviseur en sso.recovery.readiness_changed blijft de bron voor de Hub-cache (die alleen mag verscherpen). Ontwerpreview: de statuspagina geeft bij elk totaalniveau van het herstelregister een vaste reden (Onbekend: \"nog niet volledig ingevuld of getest\"), zonder accountnamen of aandachtspunten. Contract 1.3 §4.1: 100.64.0.0/10 (CGNAT/Tailscale) telt standaard niet als privé; alleen met cgnat_toegestaan (C1.3-HCH-10). Geen NAS-aantekening: vóór de NAS-oefening rest bouwwerk, de lokale noodlogin in de Hub (ai-server-manager) en de Authentik-installatie (I09).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "B13-002",
@@ -35,9 +35,9 @@
   "validatie": "Unit-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database; apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty; review: 935a297, 5c75415, a8bf2a9, 0a6973b",
   "blokkade": "Discovery-adapter (NetAlertX, I11) niet gebouwd; LAN-gegevens D03/D11 onbekend — NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "Inventaris (NetAlertX, AdGuard Home, Tailscale, Cloudflared, router; alles te verifiëren) en datamodel; apparaten standaard 'onbekend'; database weigert categorie 'malware' zonder bewijs. Toelichting validatie: database-invariant: geen malware zonder bewijs.",
+  "opmerking": "Inventaris (NetAlertX, AdGuard Home, Tailscale, Cloudflared, router; alles te verifiëren) en datamodel; apparaten standaard 'onbekend'; database weigert categorie 'malware' zonder bewijs. Toelichting validatie: database-invariant: geen malware zonder bewijs. Geen NAS-aantekening: vóór de NAS-test rest bouwwerk, de discovery-adapter voor NetAlertX (I11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "B10-002",
@@ -155,9 +155,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "apps/api/tests/integration/test_b14_002_tijdreeks.py",
   "blokkade": "Open softwarepunten zijn de workerhartslag bij bronstoring, onbekende queryvelden en het antwoord bij onbereikbare archiefopslag. NIET GEVALIDEERD (hardware). De fysieke EX28-proef bij een tellerreset en tijdwisseling volgt in S-P6-21.",
-  "opmerking": "De lokale bronproeven van my_house toetsen geschatte tellerstanden en een overgeslagen reset vóór en na uuraggregatie. De rapportproeven toetsen stabiele meter-ID’s bij gelijke namen, herlevering, een onbeslist wisseluur en een ontbrekende tegenover een expliciete nulvergoeding. De woningdagen van 23 en 25 uur zijn Sim-getest. EX28 blijft als programmaregel Geblokkeerd.",
+  "opmerking": "De lokale bronproeven van my_house toetsen geschatte tellerstanden en een overgeslagen reset vóór en na uuraggregatie. De rapportproeven toetsen stabiele meter-ID’s bij gelijke namen, herlevering, een onbeslist wisseluur en een ontbrekende tegenover een expliciete nulvergoeding. De woningdagen van 23 en 25 uur zijn Sim-getest. EX28 blijft als programmaregel Geblokkeerd. Geen NAS-aantekening: vóór de hardwareproef rest bouwwerk, de open softwarepunten uit de blokkade.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-21"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "B14-003",
@@ -195,9 +195,9 @@
   "validatie": "Sim-geslaagd; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/unit/test_security.py::test_http_jwks_adds_no_trust; apps/api/tests/integration/test_contract_1_2_link.py::test_pairing_refused_after_first_link_even_when_unlinked_or_revoked; tests/e2e/test_service_e2e.py::test_06_pinned_keys_keep_working_during_hub_outage; tests/e2e/test_service_e2e.py::test_10_hub_gone_service_stays_up; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_every_route_requires_auth_and_a_role; apps/api/tests/unit/test_security.py::test_not_linked; apps/api/tests/unit/test_security.py::test_revoked; apps/api/tests/unit/test_security.py::test_corrupt_link_file_trusts_nothing; apps/api/tests/integration/test_review_p0.py::test_env_token_is_single_use_across_unlink_and_restart; P1: apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_drift_version_and_outage (ingetrokken Authentik-token → 502, nooit doorgaan); apps/api/tests/integration/test_b13_p1_authentik.py::test_b13_004_partial_read_never_revokes (Authentik weg → sync 'fout' + event sso.authentik.sync.failed, één keer); apps/api/tests/unit/test_b13_authentik_unit.py::test_detect_version_and_least_privilege; b81d2e5 (JWKS-cache; sinds contract 1.2 vervangen door gepinde sleutels: apps/api/tests/unit/test_security.py::test_unknown_kid_is_rejected_and_triggers_background_poll); review P1 (QA): e418742, 8a5ca1d, 8db6991, 6beb38d, f327781; apps/api/tests/integration/test_review_p1.py::test_rights_map_is_never_shown_as_ok_when_stale (ingetrokken/onbereikbare bron → rechtenkaart 'verouderd', nooit 'ok'); apps/api/tests/integration/test_review_p1.py::test_no_change_without_a_hub_signed_request; contract 1.2: commit ff2d85c, 9623368; apps/api/tests/integration/test_enrollment_and_worker.py::test_revocation_needs_401_on_services_self; tests/e2e/test_service_e2e.py::test_09_revoke_relink_with_new_env_token_then_unlink_by_hub; tests/interop/test_real_hub.py::test_real_hub_lifecycle (lokaal tegen de echte Hub-API van ai-server-manager b4c7a0e, niet in CI); GitHub Actions-runs 42658212431 en 42659058663 (commit 3e70db9) geslaagd; HC11 statuspagina in Peil: commits 730366d, ae23740, bb7a5a2, b3b9bed; apps/api/tests/integration/test_statuspagina_http.py::test_revoked; ::test_unreadable_link_file; apps/api/tests/unit/test_statuspagina_peil.py::test_invariants_over_all_combinations; tests/ui/statuspagina.spec.ts (toestand ingetrokken × licht/donker × 320–1440 px); GitHub Actions-run 42664729776 (commit b3b9bed) geslaagd; ontwerpreview (ADR-0012): commits b4b4875, ba82028, 0247a15; tests/ui/ontwerpreview.py (draaiende dienst + Hub-simulator, toestanden ingetrokken/ontkoppeld/onleesbaar/niet-bevestigd × 320–1440 × licht/donker, 0 overtredingen); apps/api/tests/unit/test_statuspagina_peil.py::test_stale_measurement_is_never_green; ::test_pill_words_follow_the_tone; GitHub Actions-run 42673722426 (commit b62abeb) geslaagd (python, statuspagina-ui, image; correctie ADR-0013: de ontwerpreview-stap beoordeelde in CI door een padfout 0 metingen, de 140 metingen zijn lokaal gedaan); review contract 1.2 (QA, ADR-0013): commits 6f3aad0, b7bbe80, 87f1d06, 32740ab, 727f70a, 6755c78; tests/ui/ontwerpreview.py (met het CI-commando lokaal: 140 metingen, 0 overtredingen; faalt nu als er niets gemeten is); apps/api/tests/unit/test_hublink_unit.py::test_write_over_unreadable_file_keeps_it_and_stays_fail_closed; ::test_unreadable_file_without_write_is_untouched; apps/api/tests/integration/test_contract_1_2_link.py::test_unreadable_link_file_stays_fail_closed_after_a_failed_env_token; apps/api/tests/integration/test_platform_core.py::test_stale_probe_is_never_shown_as_healthy; apps/api/tests/unit/test_security.py::test_invalid_claims (aud als lijst); apps/api/tests/unit/test_catalog_and_contracts.py::test_hub_url_rejected (afwijkende IPv4-vormen); apps/api/tests/unit/test_contract_docs.py::test_evidence_references_existing_tests; deploy/allinone/smoke-test.sh (31/31, ook healthcheck als 568); GitHub Actions-run 42678823148 (commit 089858f) geslaagd: python (567 geslaagd + 1 overgeslagen, E2E 14), statuspagina-ui (UI-tests 18; ontwerpreview nu echt in CI: 140 metingen, 0 overtredingen) en image (rooktest 31/31); contract 1.3: commit 433cf8e, 1b7a93d; apps/api/tests/integration/test_contract_1_3_auth.py::test_authentication_comes_before_the_body; apps/api/tests/integration/test_contract_1_3_connector.py::test_unknown_never_green_and_not_configured_is_no_check",
   "blokkade": "Integrale run op de echte NAS ontbreekt.",
-  "opmerking": "Alleen het deel van home-control-hub: ongeldige/ingetrokken credentials of onbereikbare JWKS → 401, nooit open toegang; connector-health 'degraded'. Hub-kant (connector unknown + incident) hoort bij ai-server-manager. P1: ook voor het Authentik-token: geweigerd/onbereikbaar → status degraded/fout + event, nooit gesimuleerd succes. Review P1: ook de Authentik-rechtenkaart toont na uitval of een ingetrokken token geen oude gegevens als gezond. Contract 1.2: intrekken in de Hub → services/self 401 → state ingetrokken → elke Hub-JWT 401 revoked (fail-closed); netwerkfout, 5xx en 429 zijn nooit een intrekking; opnieuw koppelen alleen via de Hub (nieuw env-token). Interop met de echte Hub-API is lokaal gedraaid (eigen database, 127.0.0.1); niet op een echte NAS. HC11: de statuspagina (Peil) toont een ingetrokken koppeling als 'Onbekend · Niet gereed' met 'Opnieuw koppelen gaat via de Hub', nooit groen en zonder koppelformulier; een onleesbaar koppelbestand geeft een melding met code en trace-ID (Sim-getest, Chromium). Ontwerpreview (ADR-0012, docs/ontwerp/PEIL_REVIEW.md): een bronmeting ouder dan 15 minuten is op de statuspagina Onbekend (\"laatst bekend …\"), nooit de laatst bekende stand; vóór de review stond een meting van 3 dagen oud als Gezond. Sim-getest in Chromium; echte schermlezer en echte NAS NIET GEVALIDEERD. Review contract 1.2 (QA, ADR-0013): een onleesbaar hub-link.json werd na een mislukte env-tokenpoging stil vervangen door 'nooit gekoppeld', waarna het koppelformulier terugkwam (open bij fout); nu blijft de status onbekend (origineel bewaard, /readyz meldt koppelstatus_onleesbaar) tot een geslaagde koppeling met een nieuw token. Bronmetingen ouder dan 15 min zijn nu ook in de API en de connector-health 'unknown' (meting_verouderd). Een Hub-JWT met aud als lijst en Hub-adressen met afwijkende IPv4-vormen (127.1, 0x7f000001, …) worden geweigerd. Verwijzingen naar tests die met contract 1.2 vervielen (JWKS-cache, lokale ontkoppelcode) en een sjabloonrest zijn vervangen door de huidige tests; een test bewaakt dat elke verwijzing bestaat. Contract 1.3: zonder geldige aanmelding altijd 401 (ook bij een onleesbare body); connector-health is de slechtste check, onbekend nooit healthy.",
+  "opmerking": "Alleen het deel van home-control-hub: ongeldige/ingetrokken credentials of onbereikbare JWKS → 401, nooit open toegang; connector-health 'degraded'. Hub-kant (connector unknown + incident) hoort bij ai-server-manager. P1: ook voor het Authentik-token: geweigerd/onbereikbaar → status degraded/fout + event, nooit gesimuleerd succes. Review P1: ook de Authentik-rechtenkaart toont na uitval of een ingetrokken token geen oude gegevens als gezond. Contract 1.2: intrekken in de Hub → services/self 401 → state ingetrokken → elke Hub-JWT 401 revoked (fail-closed); netwerkfout, 5xx en 429 zijn nooit een intrekking; opnieuw koppelen alleen via de Hub (nieuw env-token). Interop met de echte Hub-API is lokaal gedraaid (eigen database, 127.0.0.1); niet op een echte NAS. HC11: de statuspagina (Peil) toont een ingetrokken koppeling als 'Onbekend · Niet gereed' met 'Opnieuw koppelen gaat via de Hub', nooit groen en zonder koppelformulier; een onleesbaar koppelbestand geeft een melding met code en trace-ID (Sim-getest, Chromium). Ontwerpreview (ADR-0012, docs/ontwerp/PEIL_REVIEW.md): een bronmeting ouder dan 15 minuten is op de statuspagina Onbekend (\"laatst bekend …\"), nooit de laatst bekende stand; vóór de review stond een meting van 3 dagen oud als Gezond. Sim-getest in Chromium; echte schermlezer en echte NAS NIET GEVALIDEERD. Review contract 1.2 (QA, ADR-0013): een onleesbaar hub-link.json werd na een mislukte env-tokenpoging stil vervangen door 'nooit gekoppeld', waarna het koppelformulier terugkwam (open bij fout); nu blijft de status onbekend (origineel bewaard, /readyz meldt koppelstatus_onleesbaar) tot een geslaagde koppeling met een nieuw token. Bronmetingen ouder dan 15 min zijn nu ook in de API en de connector-health 'unknown' (meting_verouderd). Een Hub-JWT met aud als lijst en Hub-adressen met afwijkende IPv4-vormen (127.1, 0x7f000001, …) worden geweigerd. Verwijzingen naar tests die met contract 1.2 vervielen (JWKS-cache, lokale ontkoppelcode) en een sjabloonrest zijn vervangen door de huidige tests; een test bewaakt dat elke verwijzing bestaat. Contract 1.3: zonder geldige aanmelding altijd 401 (ook bij een onleesbare body); connector-health is de slechtste check, onbekend nooit healthy. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "B13-004",
@@ -225,9 +225,9 @@
   "validatie": "Sim-geslaagd; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 0f38e1d; apps/api/tests/integration/test_review_p0.py::test_older_app_refuses_newer_database; handmatige imagetest P0-image (0001) → P1-image (0002, back-up voor-upgrade-0001-*.dump 0600) → P0-image weigert te starten zonder wijziging (zie docs/TESTRAPPORT.md)",
   "blokkade": "Integrale run op de echte NAS ontbreekt.",
-  "opmerking": "Alleen het deel van home-control-hub: tag-only rollback over een schemawijziging wordt geweigerd met een duidelijke melding; herstel = back-up of dataset-snapshot. Toelichting validatie: alleen home-control-hub: echte images lokaal in Docker, geen NAS.",
+  "opmerking": "Alleen het deel van home-control-hub: tag-only rollback over een schemawijziging wordt geweigerd met een duidelijke melding; herstel = back-up of dataset-snapshot. Toelichting validatie: alleen home-control-hub: echte images lokaal in Docker, geen NAS. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "EX18",
@@ -235,9 +235,9 @@
   "validatie": "Sim-geslaagd; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 006123d; apps/api/tests/integration/test_b13_p1_authentik.py::test_hub_oidc_proposal_is_preview_only (risk_claim 'R0' → voorstel R2); database weigert R0/R1 voor SSO-voorstellen; review P1 (QA): e418742, 8a5ca1d, 8db6991, 6beb38d, f327781; apps/api/tests/integration/test_review_p1.py::test_apply_never_executes_even_with_a_signed_looking_request (een meegestuurde policy_decision R2 voert niets uit)",
   "blokkade": "De beslissende policy-engine zit in de Hub (ai-server-manager); integrale run ontbreekt.",
-  "opmerking": "Alleen het connectordeel: een meegegeven risk_claim wordt genegeerd; SSO-wijzigingen zijn minimaal R2. Toelichting validatie: alleen home-control-hub.",
+  "opmerking": "Alleen het connectordeel: een meegegeven risk_claim wordt genegeerd; SSO-wijzigingen zijn minimaal R2. Toelichting validatie: alleen home-control-hub. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "EX19",
@@ -245,9 +245,9 @@
   "validatie": "Sim-geslaagd; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 006123d; apps/api/tests/integration/test_b13_p1_authentik.py::test_proposal_drift_version_and_outage (expected_version ≠ resource_etag → 409 resource_gewijzigd); apps/api/tests/unit/test_b13_authentik_unit.py::test_hub_oidc_plan_creates_provider_app_and_group_bindings (andere toestand → andere preview_hash/resource_etag)",
   "blokkade": "Goedkeuring en het vervallen ervan horen bij de Hub; toepassen komt in P2; integrale run ontbreekt.",
-  "opmerking": "Alleen het connectordeel: een voorstel is gebonden aan resource_etag en preview_hash; verandert Authentik, dan een nieuwe diff. Toelichting validatie: alleen home-control-hub.",
+  "opmerking": "Alleen het connectordeel: een voorstel is gebonden aan resource_etag en preview_hash; verandert Authentik, dan een nieuwe diff. Toelichting validatie: alleen home-control-hub. Geen NAS-aantekening: vóór de integrale run rest bouwwerk, het toepassen van SSO-voorstellen (geeft nog 501; ai-server-manager S-P2-080, contractmeldingen).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-01",
@@ -255,9 +255,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit e200287, edc8722; apps/api/tests/integration/test_contract_1_3_statuspagina.py::test_origin_sec_fetch_site_and_host_are_refused_before_anything; ::test_missing_origin_and_missing_cookie_are_refused; ::test_allowed_hosts_and_sec_fetch_site_values_pass; ::test_domain_name_shows_notice_before_the_form_is_filled; ::test_referrer_policy_is_same_origin; apps/api/tests/unit/test_statuspagina_peil.py::test_host_restriction; ::test_renderer_equals_the_reference_byte_for_byte (sinds de review verplicht in CI); tests/ui/herkomst.mjs (Chromium tegen de echte dienst: Origin null, vreemde site, buurapp, geen cookie, domeinnaam; daarna het echte formulier 303); deploy/allinone/smoke-test.sh (Referrer-Policy, Origin null → 403); GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd; review: GitHub Actions ci-run 42790561744 (commit 65f772c): python (722 passed, 1 skipped; validator en Peil-referentie verplicht), statuspagina-ui (ontwerpreview 168 metingen, 0 overtredingen; herkomst 5+1 gevallen, 0 fouten) en image (rooktest 34/34) geslaagd",
   "blokkade": "Een echte browser op het LAN tegen de dienst op een echte NAS (en het bron-IP achter de Docker-portpublicatie) is NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "Herkomst vóór alles: Host-beperking (403 host_niet_toegestaan, DNS-rebinding), Sec-Fetch-Site same-origin/none, exacte Origin (null → 403 herkomst_onjuist), formuliercookie; Referrer-Policy same-origin; een weigering gaat niet naar de Hub en telt niet. Chromium stuurt Sec-Fetch-* niet naar een http-adres dat niet 'potentially trustworthy' is: die header is met HTTP-tests gedekt (ADR-0014, contractmelding 3).",
+  "opmerking": "Herkomst vóór alles: Host-beperking (403 host_niet_toegestaan, DNS-rebinding), Sec-Fetch-Site same-origin/none, exacte Origin (null → 403 herkomst_onjuist), formuliercookie; Referrer-Policy same-origin; een weigering gaat niet naar de Hub en telt niet. Chromium stuurt Sec-Fetch-* niet naar een http-adres dat niet 'potentially trustworthy' is: die header is met HTTP-tests gedekt (ADR-0014, contractmelding 3). Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-02",
@@ -265,9 +265,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit e200287; apps/api/tests/integration/test_contract_1_3_statuspagina.py::test_every_post_after_origin_counts_also_when_already_linked; ::test_pairing_in_progress_gives_409_and_counts; ::test_unreadable_link_file_gives_409_and_counts; ::test_input_is_checked_whole_never_truncated; ::test_exactly_one_log_line_per_post; ::test_success_notice_needs_the_key_of_this_browser; ::test_rate_limit_still_applies_after_refused_origins; GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd",
   "blokkade": "Integrale run met een echte Hub en browser: NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "Elke POST na de herkomst telt (ook al_gekoppeld, RV7; onleesbaar 409; koppelen_bezig 409); invoer nooit afgekapt (512/32/64); één logregel per POST; melding alleen met een sleutel van deze browser (15 min).",
+  "opmerking": "Elke POST na de herkomst telt (ook al_gekoppeld, RV7; onleesbaar 409; koppelen_bezig 409); invoer nooit afgekapt (512/32/64); één logregel per POST; melding alleen met een sleutel van deze browser (15 min). Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-03",
@@ -285,9 +285,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 093e395; apps/api/tests/integration/test_contract_1_3_koppeling.py::test_rotation_sequence_from_the_enroll_response_starts_the_poll; ::test_hub_1_2_without_rotation_sequence_means_zero; ::test_invalid_rotation_sequence_stores_nothing; ::test_file_is_written_as_1_3_and_readers_accept_every_1x; tests/e2e/test_service_e2e.py::test_01_ready_and_enrolled_with_one_time_token; GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd; review: commit 49fbf7f, 71ebf2f; apps/api/tests/unit/test_hublink_unit.py::test_write_forces_0600_when_the_dataset_widens_the_mode; tests/interop/test_real_hub.py::test_real_hub_lifecycle (alleen lokaal, echte Hub ai-server-manager 5e21775: schema_version 1.3 en rotation_sequence in hub-link.json); review: GitHub Actions ci-run 42790561744 (commit 65f772c): python (722 passed, 1 skipped; validator en Peil-referentie verplicht), statuspagina-ui (ontwerpreview 168 metingen, 0 overtredingen; herkomst 5+1 gevallen, 0 fouten) en image (rooktest 34/34) geslaagd",
   "blokkade": "De echte Hub stuurt rotation_sequence sinds C1.3-ASM-02; alleen lokaal tegen de Hub-code getest (interop), niet in CI. Geërfde ZFS-ACL's van de dataset op hub-link.json (modus 0600): NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "pins.rotation_sequence uit het enroll-antwoord (Hub 1.2: 0); key-rotations?after=<n>; hub-link.json schema_version 1.3, lezers accepteren elke 1.x. Review (ADR-0015): de schrijver zet de modus expliciet op 0600 (fchmod).",
+  "opmerking": "pins.rotation_sequence uit het enroll-antwoord (Hub 1.2: 0); key-rotations?after=<n>; hub-link.json schema_version 1.3, lezers accepteren elke 1.x. Review (ADR-0015): de schrijver zet de modus expliciet op 0600 (fchmod). Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-05",
@@ -305,9 +305,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (account)",
   "bewijs": "commit 2e3a557; apps/api/tests/integration/test_contract_1_3_events.py::test_access_events_carry_issuer_and_oidc_sub; ::test_unsupported_sub_mode_gives_null_and_reason; ::test_deleted_user_keeps_the_sub_from_the_previous_snapshot; docs/b13/authentik-api-verificatie.json (uid/uuid, 2024.10.5–2026.8.5); GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd",
   "blokkade": "De afleiding van de OIDC-sub komt uit de broncode van Authentik 2026.8.5 en is NIET GEVALIDEERD (account) tegen een echte Authentik; de issuer volgt het adres waarmee deze dienst Authentik leest (contractmelding 1 in ADR-0014).",
-  "opmerking": "sso.access.revoked/changed met issuer, sub en preferred_username; sub volgens sub_mode (hashed_user_id → User.uid, user_id, user_uuid, user_username); anders null + sub_onbekend.",
+  "opmerking": "sso.access.revoked/changed met issuer, sub en preferred_username; sub volgens sub_mode (hashed_user_id → User.uid, user_id, user_uuid, user_username); anders null + sub_onbekend. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-07",
@@ -345,9 +345,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 6431bba; apps/api/tests/unit/test_recovery_rules.py::test_cgnat_is_not_private_unless_an_admin_allows_it; ::test_evaluate_inside_lan_and_vpn; apps/api/tests/integration/test_b13_001_recovery.py::test_cgnat_only_with_explicit_admin_permission; GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd",
   "blokkade": "Welk bron-IP de Hub achter de Docker-portpublicatie ziet (en of Tailscale in 100.64/10 binnenkomt) is NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "100.64.0.0/10 standaard niet privé; alleen met cgnat_toegestaan (migratie 0004, audit, waarschuwing). Oudere registraties worden verscherpt, nooit verruimd.",
+  "opmerking": "100.64.0.0/10 standaard niet privé; alleen met cgnat_toegestaan (migratie 0004, audit, waarschuwing). Oudere registraties worden verscherpt, nooit verruimd. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-11",
@@ -365,9 +365,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit f1bb588; deploy/allinone/smoke-test.sh (34/34 lokaal: CapEff/CapPrm/CapAmb 0, CapBnd 0 bij start als root, healthcheck apart met --controle, exec-vorm); apps/api/tests/unit/test_deploy_artifacts.py::test_dockerfile_pins_base_images_by_digest_and_no_latest; ::test_smoke_test_runs_like_the_custom_app_form; GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd",
   "blokkade": "Draaien als standaard Custom App op een echte TrueNAS (ix-app, zonder no-new-privileges): NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "healthcheck.py --controle meldt na de wissel Uid, CapEff, CapPrm, CapAmb, CapBnd en NoNewPrivs.",
+  "opmerking": "healthcheck.py --controle meldt na de wissel Uid, CapEff, CapPrm, CapAmb, CapBnd en NoNewPrivs. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-13",
@@ -375,9 +375,9 @@
   "validatie": "Unit-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 0f82012, b4881e5, eddcf17; apps/api/tests/unit/test_deploy_artifacts.py::test_manifest_follows_contract_1_3; ::test_manifest_is_valid_for_the_1_3_validator_in_strict_mode (in CI verplicht met de validator van appstore-en-fork@cca4403); ::test_ci_runs_the_validator_and_the_peil_reference_as_mandatory; GitHub Actions ci-run 42790561744 (commit 65f772c): python (722 passed, 1 skipped; validator en Peil-referentie verplicht), statuspagina-ui (ontwerpreview 168 metingen, 0 overtredingen; herkomst 5+1 gevallen, 0 fouten) en image (rooktest 34/34) geslaagd",
   "blokkade": "Installatie als standaard Custom App op een echte TrueNAS: NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "Kop 1.3, healthcheck.monitor, accepted_findings alleen digest_pending_release; geen HUB_*. KLEIN-103 (2026-11-17, ADR-0015): CI-pin bewust verzet van 77ea6296011aae7fcbe7c6a757b404ff762aebb2 naar appstore-en-fork@a994c2a51f45b81b2c48c6533b0ccf51ba857f5a. Nul- en nameting met jl-manifest validate --strict: beide exitcode 0, 0 fouten, dezelfde geaccepteerde waarschuwing digest_pending_release op image.digest. Manifest ongewijzigd; status en validatie ongewijzigd. Het eerdere CI-bewijs hierboven blijft historisch bewijs op de toenmalige validator; sinds ADR-0015 is de validator verplicht in CI. Node-RED-beveiligingsprofiel blijft S-P3-360.",
+  "opmerking": "Kop 1.3, healthcheck.monitor, accepted_findings alleen digest_pending_release; geen HUB_*. KLEIN-103 (2026-11-17, ADR-0015): CI-pin bewust verzet van 77ea6296011aae7fcbe7c6a757b404ff762aebb2 naar appstore-en-fork@a994c2a51f45b81b2c48c6533b0ccf51ba857f5a. Nul- en nameting met jl-manifest validate --strict: beide exitcode 0, 0 fouten, dezelfde geaccepteerde waarschuwing digest_pending_release op image.digest. Manifest ongewijzigd; status en validatie ongewijzigd. Het eerdere CI-bewijs hierboven blijft historisch bewijs op de toenmalige validator; sinds ADR-0015 is de validator verplicht in CI. Node-RED-beveiligingsprofiel blijft S-P3-360. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-17"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "C1.3-HCH-14",
@@ -395,9 +395,9 @@
   "validatie": "Unit-getest; Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "Voorbereidend deel: commit 185d43fd64a4d51b1660f2508e56421c39b158b1, GitHub Actions ci-run 44362917348; docs/TESTRAPPORT.md, S-P2-330; apps/api/tests/unit/test_authentik_execution_transport.py; apps/api/tests/integration/test_b13_p1_authentik.py; apps/api/tests/integration/test_authentik_config_exports.py; apps/api/tests/integration/test_migratie_0005_gevuld.py; apps/api/tests/integration/test_b13_001_recovery.py::test_break_glass_testable_while_authenticator_offline",
   "blokkade": "Uitvoering wacht op een vertrouwde bron voor actuele provider-/clientbinding, actueel beleid en ketenproeven. Geheimoverdracht wacht op ADR-0033 O1/O2. Catalogusinterop en D17 staan open. De feitelijke noodlogin via LAN en de bronadrescontrole met Authentik uit zijn onbeproefd (ADR-0033 besluit 5 en O3). Vervolgpunt: bepalen of de gezamenlijke aantalsgrens voor exports van vervallen revisies volstaat voor het terugzoeken. NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account).",
-  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Lokale proeven toetsen HEAD en GET apart. De terugzetcontrole bindt de bestandsnaam en SHA-256 aan de gekozen dump. De upgradegate kiest een verse, bruikbare export van de huidige versie en het onderhoud behoudt de laatst bruikbare export. Een oudere lege redirectlijst zonder validatieherkomst telt niet als herstelbasis. Onderhoud bewaart de nieuwste 30 exports over alle koppelrevisies samen. Alleen de huidige koppeling krijgt extra bescherming voor de laatste bruikbare export per Authentik-versie. Exports van vervallen revisies hebben geen vaste bewaartijd en zijn leesbaar zolang ze bewaard zijn. Een exacte herhaling geeft het oorspronkelijke exportantwoord en de detailroute geeft na opruiming 404. De terugmigratie van 0008 koppelt de SHA-256-dump aan de databasesnapshot van de migratie. Terugzetten herstelt de koppelrevisies en herstelbasis via TCP en Unix-sockets, met de databasenaam in het URL-pad of in dbname. Een dubbel provider-ID maakt afwezigheid onbekend. Een bevestigde wijziging bij een eenduidige provider geeft ook bij gedeeltelijk onvolledige gegevens een alarm. Ongeldige Hub-voorstellen worden vóór opslag geweigerd. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend. De simulator toetst de registratie en voorwaarden voor noodtoegang bij Authentik-uitval. De gevulde migratieproef toetst behoud van die registratie.",
+  "opmerking": "Voorbereiding: risicoklasse, goedkeuringshergebruik en back-upeis getoetst. Lokale proeven toetsen HEAD en GET apart. De terugzetcontrole bindt de bestandsnaam en SHA-256 aan de gekozen dump. De upgradegate kiest een verse, bruikbare export van de huidige versie en het onderhoud behoudt de laatst bruikbare export. Een oudere lege redirectlijst zonder validatieherkomst telt niet als herstelbasis. Onderhoud bewaart de nieuwste 30 exports over alle koppelrevisies samen. Alleen de huidige koppeling krijgt extra bescherming voor de laatste bruikbare export per Authentik-versie. Exports van vervallen revisies hebben geen vaste bewaartijd en zijn leesbaar zolang ze bewaard zijn. Een exacte herhaling geeft het oorspronkelijke exportantwoord en de detailroute geeft na opruiming 404. De terugmigratie van 0008 koppelt de SHA-256-dump aan de databasesnapshot van de migratie. Terugzetten herstelt de koppelrevisies en herstelbasis via TCP en Unix-sockets, met de databasenaam in het URL-pad of in dbname. Een dubbel provider-ID maakt afwezigheid onbekend. Een bevestigde wijziging bij een eenduidige provider geeft ook bij gedeeltelijk onvolledige gegevens een alarm. Ongeldige Hub-voorstellen worden vóór opslag geweigerd. Geldige SSO-verzoeken blijven op 501. De catalogusversie blijft onbekend. De simulator toetst de registratie en voorwaarden voor noodtoegang bij Authentik-uitval. De gevulde migratieproef toetst behoud van die registratie. Geen NAS-aantekening: vóór de NAS-proef rest bouwwerk, de uitvoering en de geheimoverdracht (ADR-0033 O1/O2), zie blokkade.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-18"
+  "bijgewerkt": "2026-11-23"
  },
  {
   "id": "REVIEW-home-control-hub-contract-1.3",
@@ -405,8 +405,8 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "commit b4881e5, eddcf17, 33d8fb1, 49fbf7f, 71ebf2f; docs/adr/ADR-0015-review-contract-1-3.md; docs/TESTRAPPORT.md; apps/api/tests/unit/test_deploy_artifacts.py::test_ci_runs_the_validator_and_the_peil_reference_as_mandatory; apps/api/tests/integration/test_contract_1_3_connector.py::test_stale_source_names_its_time_and_never_hides_a_fresh_failure; apps/api/tests/unit/test_hublink_unit.py::test_write_forces_0600_when_the_dataset_widens_the_mode; tests/interop/test_real_hub.py::test_real_hub_lifecycle; tests/ui/herkomst.mjs; deploy/allinone/smoke-test.sh (34/34); ontwerpreview 168 metingen, 0 overtredingen; GitHub Actions ci-run 42790561744 (commit 65f772c): python (722 passed, 1 skipped; validator en Peil-referentie verplicht), statuspagina-ui (ontwerpreview 168 metingen, 0 overtredingen; herkomst 5+1 gevallen, 0 fouten) en image (rooktest 34/34) geslaagd",
   "blokkade": "Een echte NAS (Custom App-formulier, Host-header en bron-IP, ZFS-ACL's): NIET GEVALIDEERD (echte NAS). Een echte Authentik (issuer/sub in sso.access.*): NIET GEVALIDEERD (account).",
-  "opmerking": "Onafhankelijke review van C1.3-HCH-01…14 en Peil 1.1.1: alle NU-punten gebouwd en getest; kopieën byte-gelijk. Gerepareerd: 12 in CI overgeslagen tests nu verplicht, versheid van de bron-check, modus 0600 van hub-link.json, logregel bij apart zetten, manifestnotitie. Contractmeldingen in ADR-0015.",
+  "opmerking": "Onafhankelijke review van C1.3-HCH-01…14 en Peil 1.1.1: alle NU-punten gebouwd en getest; kopieën byte-gelijk. Gerepareerd: 12 in CI overgeslagen tests nu verplicht, versheid van de bron-check, modus 0600 van hub-link.json, logregel bij apart zetten, manifestnotitie. Contractmeldingen in ADR-0015. Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-10"
+  "bijgewerkt": "2026-11-23"
  }
 ]

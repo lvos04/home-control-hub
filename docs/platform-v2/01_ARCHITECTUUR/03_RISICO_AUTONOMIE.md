@@ -19,6 +19,7 @@
 7. Restore van media, my_house of netwerk gaat via de data-eigenaar. Backup-is-healthy is nooit alleen `bestand bestaat`: ook checksums, testrestore en recency.
 
 ## Speciale blokkades
+- Een gestopte Custom App (ix-app of compose) toont in TrueNAS geen image; het platform kan dan niet uitsluiten dat het Emby, MediaGuard of de mediaserver is en weigert elke actie erop (`doel_niet_herkenbaar`), ook met goedkeuring. Daarom is `app.stop` op een Custom App altijd R2 (goedkeuring van een beheerder; nooit automatisch, ook niet op voorstel van de AI of een runbook) en zegt de preview dat weer starten daarna alleen in de TrueNAS-web-UI kan. Een catalogusapp blijft gestopt herkenbaar aan zijn catalogusnaam; stoppen en starten blijven daar R1 (besluit van de gebruiker, 2026-11-11; ai-server-manager ADR-0030, besluit 21).
 - Bij gedegradeerde ZFS-pool, onbekende backupstatus, ontbrekende externe backup of schrijferrors: geen mutaties aan opslag of massale mediaoperaties.
 - Geen wijzigingen in beveiligingsbeleid of privileges door de AI zelf; policyfiles worden buiten AI-runner onder aparte beheerder geversioneerd.
 - Geen automatisch verwijderen van torrents, downloads, mediabestanden, foto's of datasets; MSO/MediaGuard eigen veiligheid blijft leidend.
