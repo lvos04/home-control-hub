@@ -55,7 +55,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from ... import audit, events
+from ... import APP_ID, audit, events
 from ...config import Settings
 from ...errors import ApiError, forbidden, not_found
 from ...security import execreq
@@ -71,7 +71,10 @@ TITLE_NL = "Flows terugzetten naar een momentopname (inclusief versleutelde cred
 TASK_ID = "B11-005"
 MIN_RISK_CLASS = "R2"
 PROPOSAL_TTL = timedelta(minutes=15)
-TARGET: dict[str, str] = {"type": "source", "id": SOURCE_ID}
+#: doel volgens het Hub-beleid (doel ``eigenaar``: {host_id?, app_id, resource}; contractbesluit van ai-server-manager in
+#: S-P2-340): de app is deze dienst, ``resource`` is de flowbron. ``host_id`` mag ontbreken of de enige NAS van v1 zijn.
+TARGET: dict[str, str] = {"app_id": APP_ID, "resource": SOURCE_ID}
+HOST_IDS = ("nas-primary",)
 APPLY_STATUS = "vereist_execution_request"
 APPLY_STATUS_NL = (
     "Toepassen kan alleen met een door de Hub ondertekend uitvoeringsverzoek met een menselijke goedkeuring (R2)."
@@ -111,6 +114,14 @@ def parse_parameters(parameters: Any) -> uuid.UUID | None:
     if not isinstance(raw, str) or not execreq.UUID_RE.fullmatch(raw):
         return None
     return uuid.UUID(raw)
+
+
+def target_ok(target: Any) -> bool:
+    """Positieve witte lijst: precies :data:`TARGET`, eventueel met ``host_id`` uit :data:`HOST_IDS`."""
+    if not isinstance(target, dict):
+        return False
+    rest = {k: v for k, v in target.items() if k != "host_id"}
+    return rest == TARGET and ("host_id" not in target or target["host_id"] in HOST_IDS)
 
 
 def restore_view(row: AutomationRestore) -> dict[str, Any]:
@@ -463,7 +474,7 @@ def apply(
         )
     # 6: parameterschema en doel
     snapshot_id = parse_parameters(proposal["parameters"])
-    if snapshot_id is None or dict(proposal["target"]) != TARGET:
+    if snapshot_id is None or not target_ok(dict(proposal["target"])):
         return refused(
             _refuse(
                 422,

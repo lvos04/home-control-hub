@@ -346,11 +346,11 @@ def _propose_restore(
     body: ProposeIn, request: Request, session: Session, principal: Principal, key: uuid.UUID, tid: str
 ) -> Any:
     """B11-005: voorstel om de flows van Node-RED terug te zetten. Leest alleen; ``risk_claim`` telt niet (EX18)."""
-    if body.target is not None and body.target != automation_restore.TARGET:
+    if body.target is not None and not automation_restore.target_ok(body.target):
         raise ApiError(
             422,
             "parameters_ongeldig",
-            "Het doel van dit voorstel is altijd de bron 'node_red'.",
+            "Het doel van dit voorstel is altijd deze dienst met de bron 'node_red' als resource.",
             {"verwacht": {"target": automation_restore.TARGET}},
         )
 

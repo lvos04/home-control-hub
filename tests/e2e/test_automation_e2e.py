@@ -461,7 +461,7 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     assert _wait(versioned), "de worker legde de wijziging niet vast"
     body = {
         "action_id": "automation.flows.restore",
-        "target": {"type": "source", "id": "node_red"},
+        "target": {"app_id": "home-control-hub", "resource": "node_red"},
         "parameters": {"snapshot_id": snap1["id"]},
     }
     assert (

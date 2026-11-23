@@ -16,7 +16,7 @@ A = "/integrations/v1/automation"
 FLOW_API = A + "/flow-api"
 CONNECTOR = "/connector/v1"
 RESTORE = "automation.flows.restore"
-NODE_RED_TARGET = {"type": "source", "id": "node_red"}
+NODE_RED_TARGET = {"app_id": "home-control-hub", "resource": "node_red"}
 
 Auth = Callable[..., dict[str, str]]
 

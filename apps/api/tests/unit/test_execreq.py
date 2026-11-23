@@ -20,7 +20,7 @@ from tests.conftest import HubSim, SimKey
 
 NOW = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
 ACTION = "automation.flows.restore"
-TARGET = {"type": "source", "id": "node_red"}
+TARGET = {"app_id": "home-control-hub", "resource": "node_red"}
 PARAMS = {"snapshot_id": "0b0e7c9e-2f1d-4a67-9d0e-6f0c1f1f0a01"}
 PREVIEW = "sha256:" + "a" * 64
 ETAG = "sha256:" + "b" * 64
@@ -165,7 +165,7 @@ def test_every_pinned_policy_key_is_tried() -> None:
     [
         ("proposal", "parameters", "snapshot_id"),
         ("proposal", "action_id"),
-        ("proposal", "target", "id"),
+        ("proposal", "target", "resource"),
         ("proposal", "expected_version"),
         ("approval", "approved_by"),
         ("approval", "preview_hash"),
@@ -184,7 +184,7 @@ def test_any_change_after_signing_breaks_the_signature(path: tuple[str, ...]) ->
     replacement = {
         "snapshot_id": str(uuid.uuid4()),
         "action_id": "automation.flows.restore",
-        "id": "node_red",
+        "resource": "node_red",
         "expected_version": "sha256:" + "c" * 64,
         "approved_by": "iemand-anders",
         "preview_hash": "sha256:" + "d" * 64,
@@ -194,7 +194,7 @@ def test_any_change_after_signing_breaks_the_signature(path: tuple[str, ...]) ->
         "nonce": str(uuid.uuid4()),
     }[path[-1]]
     if node[path[-1]] == replacement:  # zelfde waarde: maak hem aantoonbaar anders maar nog steeds goed gevormd
-        replacement = {"action_id": "automation.flows.snapshot", "id": "node_red_2"}[path[-1]]
+        replacement = {"action_id": "automation.flows.snapshot", "resource": "node_red_2"}[path[-1]]
     node[path[-1]] = replacement
     assert execreq.structure_errors(request) == []
     assert refusal(request, sim).details["reason"] == "handtekening_ongeldig"

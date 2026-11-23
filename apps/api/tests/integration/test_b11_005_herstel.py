@@ -294,7 +294,7 @@ def test_proposal_changes_nothing_and_needs_a_signed_request(
     r = b11.propose_restore(linked, auth, scene.snap1["id"])
     assert r.status_code == 201, r.text
     view = r.json()
-    assert view["action_id"] == RESTORE and view["target"] == {"type": "source", "id": "node_red"}
+    assert view["action_id"] == RESTORE and view["target"] == {"app_id": "home-control-hub", "resource": "node_red"}
     assert view["parameters"] == {"snapshot_id": scene.snap1["id"]}
     assert view["status"] == "voorgesteld" and view["apply_status"] == "vereist_execution_request"
     assert view["risk_class_min"] == "R2" and view["requires_backup"] is False
@@ -802,7 +802,31 @@ def test_invalid_requests_are_refused_and_leave_no_trace(
     assert scene.nr.flows == flows_v1()
 
 
+def test_doel_met_de_host_id_van_de_hub_wordt_uitgevoerd(scene: Scene) -> None:
+    """Het Hub-beleid (doel ``eigenaar``) staat ``host_id`` toe naast ``app_id`` en ``resource`` (contractbesluit S-P2-340)."""
+    view = scene.propose()
+    request = scene.fake_hub.sim.execution_request(
+        action_id=RESTORE,
+        target={**b11.NODE_RED_TARGET, "host_id": "nas-primary"},
+        parameters=dict(view["parameters"]),
+        preview_hash=view["preview_hash"],
+        resource_etag=view["resource_etag"],
+    )
+    assert scene.apply(request).status_code == 200
+    assert scene.nr.flows == flows_v1()
+
+
 # -------------------------------------------------------------------- weigeringen na de handtekening (eigen hercontrole)
+#: doelen die de handtekening hebben maar niet op de witte lijst van restore.target_ok staan
+WRONG_TARGETS: dict[str, Any] = {
+    "ander_doel": {"app_id": "home-control-hub", "resource": "iets_anders"},
+    "oude_doelvorm": {"type": "source", "id": "node_red"},
+    "andere_host": {**b11.NODE_RED_TARGET, "host_id": "nas-tweede"},
+    "andere_app": {"app_id": "ai-server-manager", "resource": "node_red"},
+    "doel_extra_veld": {**b11.NODE_RED_TARGET, "type": "source"},
+}
+
+
 @pytest.mark.parametrize(
     ("kind", "status", "code", "detail"),
     [
@@ -816,6 +840,10 @@ def test_invalid_requests_are_refused_and_leave_no_trace(
         ("goedkeuring_verlopen", 403, "forbidden", {"reason": "goedkeuring_verlopen"}),
         ("andere_actie", 403, "forbidden", {"reason": "actie_niet_toegestaan"}),
         ("ander_doel", 422, "parameters_ongeldig", {}),
+        ("oude_doelvorm", 422, "parameters_ongeldig", {}),
+        ("andere_host", 422, "parameters_ongeldig", {}),
+        ("andere_app", 422, "parameters_ongeldig", {}),
+        ("doel_extra_veld", 422, "parameters_ongeldig", {}),
         ("extra_parameter", 422, "parameters_ongeldig", {}),
     ],
 )
@@ -851,8 +879,8 @@ def test_signed_but_wrong_requests_are_refused_and_recorded(
         }
     elif kind == "andere_actie":
         kwargs = {"proposal_overrides": {"action_id": "automation.flows.wissen"}}
-    elif kind == "ander_doel":
-        kwargs = {"proposal_overrides": {"target": {"type": "source", "id": "iets_anders"}}}
+    elif kind in WRONG_TARGETS:
+        kwargs = {"proposal_overrides": {"target": WRONG_TARGETS[kind]}}
     elif kind == "extra_parameter":
         kwargs = {"proposal_overrides": {"parameters": {"snapshot_id": view["parameters"]["snapshot_id"], "x": 1}}}
     request = scene.sign(view, **kwargs)
