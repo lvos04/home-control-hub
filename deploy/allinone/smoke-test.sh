@@ -55,6 +55,13 @@ http_has() { http_curl -fsS "http://localhost:$PORT$1" -o "$WORK/http.txt" && gr
 http_has_401_reason() {
   http_curl -s "http://localhost:$PORT/connector/v1/discover" -o "$WORK/http.txt" && grep -q '"reason":"not_linked"' "$WORK/http.txt"
 }
+# Andere domeinen kunnen tegelijk "Niet ingesteld" melden. Lees alleen de status in de rij van B11.
+automation_not_configured() {
+  http_curl -fsS "http://localhost:$PORT/" -o "$WORK/http.txt" &&
+    awk -v RS='</li>' '/class="naam">Node-RED-automatisering \(B11\)</ {
+      rijen++; if (/class="pil pil-gate"/ && /<\/svg>Niet ingesteld<\/span>/) juist++
+    } END { exit !(rijen == 1 && juist == 1) }' "$WORK/http.txt"
+}
 # B11: de flow-API neemt alleen flow-tokens aan; zonder of met een onbekend token is het antwoord 401 met de reden
 flow_api_401() { # extra curl-argumenten..., laatste = verwachte reden
   local reason="${*: -1}"
@@ -161,6 +168,7 @@ run "$NAME" "$NAME-root"
 check "healthcheck wordt healthy" "wait_healthy $NAME"
 check "/healthz geeft 200" "http_has /healthz '\"status\":\"ok\"'"
 check "/readyz geeft ready" "http_has /readyz '\"ready\"'"
+check "B11 zonder Node-RED-bron meldt op de statuspagina 'Niet ingesteld'" automation_not_configured
 check "statuspagina (Peil) toont 'Niet gekoppeld' met koppelformulier en vingerafdrukveld" \
   "http_has / 'Peil statuspagina-sjabloon 1.1.1' && http_has / 'Niet gekoppeld' && http_has / 'name=\"hub_vingerafdruk\"'"
 check "statuspagina: eerste signaal niet groen zolang niet gekoppeld" "http_has / 'pil pil-onbekend\"><svg aria-hidden=\"true\"><use href=\"#i-onbekend\"/></svg>Niet gereed'"

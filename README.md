@@ -141,7 +141,8 @@ Node-RED zelf is een eigen standaard Custom App; de installatieweg is het manife
 ```sh
 python3.12 -m venv .venv && .venv/bin/pip install -e 'apps/api[dev]'
 make lint test e2e          # ruff, mypy, unit + integratie (PostgreSQL), dienst-E2E met simulator
-make image smoke            # image bouwen en rooktest zoals het formulier (elk proces 568, CapEff 0, NoNewPrivs 1)
+make image smoke            # image bouwen en starten zoals via het Custom App-formulier
+                            # controleert o.a. UID 568, CapEff 0, NoNewPrivs 1 en 'Niet ingesteld' bij B11 zonder bron
 make openapi                # OpenAPI opnieuw exporteren (CI faalt bij drift)
 .venv/bin/python tools/node_red_verify.py   # meet de aannames over Node-RED tegen de gepinde image (lokale Docker;
                             # haalt de image op; schrijft docs/b11/node-red-verificatie.json)

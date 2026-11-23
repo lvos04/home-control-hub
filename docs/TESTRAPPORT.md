@@ -652,3 +652,28 @@ schermlezer en telefoon.
   - de interop voor een door de echte Hub ondertekend herstelverzoek (4b/4c).
 
   De statuspagina is niet gewijzigd, dus zijn `test-ui` en de ontwerpreview niet gedraaid.
+
+## S-P2-340 deel 2 — image en herstel via de Hub (2026-11-23)
+
+De lokale proef gebruikte de API en worker van deze dienst, een Node-RED-simulator en een eigen archief en
+Python-omgeving van `ai-server-manager@13a0ccf77a4f62a1867dab76153ed5000852aec6`. De gekoppelde Hub kreeg
+uitsluitend de lokale poort van de connector in zijn testinventaris.
+
+Een testbeheerder vroeg om herstel van een opgeslagen momentopname nadat de flow in de simulator was gewijzigd.
+De connector gaf `201` met een `diff` als JSON-object. De Hub vroeg zelf het voorstel op en gaf
+`409 doel_onbekend` met reden `eigenaar_antwoord_ongeldig`. De simulator behield de gewijzigde flow en
+registreerde nul schrijfacties. De Hub bereikte de goedkeuring en ondertekening niet. De acceptatie van het
+ondertekende verzoek en de weigering na wijziging van één teken staan open.
+
+De paragraaf *Acties via de eigenaar-connector* in `ai-server-manager/docs/EXECUTION_REQUEST.md` noemt JSON als
+vorm voor de diff. De Hub controleert in `hub.actions.service._eigenaar_voorstel` op een lijst.
+`integrations.domains.automation.restore.restore_view` geeft het object van `snapshots.diff_flows` terug.
+De contracteigenaar bepaalt welke vorm beide diensten moeten gebruiken.
+
+| Lokale controle | Gemeten uitkomst |
+|---|---|
+| `make image` en `make smoke` | Image gebouwd. Alle 38 controles groen. Zonder Node-RED-bron was de dienst gereed en toonde de B11-rij **Niet ingesteld**. |
+| Rooktest in een eigen container met één extra proces als UID 0 | Exit 1. Precies de procescontrole faalde, de overige 37 controles waren groen. |
+| Unit- en integratietests op een eigen PostgreSQL 16 | 1.676 tests groen. |
+| `make e2e` met de simulators | 20 tests groen. |
+| Strikte manifestvalidatie en de twee Docker-socketvarianten | Het manifest was geldig. De validator weigerde beide varianten. |

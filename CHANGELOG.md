@@ -1,5 +1,10 @@
 # Wijzigingen
 
+## S-P2-340 deel 2 — rooktest en herstelvoorstel (2026-11-23)
+
+- De rooktest controleert op een verse installatie de status van **Node-RED-automatisering (B11)**. Zonder ingestelde bron moet precies die rij **Niet ingesteld** tonen.
+- Bij een lokaal herstelvoorstel tegen de Hub-code van `ai-server-manager@13a0ccf` gaf de connector een JSON-object als `diff` terug. De Hub verwachtte een lijst en weigerde het voorstel vóór ondertekening. De vorm van de hersteldiff ligt bij de contracteigenaar.
+
 ## S-P2-340 deel 1 — bron-ID, doel van het herstel en interop met de echte Hub (2026-11-23)
 
 - Uitgaande events hebben als `source_event_id` de `event_id` in plaats van het outboxvolgnummer. Na het terugzetten
