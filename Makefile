@@ -40,7 +40,7 @@ ontwerpreview:
 	cd tests/ui && { test -d node_modules || npm ci --no-audit --no-fund; }
 	$(PY) tests/ui/ontwerpreview.py
 
-# Byte-gelijke kopie van het platformcontract (contract 1.3 kop, C1.3-ALG-01): offline en tegen GitHub.
+# Byte-gelijke kopie van het platformcontract (contract 1.3 kop, C1.3-ALG-01): offline en tegen Forgejo.
 contract-drift:
 	python3 tools/contract_kopie.py controleer && python3 tools/contract_kopie.py vergelijk --online
 

@@ -72,6 +72,11 @@ jobs:
           git -C "$bron" checkout -q --detach "origin/$(jq -er .bron_ref docs/platform-v2/CONTRACT_HERKOMST.json)"
           python tools/contract_kopie.py controleer
           python tools/contract_kopie.py vergelijk --bron "$bron"
+      - name: Online contractcontrole met Forgejo-leestoegang
+        env:
+          FORGEJO_TOKEN: ${{ secrets.BRON_LEESTOKEN }}
+        run: python3 tools/contract_kopie.py vergelijk --online
+
       - name: Peil-drift tegen de pin en de huidige bronbranch op Forgejo
         run: |
           bron="$RUNNER_TEMP/hubbron"

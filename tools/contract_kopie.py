@@ -2,15 +2,16 @@
 """Byte-gelijke kopieën van het platformcontract bewaken (contract 1.3, kop en §10; C1.3-ALG-01, C1.3-HCH-14).
 
 ``docs/platform-v2/PLATFORM_CONTRACTEN.md``, ``CONTRACT_1.3_CONFORMITEIT.md`` (en de 1.2-lijst als historie) zijn
-byte-gelijk aan ``lvos04/ai-server-manager`` op de vaste bron-commit uit ``docs/platform-v2/CONTRACT_HERKOMST.json``.
+byte-gelijk aan ``leon/ai-server-manager`` op de vaste bron-commit uit ``docs/platform-v2/CONTRACT_HERKOMST.json``.
 
 ``controleer``            offline: sha256 van elke kopie = de pin (CI, elke run; ook in de unit-tests).
-``vergelijk --online``    de bron op GitHub op de gepinde commit moet exact deze inhoud hebben (fout bij drift); de
+``vergelijk --online``    de bron op Forgejo op de gepinde commit moet exact deze inhoud hebben (fout bij drift); de
                           bronbranch met andere inhoud geeft alleen een waarschuwing (een nieuwe kopie overnemen is
                           een stap van de orkestratie, geen rode CI).
 ``vergelijk --bron <map>`` hetzelfde tegen een lokale checkout.
 ``bijwerken --bron <map> --commit <40 hex>``  kopieën en pins opnieuw schrijven vanuit die checkout.
 
+Forgejo gebruikt FORGEJO_TOKEN of het bestand forgejo/token in de gebruikersconfiguratie.
 Alleen de standaardbibliotheek. Uitgang 0 = in orde, 1 = drift of fout, 2 = verkeerd gebruik.
 """
 
@@ -25,6 +26,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -32,7 +34,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PV2 = REPO_ROOT / "docs" / "platform-v2"
 HERKOMST = PV2 / "CONTRACT_HERKOMST.json"
 BRON_PAD = "docs/platform-v2"
-RAW = "https://raw.githubusercontent.com/{repo}/{ref}/{pad}"
+
+
+def forgejo_verzoek(repo: str, ref: str, pad: str) -> urllib.request.Request:
+    """Lees de privébron met de ingestelde Forgejo-leestoegang, ook buiten CI."""
+    url = (
+        f"https://git.medialeon.nl/api/v1/repos/{urllib.parse.quote(repo)}/raw/{urllib.parse.quote(pad)}"
+        f"?{urllib.parse.urlencode({'ref': ref})}"
+    )
+    verzoek = urllib.request.Request(url, headers={"User-Agent": "platform-contractcontrole/1.0"})
+    token = os.environ.get("FORGEJO_TOKEN")
+    if not token:
+        config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        tokenbestand = config / "forgejo" / "token"
+        if tokenbestand.is_file():
+            token = tokenbestand.read_text(encoding="utf-8").strip()
+    if token:
+        verzoek.add_unredirected_header("Authorization", f"token {token}")
+    return verzoek
 
 
 def sha256(data: bytes) -> str:
@@ -64,21 +83,23 @@ def controleer() -> list[str]:
 
 
 def haal_online(repo: str, ref: str, pad: str) -> bytes:
-    url = RAW.format(repo=repo, ref=ref, pad=pad)
+    verzoek = forgejo_verzoek(repo, ref, pad)
     laatste: Exception | None = None
     for wacht in (0, 2, 4, 8, 16):
         if wacht:
             time.sleep(wacht)
         try:
-            with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - vaste https-URL naar GitHub
+            with urllib.request.urlopen(verzoek, timeout=30) as resp:  # noqa: S310 - vaste Forgejo-bron
                 return bytes(resp.read())
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                raise FileNotFoundError(f"{url}: 404") from exc
+                raise FileNotFoundError(f"{verzoek.full_url}: 404") from exc
+            if exc.code in (401, 403):
+                raise PermissionError(f"Forgejo weigert leestoegang (HTTP {exc.code}).") from exc
             laatste = exc
         except (urllib.error.URLError, TimeoutError) as exc:
             laatste = exc
-    raise ConnectionError(f"{url}: niet op te halen ({laatste})")
+    raise ConnectionError(f"{verzoek.full_url}: niet op te halen ({laatste})")
 
 
 def haal_lokaal(bron: Path, ref: str | None, pad: str) -> bytes:
@@ -163,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("controleer")
     v = sub.add_parser("vergelijk")
     v.add_argument("--bron", type=Path)
-    v.add_argument("--online", action="store_true")
+    v.add_argument(
+        "--online", action="store_true", help="vergelijk met Forgejo (FORGEJO_TOKEN of lokaal forgejo/token)"
+    )
     b = sub.add_parser("bijwerken")
     b.add_argument("--bron", type=Path, required=True)
     b.add_argument("--commit", required=True)

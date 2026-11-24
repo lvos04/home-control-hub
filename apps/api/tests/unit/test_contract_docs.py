@@ -8,9 +8,13 @@ conformiteitslijst zijn byte-gelijk aan de bron (``ai-server-manager``, ``contra
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
+import urllib.parse
+import urllib.request
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -48,7 +52,7 @@ def _tool() -> Any:
 def test_provenance_file_pins_the_same_commit_and_hashes() -> None:
     herkomst = json.loads((PV2 / "CONTRACT_HERKOMST.json").read_text(encoding="utf-8"))
     assert herkomst["bron_commit"] == BRON_COMMIT and herkomst["bestanden"] == KOPIEEN
-    assert herkomst["contract"] == "contracts 1.3" and herkomst["bron_repo"] == "lvos04/ai-server-manager"
+    assert herkomst["contract"] == "contracts 1.3" and herkomst["bron_repo"] == "leon/ai-server-manager"
     assert _tool().controleer() == []
 
 
@@ -242,3 +246,43 @@ def test_no_session_links_in_docs() -> None:
     for p in own:
         text = p.read_text(encoding="utf-8")
         assert "Claude-Session" not in text and "claude.ai/code/session" not in text, p
+
+
+@pytest.mark.parametrize("afwijking", [False, True])
+def test_online_contractcontrole_op_forgejo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, afwijking: bool) -> None:
+    config = tmp_path / "forgejo"
+    config.mkdir()
+    (config / "token").write_text(tmp_path.name, encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("FORGEJO_TOKEN", raising=False)
+    toegang = tmp_path.name
+    if afwijking:
+        toegang += "-ci"
+        monkeypatch.setenv("FORGEJO_TOKEN", toegang)
+
+    docs = PV2
+    pin = BRON_COMMIT
+    pins = dict.fromkeys(KOPIEEN, pin)
+    tak = "ccr-c133d7a0-kuz1cv"
+    gelezen = set()
+
+    def bron(verzoek: urllib.request.Request, timeout: int) -> io.BytesIO:
+        url = urllib.parse.urlsplit(verzoek.full_url)
+        naam = Path(url.path).name
+        assert url.scheme == "https" and url.netloc == "git.medialeon.nl"
+        assert url.path == f"/api/v1/repos/leon/ai-server-manager/raw/docs/platform-v2/{naam}"
+        assert verzoek.get_header("Authorization") == f"token {toegang}"
+        assert "Authorization" not in verzoek.headers  # leestoegang gaat niet mee bij een redirect
+        assert verzoek.get_header("User-agent")
+        assert timeout > 0
+        [ref] = urllib.parse.parse_qs(url.query)["ref"]
+        assert ref in (pins[naam], tak)
+        gelezen.add((naam, ref))
+        inhoud = (docs / naam).read_bytes()
+        return io.BytesIO(inhoud + b" " if afwijking and ref == pin else inhoud)
+
+    monkeypatch.setattr(urllib.request, "urlopen", bron)
+    assert _tool().main(["vergelijk", "--online"]) == int(afwijking)
+    assert set(pins.items()) <= gelezen
+    if not afwijking:
+        assert {(naam, tak) for naam, ref in pins.items() if ref == pin} <= gelezen
