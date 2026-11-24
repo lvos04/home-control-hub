@@ -15,8 +15,8 @@ onafhankelijke review van contract 1.3 in ADR-0015)
 + B13-001 (accountrecovery en admin-toegang; de noodlogin zelf zit in de Hub) en
 B13-002…005 (Authentik via de officiële API: versiedetectie, OIDC-client voor de Hub als R2-voorstel, SSO-dekking per
 app met bron, audit/afwijkingen, configuratie-export, pre-upgrade-gate en herstelcheck) gebouwd en met simulators
-getest. **Wijzigingen in Authentik worden alleen voorgesteld, nooit uitgevoerd** (toepassen vereist een door de Hub
-ondertekend ExecutionRequest, fase P2).
+getest. **Versie 1 levert alleen voorstellen** voor de registratie van de Hub en het intrekken van Authentik-sessies.
+De eigenaar antwoordt ook bij een geldig ondertekend verzoek met `501 capability_unavailable`. Uitvoering volgt in versie 2.
 
 **B11 Node-RED-automatisering (B11-001…005, ADR-0016)** is gebouwd en met een Node-RED-simulator en een
 Hub-simulator getest: isolatie meten en flows met verboden nodes blokkeren, eventtypencatalogus met afleveren aan

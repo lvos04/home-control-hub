@@ -61,7 +61,7 @@ met de gate.
    sleutels, flows en de 2FA-apparaten van beheerders. Een betrouwbaar vastgestelde providerafwijking blijft
    zichtbaar met een herstelalarm als andere providergegevens onvolledig zijn.
 2. Bij **afwijking**: niet verder gaan. Herstel de database/snapshot van vóór de upgrade (downgraden van Authentik
-   kan niet). **Sessies intrekken** is in deze versie alleen een voorstel.
+   kan niet). **Sessies intrekken** levert in versie 1 een voorstel. De intrekking bij Authentik volgt in versie 2.
 3. In het scenario van OIDC-overdracht en -rotatie is het lokale noodaccount van de Hub bij uitval van Authentik
    bedoeld voor toegang **uitsluitend via LAN**; dit pad verruimt de bestaande netwerkinstellingen niet.
    De simulator toetst de registratie en de voorwaarden voor noodtoegang. De gevulde migratieproef controleert

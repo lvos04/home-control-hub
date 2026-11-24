@@ -562,6 +562,10 @@ schermlezer en telefoon.
 
 ## S-P2-330 — Voorbereiding Authentik-uitvoering
 
+**Besluit gebruiker 2026-11-24 (G-20).** SSO-registratie en sessie-intrekking bij Authentik zijn uitgesteld tot
+versie 2. De weigertests hieronder bewijzen de sluiting van de schrijfroutes. Voor uitvoering ontbreken de
+vertrouwde provider-/clientbinding en de gebonden overdracht van het clientgeheim uit ADR-0033 O1/O2.
+
 - De CI op commit `185d43fd64a4d51b1660f2508e56421c39b158b1` telde voor dit voorbereidende deel
   1580 geslaagde API-tests en 20 dienst-E2E-tests. De Peil-test die een lokale checkout
   vereist, is overgeslagen. De rendertoets tegen de gepinde referentie en de online Peil-vergelijking
