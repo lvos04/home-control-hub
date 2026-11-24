@@ -155,6 +155,8 @@ def test_evidence_follows_section_11() -> None:
         parts = item["validatie"].split("; ")
         assert all(p in values for p in parts), (ident, item["validatie"])
         assert len(parts) == len(set(parts)), ident
+        if item["status"] == "Geblokkeerd" or NIET_GEVALIDEERD_WAARDEN.intersection(parts):
+            assert item["blokkade"].strip(), f"{ident}: beschrijf in 'blokkade' wat er nog nodig is"
         if "Niet getest" in parts:
             assert item["status"] == "Niet gestart", f"{ident}: 'Niet getest' alleen bij 'Niet gestart'"
             assert parts == ["Niet getest"] or set(parts) - {"Niet getest"} <= NIET_GEVALIDEERD_WAARDEN, ident

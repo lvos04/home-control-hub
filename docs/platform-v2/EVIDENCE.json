@@ -35,59 +35,59 @@
   "validatie": "Unit-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database; apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty; review: 935a297, 5c75415, a8bf2a9, 0a6973b",
   "blokkade": "Discovery-adapter (NetAlertX, I11) niet gebouwd; LAN-gegevens D03/D11 onbekend — NIET GEVALIDEERD (echte NAS).",
-  "opmerking": "Inventaris (NetAlertX, AdGuard Home, Tailscale, Cloudflared, router; alles te verifiëren) en datamodel; apparaten standaard 'onbekend'; database weigert categorie 'malware' zonder bewijs. Toelichting validatie: database-invariant: geen malware zonder bewijs. Geen NAS-aantekening: vóór de NAS-test rest bouwwerk, de discovery-adapter voor NetAlertX (I11).",
+  "opmerking": "De inventaris noemt NetAlertX, AdGuard Home, Tailscale, Cloudflared en de router. De database kent nieuwe apparaten de klasse 'onbekend' toe en weigert een malwarebevinding zonder bewijs. VERSIE 2: verificatie van de netwerkbronnen en de NetAlertX-koppeling zijn uitgesteld (S-P5-30 en S-P5-31).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-23"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B10-002",
   "status": "Niet gestart",
   "validatie": "Unit-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 3816636; review: 935a297, 5c75415, a8bf2a9, 0a6973b; apps/api/tests/integration/test_review_p0.py::test_b10_002_one_device_per_source_and_mac",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Eén apparaat per (bron, genormaliseerde MAC); IP-historie apart. Toelichting validatie: alleen datamodel: één apparaat per bron+MAC, IP-historie apart; ingest/dedupe niet gebouwd.",
+  "blokkade": "NetAlertX-waarnemingen inlezen en met de simulator toetsen dat een DHCP-adreswissel bij gelijke MAC één apparaat met twee adressen oplevert. Daarna dezelfde wissel via NetAlertX op de NAS verifiëren.",
+  "opmerking": "De databasetest bewaart twee adreswaarnemingen voor één apparaat en weigert een tweede rij met dezelfde bron en genormaliseerde MAC. De apparatenroute geeft 501. VERSIE 2: het inlezen van NetAlertX en de melding bij een nieuw apparaat zijn uitgesteld (S-P5-31).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B10-003",
   "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (echte NAS)",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Blokregels met pilot-scope en rollback-TTL. Toelichting validatie: Niet getest: alleen datamodel; DNS-fallback (acceptatiecriterium) niet gebouwd.",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py (NetworkBlockRule). apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de DNS-samenvatting. De terugvalproef staat open.",
+  "blokkade": "De DNS-samenvatting, regelvoorstellen met terugdraaiplan en uitvalmelding bouwen en simuleren. Daarna met één pilotapparaat en de afgesproken resolver (D11) op het echte netwerk meten of DNS binnen de termijn herstelt en het LAN bereikbaar blijft.",
+  "opmerking": "Het schema bewaart het bereik en de terugvaltermijn van blokregels. De DNS-samenvatting geeft 501. VERSIE 2: de AdGuard-leeskoppeling en DNS-terugval zijn uitgesteld (S-P5-32).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B10-004",
   "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (echte NAS)",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. DNS-aggregaten hebben verplicht een dekkingslabel (DNS ≠ al het verkeer). Toelichting validatie: Niet getest: alleen datamodel met verplicht dekkingslabel.",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py (NetworkDnsQueryAggregate.coverage) en apps/api/src/integrations/domains/network/router.py. Het acceptatiecriterium voor de verkeersdiagnose is onbeproefd.",
+  "blokkade": "Een diagnose bouwen en met de simulator toetsen dat een ontbrekende DNS-waarneming de dekking als onvolledig of onbekend toont. Daarna op de NAS vaststellen welke bestemmingen en eventuele bandbreedte de host- of routerbron werkelijk rapporteert.",
+  "opmerking": "Het schema vereist een dekkingslabel bij elk DNS-aggregaat. Een route voor verkeersdiagnose ontbreekt. VERSIE 2: de diagnose per app of apparaat is uitgesteld (S-P5-33).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B10-005",
   "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (echte NAS)",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. VPN-peers en tunnel-health; tunnelgeheimen alleen als vault-referentie. Toelichting validatie: Niet getest: alleen datamodel; LAN/VPN-only-probe niet gebouwd.",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py (NetworkVpnPeer en NetworkTunnelHealth). apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de tunnelroute. De toegangsproef staat open.",
+  "blokkade": "Tailscale- en Cloudflared-status uitlezen en tunneluitval en ingetrokken toegang simuleren. Daarna met het echte account en de tunnel op het NAS-netwerk bevestigen dat de beheerconsole uitsluitend via LAN of VPN bereikbaar is.",
+  "opmerking": "Het schema kent VPN-peers, tunnelstatus en een kluisverwijzing voor tunnelgeheimen. De beide statusroutes geven 501. VERSIE 2: de leesadapters en de bewaking van VPN en tunnels zijn uitgesteld (S-P5-34).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B10-006",
   "status": "Niet gestart",
   "validatie": "Unit-getest; NIET GEVALIDEERD (echte NAS)",
   "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Netwerkwijzigingen minimaal R2 en altijd met onafhankelijke test. Toelichting validatie: database-invariant: netwerkwijziging minimaal R2; goedkeuringsstroom niet gebouwd.",
+  "blokkade": "Bevindingen met bewijs koppelen aan Hub-voorstellen met terugdraaiplan. Toets lokaal dat een voorstel dat de eigen toegang afsluit wordt geweigerd en dat overige maatregelen goedkeuring vereisen. Daarna op de NAS de goedkeurings- en herstelproef voor het netwerk uitvoeren.",
+  "opmerking": "De database eist risicoklasse R2 of R3 en een onafhankelijke toets. De databasetest weigert een voorstel met klasse R1. VERSIE 2: netwerkbevindingen en hun goedkeuringsstroom zijn uitgesteld (S-P5-35).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B11-001",
@@ -144,10 +144,10 @@
   "status": "Bezig",
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "apps/api/tests/integration/test_b14_001_dekkingsmatrix.py, apps/api/tests/fakes/my_house_energy.py, tests/interop/test_my_house_energy.py::test_bronkwaliteit en apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
-  "blokkade": "Besluit D14 en beproeving met de fysieke meters in huis via N-P6-06 zijn nodig. NIET GEVALIDEERD (hardware).",
-  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De vaste proeven toetsen HTTPS, vers instantiebewijs, server/client/woning en viewer/hub bij opslag en gebruik. De producent-consumentproef toetst de opgeslagen kwaliteit per rol. De connectorproef controleert de bronmeettijd, de grens van 300 seconden en meting_verouderd. Nulvermogen en uitval zijn afzonderlijk beproefd. De bron geeft geen bewijs van een losse NAS-meter. De statuspagina voor dit werkpakket volgt in S-P3-350.",
+  "blokkade": "Het energieblok op de statuspagina bouwen en testen (S-P3-350). Besluit D14 en beproeving met de fysieke meters in huis via N-P6-06 zijn nodig. NIET GEVALIDEERD (hardware).",
+  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De vaste proeven toetsen HTTPS, vers instantiebewijs, server/client/woning en viewer/hub bij opslag en gebruik. De producent-consumentproef toetst de opgeslagen kwaliteit per rol. De connectorproef controleert de bronmeettijd, de grens van 300 seconden en meting_verouderd. Nulvermogen en uitval zijn afzonderlijk beproefd. De bron geeft geen bewijs van een losse NAS-meter. VERSIE 2: de weergave van meterrollen, meettijden en afwijkingen op de statuspagina is uitgesteld (S-P3-350).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-20"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B14-002",
@@ -162,32 +162,112 @@
  {
   "id": "B14-003",
   "status": "Niet gestart",
-  "validatie": "Niet getest",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Werkloads met prioriteitsklasse en reserveringsvensters. Niet getest: alleen datamodel; werkloadplanning niet gebouwd.",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyWorkload en EnergyWorkloadReservation) en apps/api/src/integrations/domains/energy/router.py (werklastroute). De proef met een actieve stream staat open.",
+  "blokkade": "De planner bouwen en met testgegevens de prioriteit en wachtreden bij overlappende werklasten toetsen. Daarna op de NAS bij een actieve stream verifiëren dat MediaGuard de AV1-taak zonder bestandsverlies laat wachten.",
+  "opmerking": "Het schema bevat prioriteitsklassen en reserveringsvensters. De werklastroute geeft 501. VERSIE 2: de dagplanner en reserveringsvoorstellen zijn uitgesteld (S-P3-320).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B14-004",
   "status": "Niet gestart",
-  "validatie": "NIET GEVALIDEERD (hardware)",
-  "bewijs": "commit 3816636 (alleen datamodel; geen test van het acceptatiecriterium)",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding; data-endpoint geeft 501 capability_unavailable. Let op: de kolom requires_meter is alleen een vlag (altijd true); er is nog geen koppeling met een echte meetreeks. Toelichting validatie: Niet getest: alleen een vlag 'requires_meter' in het datamodel; de echte afdwinging (geen €-besparing zonder meetreeks) is niet gebouwd.",
+  "validatie": "Niet getest; NIET GEVALIDEERD (hardware)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyCostModel.requires_meter). apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de adviesroute. De proef met en zonder meetreeks staat open.",
+  "blokkade": "De adviesroute aan gemeten intervallen koppelen. In de simulator toetsen dat zonder meetreeks geen besparingsbedrag verschijnt. Daarna de bandbreedte van het advies met een fysieke meter over vergelijkbare dagen toetsen (N-P6-06).",
+  "opmerking": "Het kostenmodel verplicht de vlag requires_meter. De adviesroute geeft 501. VERSIE 2: kostenadvies op basis van gemeten intervallen en vergelijkbare dagen is uitgesteld (S-P3-330).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B14-005",
   "status": "Niet gestart",
   "validatie": "Unit-getest; NIET GEVALIDEERD (hardware)",
-  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
-  "blokkade": "",
-  "opmerking": "Alleen datamodel-voorbereiding in P0 (schema + DB-invarianten, geen data, geen functionaliteit); data-endpoint geeft 501 capability_unavailable. Meters zijn in de database altijd alleen-lezen (boiler nooit schakelen). Toelichting validatie: database-invariant: meters altijd alleen-lezen; alertering niet gebouwd.",
+  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database. De bestaande meetroute is getoetst in apps/api/tests/integration/test_b14_001_dekkingsmatrix.py::test_meters_rollen_en_herkomst.",
+  "blokkade": "Meldregels voor meteruitval, afwijkend boilerverbruik, NAS-belasting en budget bouwen en simuleren. Toets met de fysieke meters dat de meldingen de juiste bron noemen en dat de boiler uitsluitend wordt gemeten (EX27, N-P6-06).",
+  "opmerking": "De database weigert een beschrijfbare meter. De leesroute van my_house levert ook boilervermogen. VERSIE 2: afwijkingsmeldingen en hun weergave op de statuspagina zijn uitgesteld (S-P3-340 en S-P3-350).",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-09"
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I11-11-01",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/catalog.py vermeldt NetAlertX als te verifiëren. I11 stap 1 beschrijft de beoogde instelling.",
+  "blokkade": "Toegestane subnetten en bewaartermijn voor de adreshistorie instelbaar maken en lokaal toetsen. Daarna het bereik op de NAS met de beheerder verifiëren.",
+  "opmerking": "VERSIE 2: de NetAlertX-instellingen voor bereik en bewaartermijn vallen onder S-P5-30.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I11-11-03",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit a8bf2a9, apps/api/tests/integration/test_review_p0.py::test_b10_002_one_device_per_source_and_mac toetst de identiteit in de database. De proef via NetAlertX staat open.",
+  "blokkade": "Bekende apparaten via de adapter inlezen en een adreswissel simuleren. Daarna op de NAS controleren dat de apparatenlijst dezelfde host één keer toont.",
+  "opmerking": "VERSIE 2: de apparatenlijst uit NetAlertX valt onder S-P5-31.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I11-11-04",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database toetst de bewijseis voor een malwarebevinding. I11 stap 4 beschrijft de meldproef.",
+  "blokkade": "De melding met herkomst en zekerheid bouwen en simuleren. Daarna op de NAS toetsen dat een nieuw apparaat als onbekend wordt gemeld en dat een malwareclaim bewijs vereist.",
+  "opmerking": "VERSIE 2: het signaal voor een nieuw apparaat uit NetAlertX valt onder S-P5-31.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I11-11-05",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/catalog.py noemt de apparatenlijst en nieuwe-apparaatsignalen. De apparatenroute geeft 501.",
+  "blokkade": "Apparaatstatus en events aan de Hub leveren en dezelfde apparaatidentiteit over updates toetsen. Daarna de herkenning via de connector op de NAS verifiëren.",
+  "opmerking": "VERSIE 2: apparaatstatus en wijzigingsmeldingen via de connector vallen onder S-P5-31 en S-P5-37.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I12-12-01",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/catalog.py vermeldt de AdGuard-API als te verifiëren. I12 stap 1 beschrijft de nulmeting.",
+  "blokkade": "De leesroutes voor resolverstatus en DNS-totalen verifiëren en met een simulator toetsen. Daarna met een pilotapparaat de bestaande DNS-resolutie en terugvalresolver vaststellen.",
+  "opmerking": "VERSIE 2: het vaststellen van de benodigde AdGuard-leesroutes valt onder S-P5-30.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I12-12-04",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py bevat NetworkBlockRule. I12 stap 4 beschrijft de filterproef.",
+  "blokkade": "De voorstelroute met bereik, Hub-goedkeuring en terugdraaiplan bouwen en simuleren. Daarna met de pilotclient controleren of de betrokken apparaten bereikbaar blijven.",
+  "opmerking": "VERSIE 2: voorstellen voor DNS-filters en uitzonderingen vallen onder S-P5-32.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I12-12-06",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst dat de DNS-samenvatting 501 geeft. I12 stap 6 beschrijft de herstelproef.",
+  "blokkade": "Resolveruitval in de simulator als storing melden en de terugvalroute aan de Hub doorgeven. Daarna op de NAS de melding en het herstel van DNS via de vorige resolver toetsen.",
+  "opmerking": "VERSIE 2: de DNS-uitvalmelding aan de Hub valt onder S-P5-32 en S-P5-37.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "I21-21-05",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py bevat NetworkTunnelHealth met status en vervaldatum. I21 stap 5 beschrijft de meldproef.",
+  "blokkade": "Uitval- en verloopmeldingen voor de tunnel bouwen en simuleren. Daarna met de echte tunnel en het bijbehorende account de status en melding op de NAS verifiëren.",
+  "opmerking": "VERSIE 2: de melding bij tunneluitval of een naderende vervaldatum valt onder S-P5-34.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "EX16",
@@ -248,6 +328,46 @@
   "opmerking": "Alleen het connectordeel: een voorstel is gebonden aan resource_etag en preview_hash; verandert Authentik, dan een nieuwe diff. Toelichting validatie: alleen home-control-hub. Geen NAS-aantekening: vóór de integrale run rest bouwwerk, het toepassen van SSO-voorstellen (geeft nog 501; ai-server-manager S-P2-080, contractmeldingen).",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-23"
+ },
+ {
+  "id": "EX31",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "De testmatrix beschrijft EX31. Commit 3816636, apps/api/src/integrations/domains/network/models.py bevat het bereik van een blokregel. De DNS-samenvatting geeft 501.",
+  "blokkade": "Samenvatting en R2-pilotvoorstel met de AdGuard- en Hub-simulator toetsen. Daarna op één pilotclient DNS-resolutie en terugkeer naar de oude resolver verifiëren.",
+  "opmerking": "VERSIE 2: de DNS-pilot met AdGuard wacht op de leeskoppeling en pilotvoorstellen uit S-P5-32.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "EX32",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "De testmatrix beschrijft EX32. Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de DNS-route.",
+  "blokkade": "Resolveruitval simuleren en bronstatus en uitvalmelding toetsen. Daarna met de pilotclient de tijd tot werkende DNS via de terugvalresolver meten.",
+  "opmerking": "VERSIE 2: de proef met een uitgevallen AdGuard-resolver wacht op de bewaking uit S-P5-32.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "EX33",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "bewijs": "De testmatrix beschrijft EX33. Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database toetst de bewijseis in de database.",
+  "blokkade": "In de simulator de hele keten van onbekend apparaat tot melding met bewijs toetsen. Daarna de waarneming en classificatie van een testapparaat op het echte netwerk verifiëren.",
+  "opmerking": "VERSIE 2: de proef met een nieuw apparaat wacht op de NetAlertX-koppeling uit S-P5-31.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
+ },
+ {
+  "id": "EX34",
+  "status": "Niet gestart",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "De testmatrix beschrijft EX34. Commit 3816636, apps/api/src/integrations/domains/network/router.py registreert de VPN- en tunnelroutes als ongebouwd.",
+  "blokkade": "Met simulators toetsen welke status en melding volgen op het intrekken van toegang. Daarna met het echte account en de tunnel verifiëren dat externe beheertoegang gesloten is en lokale toegang werkt.",
+  "opmerking": "VERSIE 2: de proef met ingetrokken toegang wacht op VPN- en tunnelbewaking uit S-P5-34.",
+  "repo": "home-control-hub",
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "C1.3-HCH-01",
