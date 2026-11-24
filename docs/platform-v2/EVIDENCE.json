@@ -145,7 +145,7 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "apps/api/tests/integration/test_b14_001_dekkingsmatrix.py, apps/api/tests/fakes/my_house_energy.py, tests/interop/test_my_house_energy.py::test_bronkwaliteit en apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database",
   "blokkade": "Het energieblok op de statuspagina bouwen en testen (S-P3-350). Besluit D14 en beproeving met de fysieke meters in huis via N-P6-06 zijn nodig. NIET GEVALIDEERD (hardware).",
-  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De vaste proeven toetsen HTTPS, vers instantiebewijs, server/client/woning en viewer/hub bij opslag en gebruik. De producent-consumentproef toetst de opgeslagen kwaliteit per rol. De connectorproef controleert de bronmeettijd, de grens van 300 seconden en meting_verouderd. Nulvermogen en uitval zijn afzonderlijk beproefd. De bron geeft geen bewijs van een losse NAS-meter. VERSIE 2: de weergave van meterrollen, meettijden en afwijkingen op de statuspagina is uitgesteld (S-P3-350).",
+  "opmerking": "De viewer-koppeling leest my_house rechtstreeks. De vaste proeven toetsen HTTPS, vers instantiebewijs, server/client/woning en viewer/hub bij opslag en gebruik. De producent-consumentproef toetst de opgeslagen kwaliteit per rol. De connectorproef controleert de bronmeettijd, de grens van 300 seconden en meting_verouderd. Nulvermogen en uitval zijn afzonderlijk beproefd. De bron geeft geen bewijs van een losse NAS-meter. VERSIE 2: de weergave van meterrollen, meettijden en afwijkingen op de statuspagina (S-P3-350), de Hub-kostenmodule met bron en meetkwaliteit (S-P3-150) en het Hub-kostenscherm met meetdekking (S-P3-160) zijn uitgesteld omdat versie 1 zich richt op het beheer van bestaande apps.",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-24"
  },
@@ -155,9 +155,9 @@
   "validatie": "Sim-getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "apps/api/tests/integration/test_b14_002_tijdreeks.py",
   "blokkade": "Open softwarepunten zijn de workerhartslag bij bronstoring, onbekende queryvelden en het antwoord bij onbereikbare archiefopslag. NIET GEVALIDEERD (hardware). De fysieke EX28-proef bij een tellerreset en tijdwisseling volgt in S-P6-21.",
-  "opmerking": "De lokale bronproeven van my_house toetsen geschatte tellerstanden en een overgeslagen reset vóór en na uuraggregatie. De rapportproeven toetsen stabiele meter-ID’s bij gelijke namen, herlevering, een onbeslist wisseluur en een ontbrekende tegenover een expliciete nulvergoeding. De woningdagen van 23 en 25 uur zijn Sim-getest. EX28 blijft als programmaregel Geblokkeerd. Geen NAS-aantekening: vóór de hardwareproef rest bouwwerk, de open softwarepunten uit de blokkade.",
+  "opmerking": "De lokale bronproeven van my_house toetsen geschatte tellerstanden en een overgeslagen reset vóór en na uuraggregatie. De rapportproeven toetsen stabiele meter-ID’s bij gelijke namen, herlevering, een onbeslist wisseluur en een ontbrekende tegenover een expliciete nulvergoeding. De woningdagen van 23 en 25 uur zijn Sim-getest. EX28 blijft als programmaregel Geblokkeerd. Geen NAS-aantekening: vóór de hardwareproef rest bouwwerk, de open softwarepunten uit de blokkade. VERSIE 2: de Hub-kostenmodule die energie en kosten per dag, week en maand met bron en meetkwaliteit levert (S-P3-150) is uitgesteld omdat versie 1 zich richt op het beheer van bestaande apps.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-23"
+  "bijgewerkt": "2026-11-24"
  },
  {
   "id": "B14-003",
@@ -175,7 +175,7 @@
   "validatie": "Niet getest; NIET GEVALIDEERD (hardware)",
   "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyCostModel.requires_meter). apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de adviesroute. De proef met en zonder meetreeks staat open.",
   "blokkade": "De adviesroute aan gemeten intervallen koppelen. In de simulator toetsen dat zonder meetreeks geen besparingsbedrag verschijnt. Daarna de bandbreedte van het advies met een fysieke meter over vergelijkbare dagen toetsen (N-P6-06).",
-  "opmerking": "Het kostenmodel verplicht de vlag requires_meter. De adviesroute geeft 501. VERSIE 2: kostenadvies op basis van gemeten intervallen en vergelijkbare dagen is uitgesteld (S-P3-330).",
+  "opmerking": "Het kostenmodel verplicht de vlag requires_meter. De adviesroute geeft 501. VERSIE 2: het kostenadvies op basis van gemeten intervallen en vergelijkbare dagen (S-P3-330) en het Hub-kostenscherm met bron en meetdekking (S-P3-160) zijn uitgesteld. Het scherm wacht op de uitgestelde Hub-kostenmodule (S-P3-150).",
   "repo": "home-control-hub",
   "bijgewerkt": "2026-11-24"
  },
