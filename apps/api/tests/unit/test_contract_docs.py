@@ -195,6 +195,13 @@ def test_niet_gevalideerd_in_blokkade_staat_ook_in_validatie() -> None:
     assert not problems, "\n".join(problems)
 
 
+def test_node_red_dienstaccount_staat_in_validatie() -> None:
+    """C-12 en N-P6-04: de praktijkproef voor deze vier werkpakketten vraagt een Node-RED-dienstaccount."""
+    ids = {"B11-001", "B11-002", "B11-003", "B11-004"}
+    gemarkeerd = {item["id"] for item in _items() if "NIET GEVALIDEERD (account)" in item["validatie"].split("; ")}
+    assert ids <= gemarkeerd
+
+
 def test_b11_001_note_names_the_installation_user_and_the_uid_1000_measurement_together() -> None:
     """S-P2-320 vervolg (KLEIN-59, A-13): de opmerking bij B11-001 noemt de profielgebruiker niet meer als "uid 1000";
     de eerste zin zegt dat het profiel 568:568 noemt en dat 1000 alleen de meting van de image is."""
