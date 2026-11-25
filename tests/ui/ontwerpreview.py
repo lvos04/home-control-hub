@@ -297,7 +297,7 @@ def invoer_ongeldig(r: Review) -> None:
         r.bekijk(
             d,
             "Hub-adres met een pad (422 ongeldig_hub_adres, niets naar de Hub)",
-            formulier("http://192.0.2.10:30400/hub", code, vinger),
+            formulier(f"{r.hub}/hub", code, vinger),
             ["ongeldig_hub_adres"],
         )
 

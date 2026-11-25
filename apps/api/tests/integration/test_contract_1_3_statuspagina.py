@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from integrations.hublink_store import LinkState, Pending
 from integrations.status_page import PairThrottle
+from tests import netwerk
 from tests.conftest import BROWSER_HEADERS, HUB_URL, PAIR_CODE, FakeHub
 
 pytestmark = pytest.mark.integration
@@ -95,7 +96,13 @@ def test_missing_origin_and_missing_cookie_are_refused(client: Any, fake_hub: Fa
 def test_allowed_hosts_and_sec_fetch_site_values_pass(client: Any, fake_hub: FakeHub) -> None:
     """IP-adres, naam zonder punt en .local/.lan/.internal/.home.arpa mogen; ``Sec-Fetch-Site: none`` ook."""
     csrf = _csrf(client)
-    for host in ("192.168.1.10:30420", "[fd00::10]:30420", "nas:30420", "nas.local:30420", "nas.home.arpa"):
+    for host in (
+        f"{netwerk.LAN[10]}:30420",
+        f"[{netwerk.ULA[16]}]:30420",
+        "nas:30420",
+        "nas.local:30420",
+        "nas.home.arpa",
+    ):
         r = _post(
             client,
             csrf,
@@ -111,7 +118,7 @@ def test_domain_name_shows_notice_before_the_form_is_filled(client: Any) -> None
     r = client.get("/", headers={"Host": "nas.voorbeeld.nl:30420"})
     assert r.status_code == 200 and "Code <code>host_niet_toegestaan</code>" in r.text
     assert "Koppelen kan niet via dit adres" in r.text and 'role="alert"' not in r.text
-    r = client.get("/", headers={"Host": "192.168.1.10:30420"})
+    r = client.get("/", headers={"Host": f"{netwerk.LAN[10]}:30420"})
     assert "host_niet_toegestaan" not in r.text
 
 

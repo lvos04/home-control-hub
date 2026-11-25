@@ -20,6 +20,7 @@ from integrations.events import MAX_ATTEMPTS
 from integrations.hublink_store import LinkState
 from integrations.timeutil import utcnow
 from integrations.worker import Worker
+from tests import netwerk
 from tests.conftest import ENV_TOKEN, HUB_URL, FakeHub, SimKey, idem
 
 pytestmark = pytest.mark.integration
@@ -261,7 +262,7 @@ def test_storing_backoff_and_stop_after_60_minutes(make_settings: Any, fake_hub:
     [
         ({"hub_url": "http://localhost:30400"}, "hub_adres_ongeldig"),
         ({"hub_url": "http://hub.test:30400/api"}, "hub_adres_ongeldig"),
-        ({"hub_url": "http://169.254.1.1:30400"}, "hub_adres_ongeldig"),
+        ({"hub_url": f"http://{netwerk.LINK_LOCAL[257]}:30400"}, "hub_adres_ongeldig"),
         ({"enrollment_token": "oud-formaat-token-0123456789"}, "token_ongeldig"),
     ],
 )
@@ -556,14 +557,15 @@ def test_worker_closes_expired_activations(
         json={"system": "hub_local", "username": "nood", "login_kind": "lokaal", "is_break_glass": True},
         headers=idem(h),
     ).json()
+    oefennet = netwerk.VPN.supernet(new_prefix=16)
     c.put(
         f"/integrations/v1/sso/recovery/accounts/{acc['id']}/emergency-access",
-        json={"network_scopes": [{"cidr": "10.20.0.0/16", "kind": "lan"}]},
+        json={"network_scopes": [{"cidr": str(oefennet), "kind": "lan"}]},
         headers=idem(h),
     )
     act = c.post(
         "/integrations/v1/sso/break-glass/activations",
-        json={"account_id": acc["id"], "client_ip": "10.20.1.1", "mode": "oefening"},
+        json={"account_id": acc["id"], "client_ip": str(oefennet[257]), "mode": "oefening"},
         headers=idem(h),
     ).json()
     worker = Worker(make_settings(), transport=fake_hub.transport)

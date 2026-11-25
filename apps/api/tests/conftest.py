@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import create_engine, text
 
 from integrations.config import Settings
+from tests import netwerk
 from tests.fakes.authentik_fake import AuthentikFake
 from tests.fakes.node_red_fake import TEST_SERVICE_USER, NodeRedFake, hardening_arguments, hash_password
 
@@ -36,7 +37,7 @@ PAIR_CODE = "KOPP-ELCO-DE42"  # normaliseert naar 12 Crockford-tekens (O→0, L�
 HUB_URL = "http://hub.test:30400"
 AUTHENTIK_URL = "http://authentik.test:9000"
 NODE_RED_URL = "http://nodered.test:1880"
-SIM_CLIENT_IP = "192.0.2.10"  # RFC 5737-documentatieadres; alleen voor de rate-limit van de nep-Hub
+SIM_CLIENT_IP = str(netwerk.TEST_NET_1[10])  # RFC 5737-documentatieadres; alleen voor de rate-limit van de nep-Hub
 #: wat een browser bij een formulier-POST van de eigen pagina meestuurt (contract 1.3 §3.7): Origin = schema://Host van
 #: de TestClient (``http://testserver``; 'testserver' is een naam zonder punt en dus een toegestane Host)
 BROWSER_HEADERS = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}

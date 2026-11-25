@@ -4,7 +4,7 @@ TLS-SNI blijven de naam). Geen netwerk: een nep-resolver en ``httpx.MockTranspor
 
 from __future__ import annotations
 
-import ipaddress
+from ipaddress import IPv4Network, IPv6Address
 from pathlib import Path
 
 import httpx
@@ -12,6 +12,7 @@ import pytest
 
 from integrations.config import Settings
 from integrations.hubclient import ForbiddenAddressError, HubClient, forbidden_ip
+from tests import netwerk
 
 
 def _client(tmp_path: Path, adressen: dict[str, list[str]], allow_loopback: bool = False) -> tuple[HubClient, list]:
@@ -27,11 +28,14 @@ def _client(tmp_path: Path, adressen: dict[str, list[str]], allow_loopback: bool
 
 
 def test_hostname_is_pinned_to_the_checked_address(tmp_path: Path) -> None:
-    hub, gezien = _client(tmp_path, {"hub.lan": ["192.168.1.20"]})
+    hub, gezien = _client(tmp_path, {"hub.lan": [str(netwerk.LAN[20])]})
     r = hub.request("GET", "http://hub.lan:30400", "/api/v1/services/self")
     assert r.status_code == 200
     req = gezien[0]
-    assert str(req.url) == "http://192.168.1.20:30400/api/v1/services/self" and req.headers["host"] == "hub.lan:30400"
+    assert (
+        str(req.url) == f"http://{netwerk.LAN[20]}:30400/api/v1/services/self"
+        and req.headers["host"] == "hub.lan:30400"
+    )
 
 
 def test_https_keeps_the_name_for_sni(tmp_path: Path) -> None:
@@ -44,10 +48,19 @@ def test_https_keeps_the_name_for_sni(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "adres",
-    ["127.0.0.1", "127.8.9.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0", "::", "::ffff:127.0.0.1"],  # noqa: S104
+    [
+        "127.0.0.1",
+        str(IPv4Network((127 << 24, 8))[-2]),
+        str(IPv6Address(1)),
+        str(netwerk.LINK_LOCAL[0xA9FE]),  # conventioneel metadata-adres, alleen in de nep-resolver
+        str(IPv6Address(0xFE80 << 112) + 1),
+        str(netwerk.ALLE_ADRESSEN.network_address),
+        str(IPv6Address(0)),
+        "::ffff:127.0.0.1",
+    ],
 )
 def test_forbidden_resolved_address_never_connects(tmp_path: Path, adres: str) -> None:
-    hub, gezien = _client(tmp_path, {"rebind.example": ["192.168.1.20", adres]})
+    hub, gezien = _client(tmp_path, {"rebind.example": [str(netwerk.LAN[20]), adres]})
     with pytest.raises(ForbiddenAddressError):
         hub.request("POST", "http://rebind.example:30400", "/api/v1/services/enroll", json={})
     assert gezien == []  # nooit verbonden, ook niet met het toegestane adres ernaast
@@ -55,7 +68,7 @@ def test_forbidden_resolved_address_never_connects(tmp_path: Path, adres: str) -
 
 def test_resolution_is_checked_on_every_connection(tmp_path: Path) -> None:
     """DNS-rebinding: eerst een LAN-adres, bij de volgende verbinding loopback → geweigerd."""
-    antwoorden = [["192.168.1.20"], ["127.0.0.1"]]
+    antwoorden = [[str(netwerk.LAN[20])], ["127.0.0.1"]]
     gezien: list[httpx.Request] = []
     settings = Settings(data_dir=tmp_path)
     hub = HubClient(
@@ -72,7 +85,7 @@ def test_resolution_is_checked_on_every_connection(tmp_path: Path) -> None:
 def test_loopback_only_with_the_development_flag(tmp_path: Path) -> None:
     hub, _gezien = _client(tmp_path, {"localhost-alias": ["127.0.0.1"]}, allow_loopback=True)
     assert hub.request("GET", "http://localhost-alias:30400", "/a").status_code == 200
-    assert forbidden_ip(ipaddress.ip_address("169.254.0.1"), True) == "link-local"  # link-local nooit
+    assert forbidden_ip(netwerk.LINK_LOCAL[1], True) == "link-local"  # link-local nooit
 
 
 def test_ip_literals_are_not_resolved(tmp_path: Path) -> None:
@@ -85,8 +98,8 @@ def test_ip_literals_are_not_resolved(tmp_path: Path) -> None:
         transport=httpx.MockTransport(lambda r: (gezien.append(r), httpx.Response(200))[1]),
         resolver=nooit,
     )
-    assert hub.request("GET", "http://192.168.1.20:30400", "/a").status_code == 200
-    assert str(gezien[0].url) == "http://192.168.1.20:30400/a"
+    assert hub.request("GET", f"http://{netwerk.LAN[20]}:30400", "/a").status_code == 200
+    assert str(gezien[0].url) == f"http://{netwerk.LAN[20]}:30400/a"
 
 
 def test_default_resolver_only_without_a_custom_transport(tmp_path: Path) -> None:

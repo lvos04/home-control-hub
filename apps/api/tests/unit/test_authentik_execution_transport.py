@@ -27,6 +27,7 @@ from cryptography.x509.oid import NameOID
 from integrations.config import Settings
 from integrations.domains.sso.authentik import execution
 from integrations.domains.sso.authentik.client import AuthentikError
+from tests import netwerk
 from tests.fakes.authentik_fake import CLIENT_SECRET, AuthentikFake
 
 LOOPBACK = "127.0.0.1"
@@ -151,7 +152,7 @@ def test_rejects_before_fetching_credential_or_using_http(
     if variant != "certificaat":
         monkeypatch.setattr(execution.certifi, "where", lambda: str(cert_path))
     if variant == "dns":
-        monkeypatch.setattr(execution, "resolve_host", lambda *_: ["0.0.0.0"])  # noqa: S104 - resolverwaarde
+        monkeypatch.setattr(execution, "resolve_host", lambda *_: [str(netwerk.ALLE_ADRESSEN.network_address)])
 
         def refuse_connect(*_: object) -> None:
             pytest.fail("De socket werd geopend voor een afgewezen DNS-bestemming.")

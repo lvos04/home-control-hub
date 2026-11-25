@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from integrations.security.hubkeys import sha256_hex
 from integrations.status_page import PairThrottle
+from tests import netwerk
 from tests.conftest import BROWSER_HEADERS, HUB_URL, PAIR_CODE, FakeHub, idem, pair
 
 pytestmark = pytest.mark.integration
@@ -70,7 +71,12 @@ def test_pairing_via_status_page_requires_fingerprint_and_csrf(client: Any, fake
     assert _post(c, csrf, fingerprint=fp, code="KORT") == "ongeldige_koppelcode"
     # elke poging telt mee voor de rate-limit (5 per bron-IP); voor de rest van deze test een verse teller
     c.app.state.pair_throttle = PairThrottle()
-    for bad in ("http://localhost:30400", "http://hub.test:30400/pad", "http://169.254.0.9:30400", "ftp://x"):
+    for bad in (
+        "http://localhost:30400",
+        "http://hub.test:30400/pad",
+        f"http://{netwerk.LINK_LOCAL[9]}:30400",
+        "ftp://x",
+    ):
         assert _post(c, csrf, fingerprint=fp, hub_url=bad) == "ongeldig_hub_adres"
     assert fake_hub.enroll_requests == []  # ongeldige invoer: geen verzoek naar de Hub
     c.app.state.pair_throttle = PairThrottle()
@@ -126,7 +132,7 @@ def test_pairing_refused_after_first_link_even_when_unlinked_or_revoked(paired_c
 def test_status_page_rate_limit_per_source_ip_and_per_service(client: Any, fake_hub: FakeHub) -> None:
     """Max. 5 pogingen per 15 min per bron-IP (TCP-adres, nooit X-Forwarded-For) en 20 voor de hele dienst."""
     fake_hub.sim.max_failures = 1000  # alleen de grens van deze dienst testen, niet die van de Hub
-    a = _client_from(client, "192.0.2.21")
+    a = _client_from(client, str(netwerk.TEST_NET_1[21]))
     csrf = _csrf(a)
     a.cookies.set("hch_csrf", csrf)
     wrong = "0000-0000-0000-0000"
@@ -137,14 +143,14 @@ def test_status_page_rate_limit_per_source_ip_and_per_service(client: Any, fake_
     r = a.post(
         "/koppelen",
         data={"csrf": csrf, "hub_adres": HUB_URL, "koppelcode": "AAAA-BBBB-CCCC", "hub_vingerafdruk": wrong},
-        headers={"X-Forwarded-For": "198.51.100.7", "X-Real-IP": "198.51.100.7"},
+        headers={"X-Forwarded-For": str(netwerk.TEST_NET_3[7]), "X-Real-IP": str(netwerk.TEST_NET_3[7])},
         follow_redirects=False,
     )
     assert _code(r) == "te_veel_pogingen" and len(fake_hub.enroll_requests) == sent
     # een ander bron-IP mag wel, tot de dienstbrede grens van 20
     outcomes = []
     for i in range(4):
-        b = _client_from(client, f"192.0.2.{30 + i}")
+        b = _client_from(client, str(netwerk.TEST_NET_1[30 + i]))
         b.cookies.set("hch_csrf", csrf)
         outcomes += [_post(b, csrf, code="AAAA-BBBB-CCCC", fingerprint=wrong) for _ in range(5)]
     assert outcomes.count("hub_weigerde") == 15 and outcomes[-5:] == ["te_veel_pogingen"] * 5

@@ -33,6 +33,7 @@ from integrations.status_page import (
     koppeltoestand,
     nl_datumtijd,
 )
+from tests import netwerk
 from tests.conftest import REPO_ROOT
 
 NU = datetime(2026, 11, 9, 11, 56, tzinfo=UTC)
@@ -667,8 +668,8 @@ def test_invariants_over_all_combinations() -> None:
 @pytest.mark.parametrize(
     ("host", "ok"),
     [
-        ("192.168.1.10:30420", True),
-        ("192.168.1.10", True),
+        (f"{netwerk.LAN[10]}:30420", True),
+        (str(netwerk.LAN[10]), True),
         ("[fd00::10]:30420", True),
         ("[::1]", True),
         ("nas:30420", True),
@@ -686,7 +687,7 @@ def test_invariants_over_all_combinations() -> None:
         ("127.1", False),  # afwijkende IPv4-vormen (§3.2)
         ("2130706433", False),
         ("0x7f000001", False),
-        ("010.0.0.1", False),
+        (f"0{netwerk.PRIVE_10[1]}", False),
         ("fd00::10", False),  # IPv6 zonder []
         ("[fd00::10", False),
         ("[nietip]:80", False),

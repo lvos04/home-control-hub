@@ -13,14 +13,15 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
+from tests import netwerk
 from tests.conftest import AUTHENTIK_URL, FakeHub, idem
 
 pytestmark = pytest.mark.integration
 
 BASE = "/integrations/v1/sso"
 PASSPHRASE = "correct paard batterij nietje 2026!"
-LAN = {"cidr": "192.168.50.0/24", "kind": "lan"}  # testbereik (geen echte NAS-waarde)
-VPN = {"cidr": "10.8.0.0/24", "kind": "vpn"}  # WireGuard-achtig VPN in RFC 1918 (100.64/10: zie de CGNAT-test)
+LAN = {"cidr": str(netwerk.LAN), "kind": "lan"}
+VPN = {"cidr": str(netwerk.VPN), "kind": "vpn"}  # RFC 1918, los van de CGNAT-proef
 
 
 def _create_account(c: Any, h: dict[str, str], **body: Any) -> dict[str, Any]:
@@ -85,12 +86,20 @@ def test_break_glass_testable_while_authenticator_offline(paired_client: Any, au
         "authenticator": "info",
     }
     # beoordeling werkt zonder Authentik: LAN/VPN toegestaan, internet geweigerd
-    ok = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.7"}, headers=h)
+    ok = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": str(netwerk.LAN[7])}, headers=h
+    )
     assert ok.json()["allowed"] is True and ok.json()["authenticator_required"] is False
     assert ok.json()["session_max_minutes"] == 30
-    vpn = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "10.8.0.5"}, headers=h)
+    vpn = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": str(netwerk.VPN[5])}, headers=h
+    )
     assert vpn.json()["allowed"] is True
-    wan = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "198.51.100.4"}, headers=h)
+    wan = c.post(
+        f"{BASE}/break-glass/evaluate",
+        json={"account_id": acc["id"], "client_ip": str(netwerk.TEST_NET_1[4])},
+        headers=h,
+    )
     assert wan.json()["allowed"] is False and wan.json()["reasons"][0]["code"] == "buiten_bereik"
 
     # ook met Authentik helemaal niet geconfigureerd blijft het testbaar
@@ -141,11 +150,11 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
     # echte activatie → rotatie vereist → risico tot rotatie bevestigd
     act = c.post(
         f"{BASE}/break-glass/activations",
-        json={"account_id": acc["id"], "client_ip": "192.168.50.9", "mode": "echt"},
+        json={"account_id": acc["id"], "client_ip": str(netwerk.LAN[9]), "mode": "echt"},
         headers=idem(h),
     )
     assert act.status_code == 201 and act.json()["rotation_required"] is True
-    assert act.json()["matched_scope"] == "192.168.50.0/24"
+    assert act.json()["matched_scope"] == str(netwerk.LAN)
     detail = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()
     assert "rotatie_na_gebruik_vereist" in [r["code"] for r in detail["readiness"]["reasons"]]
     rot = c.post(f"{BASE}/break-glass/activations/{act.json()['id']}/rotated", headers=idem(h))
@@ -155,7 +164,7 @@ def test_full_recovery_journey_and_readiness(paired_client: Any, auth: Any, fake
     # activatie vanaf internet wordt geweigerd én geaudit
     denied = c.post(
         f"{BASE}/break-glass/activations",
-        json={"account_id": acc["id"], "client_ip": "203.0.113.50", "mode": "echt"},
+        json={"account_id": acc["id"], "client_ip": str(netwerk.TEST_NET_3[50]), "mode": "echt"},
         headers=idem(h),
     )
     assert denied.status_code == 403 and denied.json()["code"] == "forbidden"
@@ -303,7 +312,10 @@ def test_emergency_access_rules(paired_client: Any, auth: Any) -> None:
     )
     assert r.status_code == 409 and r.json()["code"] == "geen_noodaccount"
     bg = _create_account(c, h, system="hub_local", username="nood2", login_kind="beide", is_break_glass=True)
-    for scopes in ([{"cidr": "0.0.0.0/0", "kind": "lan"}], [{"cidr": "8.8.8.0/24", "kind": "vpn"}]):
+    for scopes in (
+        [{"cidr": str(netwerk.ALLE_ADRESSEN), "kind": "lan"}],
+        [{"cidr": str(netwerk.PUBLIEK), "kind": "vpn"}],
+    ):
         r = c.put(
             f"{BASE}/recovery/accounts/{bg['id']}/emergency-access", json={"network_scopes": scopes}, headers=idem(h)
         )
@@ -324,7 +336,9 @@ def test_emergency_access_rules(paired_client: Any, auth: Any) -> None:
         headers=idem(h, **{"If-Match": rv.headers["ETag"]}),
     )
     assert rk.status_code == 200 and rk.json()["status"] == "ingetrokken"
-    ev = c.post(f"{BASE}/break-glass/evaluate", json={"account_id": bg["id"], "client_ip": "192.168.50.2"}, headers=h)
+    ev = c.post(
+        f"{BASE}/break-glass/evaluate", json={"account_id": bg["id"], "client_ip": str(netwerk.LAN[2])}, headers=h
+    )
     assert ev.json()["allowed"] is False
     # een noodaccount kan niet naar SSO-only worden gezet
     etag = c.get(f"{BASE}/recovery/accounts/{bg['id']}", headers=h).headers["ETag"]
@@ -339,12 +353,12 @@ def test_hub_service_can_evaluate_and_report_but_not_manage(paired_client: Any, 
     acc = _prepare_break_glass(c, h)
     svc = fake_hub.service_auth()
     ev = c.post(
-        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=svc
+        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": str(netwerk.LAN[3])}, headers=svc
     )
     assert ev.status_code == 200 and ev.json()["allowed"]
     act = c.post(
         f"{BASE}/break-glass/activations",
-        json={"account_id": acc["id"], "client_ip": "192.168.50.3", "mode": "oefening"},
+        json={"account_id": acc["id"], "client_ip": str(netwerk.LAN[3]), "mode": "oefening"},
         headers=idem(svc),
     )
     assert act.status_code == 201 and act.json()["rotation_required"] is False
@@ -354,7 +368,9 @@ def test_hub_service_can_evaluate_and_report_but_not_manage(paired_client: Any, 
     viewer = auth("viewer")
     assert (
         c.post(
-            f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "192.168.50.3"}, headers=viewer
+            f"{BASE}/break-glass/evaluate",
+            json={"account_id": acc["id"], "client_ip": str(netwerk.LAN[3])},
+            headers=viewer,
         ).status_code
         == 403
     )
@@ -377,17 +393,19 @@ def test_pagination_of_accounts(paired_client: Any, auth: Any) -> None:
 
 
 def test_cgnat_only_with_explicit_admin_permission(paired_client: Any, auth: Any) -> None:
-    """Contract 1.3 §4.1 (C1.3-HCH-10): 100.64.0.0/10 telt standaard niet als privé; een beheerder kan het per
+    """Contract 1.3 §4.1 (C1.3-HCH-10): het CGNAT-bereik telt standaard niet als privé; een beheerder kan het per
     noodtoegang toestaan (audit + waarschuwing). Zonder toestemming: 422 bij registreren en geen toegang."""
     c, h = paired_client, auth("admin")
     acc = _prepare_break_glass(c, h)
     pad = f"{BASE}/recovery/accounts/{acc['id']}/emergency-access"
     huidig = c.get(f"{BASE}/recovery/accounts/{acc['id']}", headers=h).json()["emergency_access"]
-    cgnat = {"cidr": "100.64.0.0/10", "kind": "vpn"}
+    cgnat = {"cidr": str(netwerk.CGNAT), "kind": "vpn"}
     r = c.put(pad, json={"network_scopes": [LAN, cgnat]}, headers=idem(h, **{"If-Match": huidig["etag"]}))
-    assert r.status_code == 422 and "100.64.0.0/10" in r.json()["message"]
+    assert r.status_code == 422 and str(netwerk.CGNAT) in r.json()["message"]
     tailscale = c.post(
-        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "100.70.1.2"}, headers=h
+        f"{BASE}/break-glass/evaluate",
+        json={"account_id": acc["id"], "client_ip": str(netwerk.CGNAT_CLIENT)},
+        headers=h,
     )
     assert tailscale.json()["allowed"] is False
     r = c.put(
@@ -398,7 +416,9 @@ def test_cgnat_only_with_explicit_admin_permission(paired_client: Any, auth: Any
     assert r.status_code == 200, r.text
     assert r.json()["cgnat_toegestaan"] is True and "Tailscale" in r.json()["waarschuwing_nl"]
     tailscale = c.post(
-        f"{BASE}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "100.70.1.2"}, headers=h
+        f"{BASE}/break-glass/evaluate",
+        json={"account_id": acc["id"], "client_ip": str(netwerk.CGNAT_CLIENT)},
+        headers=h,
     )
     assert tailscale.json()["allowed"] is True
     with c.app.state.db.sessions() as s:

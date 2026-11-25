@@ -29,6 +29,7 @@ from integrations.hublink_store import MAX_USED_TOKENS, HubLinkStore, LastError,
 from integrations.security.hubkeys import validate_hub_jwk
 from integrations.security.secrets import enroll_public_jwk, ensure_secrets, load_identity
 from integrations.status_page import PairThrottle
+from tests import netwerk
 from tests.conftest import HubSim, SimKey
 
 
@@ -52,7 +53,7 @@ def _response(sim: Any) -> dict[str, Any]:
         "base_url": None,
         "public_key_jwk": {"kty": "OKP", "crv": "Ed25519", "x": SimKey().x},
     }
-    reply = sim.enroll(json.dumps(body).encode(), "192.0.2.1")
+    reply = sim.enroll(json.dumps(body).encode(), str(netwerk.TEST_NET_1[1]))
     assert reply.status == 200, reply.body
     return dict(reply.body)
 
@@ -70,7 +71,7 @@ def test_enroll_request_has_exactly_the_contract_fields(tmp_path: Path, sim: Any
     for alias in ("kind", "secret", "api_prefix", "connector_prefix", "token", "use", "alg"):
         assert alias not in body and alias not in body["public_key_jwk"]
     # de Hub-simulator volgt §3.3 exact (onbekende velden → 422): dit verzoek wordt geaccepteerd
-    reply = sim.enroll(json.dumps(body).encode(), "192.0.2.1")
+    reply = sim.enroll(json.dumps(body).encode(), str(netwerk.TEST_NET_1[1]))
     assert reply.status == 200 and reply.body["enrollment_replayed"] is False
 
 
@@ -80,7 +81,7 @@ def test_simulator_follows_3_3_errors(sim: Any) -> None:
     token = sim.new_enrollment_token()
     ok = {"app_id": "home-control-hub", "enrollment_token": token, "version": "0.1.0", "base_url": None}
 
-    def enroll(body: dict[str, Any], ip: str = "192.0.2.1") -> Any:
+    def enroll(body: dict[str, Any], ip: str = str(netwerk.TEST_NET_1[1])) -> Any:
         return sim.enroll(json.dumps(body).encode(), ip)
 
     for bad in (
@@ -101,12 +102,13 @@ def test_simulator_follows_3_3_errors(sim: Any) -> None:
     assert first.status == again.status == 200 and again.body["enrollment_replayed"] is True
     other = enroll({**ok, "public_key_jwk": {"kty": "OKP", "crv": "Ed25519", "x": SimKey().x}})
     assert other.status == 401  # andere sleutel: geen herhaling
+    bron_ip = str(netwerk.TEST_NET_1[9])
     for _ in range(9):
-        enroll({**ok, "enrollment_token": "enr_" + "Q" * 43, "public_key_jwk": jwk}, ip="192.0.2.9")
-    assert enroll({**ok, "enrollment_token": "enr_" + "Q" * 43, "public_key_jwk": jwk}, ip="192.0.2.9").status == 401
-    limited = enroll({**ok, "public_key_jwk": jwk}, ip="192.0.2.9")
+        enroll({**ok, "enrollment_token": "enr_" + "Q" * 43, "public_key_jwk": jwk}, ip=bron_ip)
+    assert enroll({**ok, "enrollment_token": "enr_" + "Q" * 43, "public_key_jwk": jwk}, ip=bron_ip).status == 401
+    limited = enroll({**ok, "public_key_jwk": jwk}, ip=bron_ip)
     assert limited.status == 429 and int(limited.headers["Retry-After"]) > 0
-    assert enroll({**ok, "public_key_jwk": jwk}, ip="192.0.2.8").status != 429  # per bron-IP
+    assert enroll({**ok, "public_key_jwk": jwk}, ip=str(netwerk.TEST_NET_1[8])).status != 429  # per bron-IP
 
 
 # ------------------------------------------------------------------ antwoord (§3.3)
@@ -408,4 +410,4 @@ def test_base_url_is_only_sent_when_valid(
     hl = HubLink(s, HubLinkStore(tmp_path), enroll_public_jwk(load_identity(tmp_path)), HubClient(s))
     body = hl.enroll_body("enrollment_token", sim.new_enrollment_token())
     assert body["base_url"] == expected
-    assert sim.enroll(json.dumps(body).encode(), "192.0.2.1").status == 200
+    assert sim.enroll(json.dumps(body).encode(), str(netwerk.TEST_NET_1[1])).status == 200

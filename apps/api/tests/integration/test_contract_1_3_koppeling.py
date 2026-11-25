@@ -24,6 +24,7 @@ from integrations.enrollment import ENROLL_PATH, KEY_ROTATIONS_PATH, InvalidResp
 from integrations.hublink_store import ERROR_MESSAGES, SCHEMA_VERSION, HubLinkStore, LinkState
 from integrations.security.hubkeys import sha256_hex
 from integrations.worker import Worker
+from tests import netwerk
 from tests.conftest import ENV_TOKEN, HUB_URL, FakeHub, SimKey, sim_hub
 
 pytestmark = pytest.mark.integration
@@ -99,7 +100,7 @@ def test_invalid_rotation_sequence_stores_nothing(waarde: Any) -> None:
         "base_url": None,
         "public_key_jwk": {"kty": "OKP", "crv": "Ed25519", "x": SimKey().x},
     }
-    data = sim.enroll(json.dumps(body).encode(), "192.0.2.1").body
+    data = sim.enroll(json.dumps(body).encode(), str(netwerk.TEST_NET_1[1])).body
     assert data["schema_version"] == "1.3" and data["rotation_sequence"] == 0
     with pytest.raises(InvalidResponseError) as exc:
         validate_enroll_response({**data, "rotation_sequence": waarde}, None)

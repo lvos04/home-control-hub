@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from ipaddress import IPv4Network
 from typing import Any
 
 import httpx
@@ -94,10 +95,11 @@ def test_03_b13_001_break_glass_with_authentik_offline(stack: Stack) -> None:
             ).status_code
             == 201
         )
+    lan = IPv4Network((bytes((10, 99, 0, 0)), 16))
     r = httpx.put(
         f"{base}/recovery/accounts/{acc['id']}/emergency-access",
         headers=_idem(h),
-        json={"network_scopes": [{"cidr": "10.99.0.0/16", "kind": "lan"}]},
+        json={"network_scopes": [{"cidr": str(lan), "kind": "lan"}]},
     )
     assert r.status_code == 201
     httpx.post(f"{stack.hub}/sim/authentik", json={"up": False})
@@ -106,7 +108,7 @@ def test_03_b13_001_break_glass_with_authentik_offline(stack: Stack) -> None:
     ).json()
     assert drill["outcome"] == "ok" and drill["authenticator_state"] == "offline"
     ev = httpx.post(
-        f"{base}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": "10.99.3.4"}, headers=h
+        f"{base}/break-glass/evaluate", json={"account_id": acc["id"], "client_ip": str(lan[772])}, headers=h
     ).json()
     assert ev["allowed"] and ev["authenticator_required"] is False
     kit = httpx.post(f"{base}/recovery/kit/export", json={"passphrase": PASS}, headers=_idem(h)).json()

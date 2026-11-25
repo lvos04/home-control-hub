@@ -29,6 +29,7 @@ from integrations.config import Settings
 from integrations.domains.sso.kit import encrypt_kit
 from integrations.migrations import alembic_dir, head_revision, upgrade
 from integrations.worker import Worker
+from tests import netwerk
 from tests.conftest import ENV_TOKEN, HUB_URL, REPO_ROOT, FakeHub, idem, recreate_database
 
 pytestmark = pytest.mark.integration
@@ -118,7 +119,7 @@ def test_jwt_cannot_claim_service_role(paired_client: Any, hub_keys: Any) -> Non
     assert r.status_code == 401 and r.json()["details"]["reason"] == "token_use_invalid"
     r = paired_client.post(
         "/integrations/v1/sso/break-glass/evaluate",
-        json={"account_id": str(uuid.uuid4()), "client_ip": "10.1.2.3"},
+        json={"account_id": str(uuid.uuid4()), "client_ip": str(netwerk.VPN[3])},
         headers={"Authorization": f"Bearer {hub_keys.token(['service', 'admin'])}"},
     )
     assert r.status_code == 401 and r.json()["details"]["reason"] == "token_use_invalid"
@@ -133,7 +134,7 @@ TRUSTED_HEADER_ATTEMPT = {
     "X-Authentik-Groups": "authentik Admins",
     "Remote-User": "admin",
     "X-Remote-User": "admin",
-    "X-Forwarded-For": "10.0.0.1",
+    "X-Forwarded-For": str(netwerk.PRIVE_10[1]),
 }
 
 
@@ -259,7 +260,7 @@ def test_b10_002_one_device_per_source_and_mac(clean_db: str) -> None:
             {"id": dev},
         )
         # DHCP-wissel: hetzelfde apparaat krijgt een tweede adres in de historie
-        for ip in ("10.20.0.5", "10.20.0.9"):
+        for ip in (str(netwerk.VPN[5]), str(netwerk.VPN[9])):
             c.execute(
                 text(
                     "INSERT INTO network_address_observation (id, device_id, ip_address, first_seen, last_seen, "

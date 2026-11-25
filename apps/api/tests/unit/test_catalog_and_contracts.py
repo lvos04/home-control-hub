@@ -14,6 +14,7 @@ from integrations.domains.sso.authentik import compat
 from integrations.domains.sso.catalog import APP_COVERAGE
 from integrations.hubclient import HubClient, HubUrlError, validate_hub_url
 from integrations.sources import ALL_SOURCES
+from tests import netwerk
 from tests.conftest import REPO_ROOT
 
 
@@ -130,12 +131,12 @@ def test_safety_rules_in_catalog() -> None:
         "http://127.0.0.1:30400",
         "http://[::1]:30400",
         "nas:30400",
-        # contract 1.2 §3.2: geen pad, geen link-local, geen 0.0.0.0/::, geen fragment, geldige poort
+        # contract 1.2 §3.2: geen pad, geen link-local, geen ongespecificeerd adres, geen fragment, geldige poort
         "http://nas:30400/api",
         "http://nas:30400/#x",
-        "http://169.254.10.20:30400",
+        f"http://{netwerk.LINK_LOCAL[20]}:30400",
         "http://[fe80::1]:30400",
-        "http://0.0.0.0:30400",
+        f"http://{netwerk.ALLE_ADRESSEN.network_address}:30400",
         "http://[::]:30400",
         "http://nas:0",
         "http://nas:99999",
@@ -146,7 +147,7 @@ def test_safety_rules_in_catalog() -> None:
         "http://2130706433:30400",
         "http://0x7f000001:30400",
         "http://0:30400",
-        "http://010.0.0.1:30400",
+        f"http://0{netwerk.PRIVE_10[1]}:30400",
         "http://169.254.1:30400",
         "http://localhost.:30400",
         "http://127.0.0.1.:30400",

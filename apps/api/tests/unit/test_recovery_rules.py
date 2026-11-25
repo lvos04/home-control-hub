@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -10,38 +11,39 @@ import pytest
 from integrations.domains.sso import recovery
 from integrations.domains.sso.kit import KitError, decrypt_kit, encrypt_kit
 from integrations.domains.sso.models import SSO_INDEPENDENT_METHODS
+from tests import netwerk
 
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
 PASS = "lange wachtwoordzin voor de kluis 2026"
 
 
 # ------------------------------------------------------------------ bereiken
-@pytest.mark.parametrize("cidr", ["192.168.1.0/24", "10.0.0.0/8", "172.16.5.0/24", "fd7a:115c:a1e0::/48"])
+@pytest.mark.parametrize("cidr", [str(netwerk.LAN), str(netwerk.PRIVE_10), str(netwerk.PRIVE_172), str(netwerk.ULA)])
 def test_private_scopes_accepted(cidr: str) -> None:
     assert recovery.validate_scopes([{"cidr": cidr, "kind": "lan"}])[0]["cidr"]
 
 
-@pytest.mark.parametrize("cidr", ["100.64.0.0/10", "100.100.1.5/32", "100.127.255.0/24"])
+@pytest.mark.parametrize("cidr", [str(netwerk.CGNAT), f"{netwerk.CGNAT_CLIENT}/32", f"{netwerk.CGNAT[-256]}/24"])
 def test_cgnat_is_not_private_unless_an_admin_allows_it(cidr: str) -> None:
-    """Contract 1.3 §4.1 (C1.3-HCH-10): 100.64.0.0/10 (CGNAT, ook Tailscale) telt standaard niet als privé."""
-    with pytest.raises(recovery.ScopeError, match=r"100\.64\.0\.0/10"):
+    """Contract 1.3 §4.1 (C1.3-HCH-10): CGNAT (ook Tailscale) telt standaard niet als privé."""
+    with pytest.raises(recovery.ScopeError, match=re.escape(str(netwerk.CGNAT))):
         recovery.validate_scopes([{"cidr": cidr, "kind": "vpn"}])
     assert recovery.validate_scopes([{"cidr": cidr, "kind": "vpn"}], allow_cgnat=True)[0]["cidr"]
     with pytest.raises(recovery.ScopeError):  # groter dan CGNAT blijft geweigerd, ook met toestemming
-        recovery.validate_scopes([{"cidr": "100.0.0.0/8", "kind": "vpn"}], allow_cgnat=True)
+        recovery.validate_scopes([{"cidr": str(netwerk.CGNAT.supernet(new_prefix=8)), "kind": "vpn"}], allow_cgnat=True)
 
 
 @pytest.mark.parametrize(
     "cidr",
     [
-        "0.0.0.0/0",
-        "8.8.8.0/24",
-        "203.0.113.0/24",
+        str(netwerk.ALLE_ADRESSEN),
+        str(netwerk.PUBLIEK),
+        str(netwerk.TEST_NET_3),
         "::/0",
         "2001:db8::/32",
         "127.0.0.1/32",
-        "169.254.0.0/16",
-        "192.168.0.0/15",
+        str(netwerk.LINK_LOCAL),
+        str(netwerk.LAN.supernet(new_prefix=15)),
         "geen-cidr",
     ],
 )
@@ -54,9 +56,11 @@ def test_scope_kind_and_limits() -> None:
     with pytest.raises(recovery.ScopeError):
         recovery.validate_scopes([])
     with pytest.raises(recovery.ScopeError):
-        recovery.validate_scopes([{"cidr": "10.0.0.0/24", "kind": "internet"}])
-    dedup = recovery.validate_scopes([{"cidr": "10.0.0.1/24", "kind": "lan"}, {"cidr": "10.0.0.0/24", "kind": "lan"}])
-    assert dedup == [{"cidr": "10.0.0.0/24", "kind": "lan"}]
+        recovery.validate_scopes([{"cidr": str(netwerk.VPN), "kind": "internet"}])
+    dedup = recovery.validate_scopes(
+        [{"cidr": f"{netwerk.VPN[1]}/24", "kind": "lan"}, {"cidr": str(netwerk.VPN), "kind": "lan"}]
+    )
+    assert dedup == [{"cidr": str(netwerk.VPN), "kind": "lan"}]
 
 
 # ------------------------------------------------------------------ beoordelen
@@ -66,7 +70,7 @@ def _eval(ip: str, **kw: object) -> recovery.Evaluation:
         "is_break_glass": True,
         "login_kind": "lokaal",
         "policy_status": "actief",
-        "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}, {"cidr": "100.64.0.0/10", "kind": "vpn"}],
+        "scopes": [{"cidr": str(netwerk.LAN), "kind": "lan"}, {"cidr": str(netwerk.CGNAT), "kind": "vpn"}],
         "session_max_minutes": 60,
     }
     base.update(kw)
@@ -74,26 +78,26 @@ def _eval(ip: str, **kw: object) -> recovery.Evaluation:
 
 
 def test_evaluate_inside_lan_and_vpn() -> None:
-    lan = _eval("192.168.10.20")
-    assert lan.allowed and lan.matched_scope == "192.168.10.0/24" and lan.session_max_minutes == 60
+    lan = _eval(str(netwerk.LAN[20]))
+    assert lan.allowed and lan.matched_scope == str(netwerk.LAN) and lan.session_max_minutes == 60
     assert lan.to_dict()["authenticator_required"] is False
-    # 100.64.0.0/10 alleen met toestemming van een beheerder (1.3 §4.1); een oudere registratie zonder toestemming
+    # CGNAT alleen met toestemming van een beheerder (1.3 §4.1); een oudere registratie zonder toestemming
     # geeft geen toegang meer (verscherpen, nooit stil verruimen)
-    zonder = _eval("100.101.102.103")
+    zonder = _eval(str(netwerk.CGNAT_CLIENT))
     assert not zonder.allowed and [r["code"] for r in zonder.reasons] == ["cgnat_niet_toegestaan"]
-    assert _eval("100.101.102.103", allow_cgnat=True).allowed
+    assert _eval(str(netwerk.CGNAT_CLIENT), allow_cgnat=True).allowed
 
 
 @pytest.mark.parametrize(
     ("ip", "kw", "code"),
     [
-        ("203.0.113.10", {}, "buiten_bereik"),
-        ("192.168.11.5", {}, "buiten_bereik"),
-        ("192.168.10.5", {"account_status": "uitgeschakeld"}, "account_uitgeschakeld"),
-        ("192.168.10.5", {"is_break_glass": False}, "geen_noodaccount"),
-        ("192.168.10.5", {"login_kind": "sso"}, "alleen_sso"),
-        ("192.168.10.5", {"policy_status": "ingetrokken"}, "geen_noodtoegang"),
-        ("192.168.10.5", {"policy_status": None, "scopes": None}, "geen_noodtoegang"),
+        (str(netwerk.TEST_NET_3[10]), {}, "buiten_bereik"),
+        (str(netwerk.LAN.broadcast_address + 5), {}, "buiten_bereik"),
+        (str(netwerk.LAN[5]), {"account_status": "uitgeschakeld"}, "account_uitgeschakeld"),
+        (str(netwerk.LAN[5]), {"is_break_glass": False}, "geen_noodaccount"),
+        (str(netwerk.LAN[5]), {"login_kind": "sso"}, "alleen_sso"),
+        (str(netwerk.LAN[5]), {"policy_status": "ingetrokken"}, "geen_noodtoegang"),
+        (str(netwerk.LAN[5]), {"policy_status": None, "scopes": None}, "geen_noodtoegang"),
         ("niet-een-ip", {}, "ongeldig_ip"),
     ],
 )
@@ -103,8 +107,14 @@ def test_evaluate_denials(ip: str, kw: dict, code: str) -> None:
 
 
 def test_probe_addresses() -> None:
-    assert recovery.probe_addresses([{"cidr": "192.168.10.0/24", "kind": "lan"}]) == ("192.168.10.1", "203.0.113.10")
-    assert recovery.probe_addresses([{"cidr": "100.100.1.5/32", "kind": "vpn"}]) == ("100.100.1.5", "203.0.113.10")
+    assert recovery.probe_addresses([{"cidr": str(netwerk.LAN), "kind": "lan"}]) == (
+        str(netwerk.LAN[1]),
+        str(netwerk.TEST_NET_3[10]),
+    )
+    assert recovery.probe_addresses([{"cidr": f"{netwerk.CGNAT_CLIENT}/32", "kind": "vpn"}]) == (
+        str(netwerk.CGNAT_CLIENT),
+        str(netwerk.TEST_NET_3[10]),
+    )
     assert recovery.probe_addresses([{"cidr": "fd00::/64", "kind": "vpn"}])[1] == "2001:db8::10"
 
 
@@ -124,7 +134,7 @@ def _account(**kw: object) -> recovery.AccountView:
         ],
         "emergency": {
             "status": "actief",
-            "scopes": [{"cidr": "192.168.10.0/24", "kind": "lan"}],
+            "scopes": [{"cidr": str(netwerk.LAN), "kind": "lan"}],
             "last_reviewed_at": NOW - timedelta(days=10),
             "review_interval_days": 90,
         },

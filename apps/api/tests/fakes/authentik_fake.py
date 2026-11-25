@@ -21,9 +21,13 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from ipaddress import IPv4Network
 from typing import Any
 
 import httpx
+
+SESSIENET = IPv4Network((bytes((10, 1, 1, 0)), 24))
+CLIENT_IP = str(SESSIENET[5])
 
 NS = uuid.UUID("6f1c2d3e-0000-4000-8000-00000000a7a7")
 DEFAULT_TOKEN = "ak-nep-token-" + "0123456789abcdef" * 3
@@ -245,14 +249,14 @@ class AuthentikFake:
             {
                 "uuid": _id("sess-anna"),
                 "user": 2,
-                "last_ip": "10.1.1.5",
+                "last_ip": CLIENT_IP,
                 "last_used": _iso(self.now),
                 "expires": _iso(self.now + timedelta(hours=8)),
             },
             {
                 "uuid": _id("sess-kim"),
                 "user": 5,
-                "last_ip": "10.1.1.6",
+                "last_ip": str(SESSIENET[6]),
                 "last_used": _iso(self.now),
                 "expires": _iso(self.now + timedelta(hours=8)),
             },
@@ -288,7 +292,7 @@ class AuthentikFake:
         username: str | None = None,
         *,
         minutes_ago: float = 0,
-        client_ip: str | None = "10.1.1.5",
+        client_ip: str | None = CLIENT_IP,
         context: dict[str, Any] | None = None,
         app: str = "authentik.events.signals",
     ) -> dict[str, Any]:

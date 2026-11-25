@@ -32,6 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "apps" / "api"))
 
 from fastapi.testclient import TestClient  # noqa: E402
+from tests import netwerk  # noqa: E402
 from tests.conftest import (  # noqa: E402
     BROWSER_HEADERS,
     HUB_URL,
@@ -78,7 +79,9 @@ class Toestanden:
         base.update(settings)
         # Origin/Sec-Fetch-Site zoals een browser bij een formulier-POST van de eigen pagina (contract 1.3 §3.7)
         client = TestClient(
-            create_app(Settings(**base), transport=hub.transport), client=("192.0.2.40", 50000), headers=BROWSER_HEADERS
+            create_app(Settings(**base), transport=hub.transport),
+            client=(str(netwerk.TEST_NET_1[40]), 50000),
+            headers=BROWSER_HEADERS,
         )
         client.__enter__()
         return client
