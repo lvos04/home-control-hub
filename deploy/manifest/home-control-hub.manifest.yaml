@@ -1,13 +1,12 @@
 # Manifest (manifeststandaard v1, platformcontract 1.3 §9; eigenaar van de standaard: appstore-en-fork).
 # Installatie uitsluitend als standaard TrueNAS Custom App (één image + formulierwaarden); een 'compose'-veld is
-# verboden. De digest van de eigen GHCR-image vult de release-CI in (release/digests.json); zonder digest is installeren
-# niet gereed. Poorten staan alleen in network.ports (contract 1.2: custom_app.ports en joins_platform_network zijn
-# vervallen; apps delen nooit een Docker-netwerk).
+# verboden. De digest van de eigen GHCR-image komt uit de releasebijlage digests.json. Installeren vereist die digest.
+# Poorten staan alleen in network.ports. Sinds contract 1.2 zijn custom_app.ports en joins_platform_network vervallen.
+# Apps delen nooit een Docker-netwerk.
 # Koppelen met de Hub: bij installatie via de API geeft de Hub zelf HUB_URL, HUB_ENROLLMENT_TOKEN (eenmalig, 60 min)
 # en HUB_KEY_FINGERPRINT mee (contract 1.3 §3.2, §8); HUB_* is gereserveerd: geen manifestparameters en custom_app.env
-# blijft leeg. Gecontroleerd met de 1.3-validator van appstore-en-fork (jl-manifest validate --strict, C1.3-ASF-08):
-# geldig, 0 fouten; digest_pending_release is geaccepteerd (alleen vóór de eerste release, zie accepted_findings).
-# CI draait die validator verplicht op een vaste commit van appstore-en-fork (.github/workflows/ci.yml).
+# blijft leeg. De CI valideert het manifest met jl-manifest validate --strict (C1.3-ASF-08) op een vaste commit
+# van appstore-en-fork (.github/workflows/ci.yml).
 manifest_version: "1"
 app_id: home-control-hub
 name: Home Control Hub
@@ -23,7 +22,7 @@ install:
 image:
   repository: ghcr.io/lvos04/home-control-hub
   tag: "0.1.0"
-  digest: null  # wordt door release.yml ingevuld (release/digests.json); nooit installeren zonder digest
+  digest: sha256:b691683455cb38f7eebceead98544946f9d741288449f85739a5339cd7aa681b  # uit digests.json van v0.1.0
 custom_app:
   storage:
     - name: appdata
@@ -161,7 +160,4 @@ provenance:
   source_commit: null
   upstream_repo: null
   license: GPL-3.0
-# contract 1.3 §9: alleen waarschuwingen uit de vaste lijst; --strict faalt zodra deze niet meer optreedt (na de release)
-accepted_findings:
-  - code: digest_pending_release
-    reden_nl: Eigen image vóór de eerste release; de release-CI vult de digest in (release/digests.json).
+accepted_findings: []

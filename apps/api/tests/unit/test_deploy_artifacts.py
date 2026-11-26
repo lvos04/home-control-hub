@@ -82,8 +82,8 @@ def test_manifest_is_custom_app_and_safe() -> None:
 
 
 def test_manifest_follows_contract_1_3() -> None:
-    """Contract 1.3 §9 (C1.3-HCH-13): HUB_* is gereserveerd, monitorplan in healthcheck.monitor, kop 1.3 en alleen
-    geaccepteerde waarschuwingen uit de vaste lijst."""
+    """Contract 1.3 §9 (C1.3-HCH-13) reserveert HUB_* en vereist een monitorplan. Het releasemanifest heeft een
+    vastgezette digest en geen geaccepteerde waarschuwingen."""
     text = (DEPLOY / "manifest/home-control-hub.manifest.yaml").read_text(encoding="utf-8")
     m = yaml.safe_load(text)
     assert "platformcontract 1.3 §9" in text.splitlines()[0]
@@ -91,8 +91,8 @@ def test_manifest_follows_contract_1_3() -> None:
     assert not [n for n in names if n.upper().startswith("HUB_")]
     assert m["healthcheck"]["monitor"] == {"pad": "/readyz", "verwachte_status": 200, "timeout_s": 8, "interval_s": 60}
     assert m["healthcheck"]["monitor"]["pad"] == m["healthcheck"]["path"]
-    assert [a["code"] for a in m["accepted_findings"]] == ["digest_pending_release"]
-    assert all(a["reden_nl"] for a in m["accepted_findings"])
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", m["image"]["digest"])
+    assert m["accepted_findings"] == []
 
 
 @pytest.mark.skipif(
