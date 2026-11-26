@@ -202,6 +202,62 @@ def test_node_red_dienstaccount_staat_in_validatie() -> None:
     assert ids <= gemarkeerd
 
 
+@pytest.mark.parametrize(
+    ("ident", "soort"),
+    [
+        # N-P6-07 en de I11-controlelijst. P5 §7.6 noemt ook het account voor NetAlertX.
+        ("B10-001", "hardware"),
+        ("B10-001", "account"),
+        ("B10-002", "hardware"),
+        ("B10-002", "account"),
+        ("I11-11-01", "hardware"),
+        ("I11-11-01", "account"),
+        ("I11-11-03", "hardware"),
+        ("I11-11-03", "account"),
+        ("I11-11-04", "hardware"),
+        ("I11-11-04", "account"),
+        ("I11-11-05", "hardware"),
+        ("I11-11-05", "account"),
+        ("EX33", "hardware"),
+        ("EX33", "account"),
+        # DNS op de pilotclient, de host- of routermeting en het goedgekeurde netwerkherstel.
+        ("B10-003", "hardware"),
+        ("B10-004", "hardware"),
+        ("B10-006", "hardware"),
+        ("B10-006", "account"),
+        ("I12-12-01", "hardware"),
+        ("I12-12-04", "hardware"),
+        ("I12-12-06", "hardware"),
+        ("EX31", "hardware"),
+        ("EX32", "hardware"),
+        ("C1.3-HCH-10", "account"),
+        # N-P6-04, I09 en I10. De SSO-voorstellen lezen Authentik met het dienstaccount.
+        ("B11-005", "account"),
+        ("B13-003", "account"),
+        ("B13-004", "echte NAS"),
+        ("C1.3-HCH-06", "echte NAS"),
+        ("EX18", "account"),
+        ("EX19", "account"),
+        # N-P6-06 en ADR-0034 §4. De praktijkcijfers komen via de my_house-viewerkoppeling.
+        ("B14-001", "echte NAS"),
+        ("B14-001", "account"),
+        ("B14-002", "echte NAS"),
+        ("B14-002", "account"),
+        ("B14-004", "echte NAS"),
+        ("B14-004", "account"),
+        ("B14-005", "echte NAS"),
+        ("B14-005", "account"),
+        # EX16 trekt een testsleutel in. De schermlezer- en telefoonproef hoort bij de Peil-review (V-3).
+        ("EX16", "account"),
+        ("EX16", "hardware"),
+        ("REVIEW-home-control-hub-contract-1.3", "hardware"),
+    ],
+)
+def test_praktijkproef_vermeldt_de_vereiste_markering(ident: str, soort: str) -> None:
+    per_id = {item["id"]: item for item in _items()}
+    assert f"NIET GEVALIDEERD ({soort})" in per_id[ident]["validatie"].split("; ")
+
+
 def test_b11_001_note_names_the_installation_user_and_the_uid_1000_measurement_together() -> None:
     """S-P2-320 vervolg (KLEIN-59, A-13): de opmerking bij B11-001 noemt de profielgebruiker niet meer als "uid 1000";
     de eerste zin zegt dat het profiel 568:568 noemt en dat 1000 alleen de meting van de image is."""
