@@ -162,7 +162,7 @@
  {
   "id": "B14-003",
   "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS)",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyWorkload en EnergyWorkloadReservation) en apps/api/src/integrations/domains/energy/router.py (werklastroute). De proef met een actieve stream staat open.",
   "blokkade": "De planner bouwen en met testgegevens de prioriteit en wachtreden bij overlappende werklasten toetsen. Daarna op de NAS bij een actieve stream verifiëren dat MediaGuard de AV1-taak zonder bestandsverlies laat wachten.",
   "opmerking": "Het schema bevat prioriteitsklassen en reserveringsvensters. De werklastroute geeft 501. VERSIE 2: de dagplanner en reserveringsvoorstellen zijn uitgesteld (S-P3-320).",

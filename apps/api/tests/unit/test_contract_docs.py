@@ -247,6 +247,8 @@ def test_node_red_dienstaccount_staat_in_validatie() -> None:
         ("B14-004", "account"),
         ("B14-005", "echte NAS"),
         ("B14-005", "account"),
+        # De kijkpauzeproef speelt met een Jellyfin-testprofiel om MediaGuard de AV1-taak te laten uitstellen.
+        ("B14-003", "account"),
         # EX16 trekt een testsleutel in. De schermlezer- en telefoonproef hoort bij de Peil-review (V-3).
         ("EX16", "account"),
         ("EX16", "hardware"),
