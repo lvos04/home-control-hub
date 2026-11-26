@@ -253,6 +253,11 @@ def test_node_red_dienstaccount_staat_in_validatie() -> None:
         ("EX16", "account"),
         ("EX16", "hardware"),
         ("REVIEW-home-control-hub-contract-1.3", "hardware"),
+        # Gate P3 ronde 7: AdGuard-beheerder (T-22), Gotify-ontvanger bij DNS-uitval, koppelcode van een Hub-beheerder.
+        ("I12-12-04", "account"),
+        ("I12-12-06", "account"),
+        ("EX32", "account"),
+        ("C1.3-HCH-02", "account"),
     ],
 )
 def test_praktijkproef_vermeldt_de_vereiste_markering(ident: str, soort: str) -> None:

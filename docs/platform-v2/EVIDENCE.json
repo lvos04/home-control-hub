@@ -242,7 +242,7 @@
  {
   "id": "I12-12-04",
   "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware)",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (account)",
   "bewijs": "Commit 3816636, apps/api/src/integrations/domains/network/models.py bevat NetworkBlockRule. I12 stap 4 beschrijft de filterproef.",
   "blokkade": "De voorstelroute met bereik, Hub-goedkeuring en terugdraaiplan bouwen en simuleren. Daarna met de pilotclient controleren of de betrokken apparaten bereikbaar blijven.",
   "opmerking": "VERSIE 2: voorstellen voor DNS-filters en uitzonderingen vallen onder S-P5-32.",
@@ -252,7 +252,7 @@
  {
   "id": "I12-12-06",
   "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware)",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (account)",
   "bewijs": "Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst dat de DNS-samenvatting 501 geeft. I12 stap 6 beschrijft de herstelproef.",
   "blokkade": "Resolveruitval in de simulator als storing melden en de terugvalroute aan de Hub doorgeven. Daarna op de NAS de melding en het herstel van DNS via de vorige resolver toetsen.",
   "opmerking": "VERSIE 2: de DNS-uitvalmelding aan de Hub valt onder S-P5-32 en S-P5-37.",
@@ -342,7 +342,7 @@
  {
   "id": "EX32",
   "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware)",
+  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (account)",
   "bewijs": "De testmatrix beschrijft EX32. Commit 3816636, apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de DNS-route.",
   "blokkade": "Resolveruitval simuleren en bronstatus en uitvalmelding toetsen. Daarna met de pilotclient de tijd tot werkende DNS via de terugvalresolver meten.",
   "opmerking": "VERSIE 2: de proef met een uitgevallen AdGuard-resolver wacht op de bewaking uit S-P5-32.",
@@ -382,7 +382,7 @@
  {
   "id": "C1.3-HCH-02",
   "status": "Bezig",
-  "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS)",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
   "bewijs": "commit e200287; apps/api/tests/integration/test_contract_1_3_statuspagina.py::test_every_post_after_origin_counts_also_when_already_linked; ::test_pairing_in_progress_gives_409_and_counts; ::test_unreadable_link_file_gives_409_and_counts; ::test_input_is_checked_whole_never_truncated; ::test_exactly_one_log_line_per_post; ::test_success_notice_needs_the_key_of_this_browser; ::test_rate_limit_still_applies_after_refused_origins; GitHub Actions ci-run 42784902419 (commit 33148a8): python, statuspagina-ui en image geslaagd",
   "blokkade": "Integrale run met een echte Hub en browser: NIET GEVALIDEERD (echte NAS).",
   "opmerking": "Elke POST na de herkomst telt (ook al_gekoppeld, RV7; onleesbaar 409; koppelen_bezig 409); invoer nooit afgekapt (512/32/64); één logregel per POST; melding alleen met een sleutel van deze browser (15 min). Aantekening: alleen NAS-test nodig (besluit 2026-11-11).",
