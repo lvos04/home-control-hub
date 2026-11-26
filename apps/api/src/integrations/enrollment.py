@@ -23,6 +23,7 @@ Koppelen, ontkoppelen, intrekken en rotatie zijn geen ``action_id``'s (§8): ze 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import random
@@ -46,6 +47,7 @@ from .db import Database
 from .hubclient import HubClient, HubUrlError, validate_hub_url
 from .hublink_store import (
     HubLinkStore,
+    KoppelbestandNietOpgeslagen,
     LastError,
     LinkState,
     Pending,
@@ -253,6 +255,7 @@ class HubLink:
         self.db = db
         self.vault = vault
         self.migrated = False
+        self._migrate_code = "database_onbereikbaar"  # waarom ensure_migrated (nog) niet lukte
         self._next_env_attempt = 0.0
         self._next_confirm = 0.0
         self._next_heartbeat = 0.0
@@ -425,7 +428,28 @@ class HubLink:
         trace_id: str,
         actor: tuple[str, str] = WORKER_ACTOR,
     ) -> EnrollOutcome:
-        """Eén enroll-poging (§3.6 stap 2–4). ``kind``: ``token`` (env) of ``koppelcode`` (statuspagina)."""
+        """Eén enroll-poging (§3.6 stap 2–4). ``kind``: ``token`` (env) of ``koppelcode`` (statuspagina). Kan de
+        koppelstatus niet veilig worden opgeslagen, dan blijft de vorige toestand staan (nooit een onleesbaar bestand,
+        dus ook geen lus via het apart zetten) en volgt ``koppelbestand_niet_opgeslagen``."""
+        try:
+            return self._attempt(hub_url, kind, credential, expected_fingerprint, trace_id, actor)
+        except KoppelbestandNietOpgeslagen:
+            log.error("koppelen (%s): hub-link.json kon niet veilig worden opgeslagen; vorige toestand blijft", kind)
+            with contextlib.suppress(OSError):  # lukt dit wel, dan staat pending weer uit en de fout in last_error
+                self._fail(
+                    "koppelbestand_niet_opgeslagen", kind=kind, secret_digest=sha256_hex(credential), definitive=False
+                )
+            return EnrollOutcome("transient", "koppelbestand_niet_opgeslagen")
+
+    def _attempt(
+        self,
+        hub_url: str,
+        kind: str,
+        credential: str,
+        expected_fingerprint: str | None,
+        trace_id: str,
+        actor: tuple[str, str],
+    ) -> EnrollOutcome:
         digest = sha256_hex(credential)
         claim = self._begin(kind, digest, hub_url)
         if isinstance(claim, str):
@@ -531,7 +555,7 @@ class HubLink:
         if expected is None:
             return EnrollOutcome("refused", "ongeldige_vingerafdruk")
         if not self.ensure_migrated():
-            return EnrollOutcome("refused", "database_onbereikbaar")
+            return EnrollOutcome("refused", self._migrate_code)
         return self.attempt(
             hub_url=url,
             kind="koppelcode",
@@ -925,7 +949,12 @@ class HubLink:
             return True
         try:
             outcome = migrate_legacy(self.store, self.db, self._vault_get)
+        except KoppelbestandNietOpgeslagen:
+            log.error("hub-link.json kon niet veilig worden aangemaakt (rechten van de dataset); later opnieuw")
+            self._migrate_code = "koppelbestand_niet_opgeslagen"
+            return False
         except Exception as exc:
+            self._migrate_code = "database_onbereikbaar"
             log.warning("koppeling uit de database overzetten nog niet gelukt (%s); later opnieuw", type(exc).__name__)
             return False
         if outcome not in ("bestond", "nieuw"):

@@ -30,7 +30,7 @@ from integrations.security.hubkeys import validate_hub_jwk
 from integrations.security.secrets import enroll_public_jwk, ensure_secrets, load_identity
 from integrations.status_page import PairThrottle
 from tests import netwerk
-from tests.conftest import HubSim, SimKey
+from tests.conftest import HubSim, SimKey, acl_dataset
 
 
 @pytest.fixture
@@ -310,6 +310,96 @@ def test_write_forces_0600_when_the_dataset_widens_the_mode(tmp_path: Path, monk
     )
     assert stat.S_IMODE((tmp_path / "hub-link.json").stat().st_mode) == 0o600
     assert not HubLinkStore(tmp_path).read().corrupt
+
+
+def _fout(st: LinkState) -> LinkState:
+    st.last_error = LastError(code="rate_limited", at="2026-11-26T09:00:00Z")
+    return st
+
+
+@pytest.mark.parametrize(("chmod", "herkend"), [("werkt", False), ("geweigerd", True), ("genegeerd", True)])
+def test_store_op_een_acl_dataset_blijft_leesbaar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chmod: str, herkend: bool
+) -> None:
+    """Koppelfout 0.1.0 op een dataset met preset Apps: het net geschreven hub-link.json kreeg groepsrechten en werd als
+    onleesbaar teruggelezen. Nu: fchmod 0600 na aanmaken; waar de ACL dat weigert of negeert, accepteert de leescontrole
+    de rechten van de dataset (alleen met NFSv4-ACL). Ook de eigen geheimen worden aangemaakt zonder crash."""
+    acl_dataset(monkeypatch, chmod=chmod, herkend=herkend)
+    ensure_secrets(tmp_path)
+    store = HubLinkStore(tmp_path)
+    store.update(_fout)
+    store.update(_fout)  # tweede schrijfactie over het eigen bestand: niets apart gezet
+    st = HubLinkStore(tmp_path).read()
+    assert not st.corrupt and st.last_error is not None and st.last_error.code == "rate_limited"
+    assert not list(tmp_path.glob("hub-link.json.onleesbaar-*"))
+    verwacht = 0o600 if chmod == "werkt" else 0o770
+    assert stat.S_IMODE((tmp_path / "hub-link.json").stat().st_mode) == verwacht
+
+
+def test_store_laat_nooit_een_onleesbaar_bestand_achter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """chmod geweigerd en geen herkenbare ACL: een nieuw bestand zou onleesbaar zijn. Dan vervangt de dienst niets (de
+    vorige toestand blijft, geen halve bestanden) en zet hij een bestaand onleesbaar bestand ook niet apart: geen lus
+    via 'apart zetten en opnieuw schrijven'."""
+    from integrations.hublink_store import KoppelbestandNietOpgeslagen
+
+    store = HubLinkStore(tmp_path)
+    store.update(lambda st: st.model_copy(update={"state": "ontkoppeld", "first_linked_at": "2026-11-09T12:00:00Z"}))
+    voor = (tmp_path / "hub-link.json").read_bytes()
+    acl_dataset(monkeypatch, chmod="geweigerd", herkend=False)
+    with pytest.raises(KoppelbestandNietOpgeslagen):
+        store.update(_fout)
+    assert (tmp_path / "hub-link.json").read_bytes() == voor and store.read().state == "ontkoppeld"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    # zonder vorig bestand: er komt er ook geen (nooit_gekoppeld blijft)
+    leeg = tmp_path / "leeg"
+    leeg.mkdir()
+    with pytest.raises(KoppelbestandNietOpgeslagen):
+        HubLinkStore(leeg).update(_fout)
+    assert not (leeg / "hub-link.json").exists() and not HubLinkStore(leeg).read().corrupt
+    # een al onleesbaar bestand blijft staan zoals het was (niet apart gezet)
+    (tmp_path / "hub-link.json").write_text("geen json", encoding="utf-8")
+    os.chmod(tmp_path / "hub-link.json", 0o600)
+    with pytest.raises(KoppelbestandNietOpgeslagen):
+        store.update(_fout)
+    assert (tmp_path / "hub-link.json").read_text(encoding="utf-8") == "geen json"
+    assert not list(tmp_path.glob("hub-link.json.onleesbaar-*"))
+
+
+@pytest.mark.parametrize(
+    ("mode", "herkend", "leesbaar"),
+    [
+        (0o600, False, True),
+        (0o640, False, False),
+        (0o660, False, False),
+        (0o770, True, True),
+        (0o640, True, True),
+        (0o666, True, False),  # wereld-schrijfbaar: ook met ACL nooit
+        (0o602, True, False),
+    ],
+)
+def test_leescontrole_rechten_en_acl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int, herkend: bool, leesbaar: bool
+) -> None:
+    import integrations.security.geheimbestand as geheimbestand
+
+    store = HubLinkStore(tmp_path)
+    store.update(_fout)
+    os.chmod(tmp_path / "hub-link.json", mode)
+    monkeypatch.setattr(geheimbestand, "nfs4_acl", lambda fd: herkend)
+    assert store.read().corrupt is not leesbaar
+    if leesbaar and mode != 0o600:  # met ACL wordt aangescherpt waar chmod werkt
+        assert stat.S_IMODE((tmp_path / "hub-link.json").stat().st_mode) == 0o600
+
+
+def test_leescontrole_weigert_een_symlink_ook_met_acl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import integrations.security.geheimbestand as geheimbestand
+
+    monkeypatch.setattr(geheimbestand, "nfs4_acl", lambda fd: True)
+    doel = tmp_path / "doel"
+    doel.mkdir()
+    HubLinkStore(doel).update(_fout)
+    (tmp_path / "hub-link.json").symlink_to(doel / "hub-link.json")
+    assert HubLinkStore(tmp_path).read().corrupt
 
 
 # ------------------------------------------------------------------ sleutelrotatie (§4.5)

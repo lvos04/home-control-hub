@@ -128,9 +128,10 @@ def prepare_dirs() -> None:
                 f"geen schrijfrechten op {sub}. Laat de app als root starten (dan regelt hij de rechten zelf) of "
                 f"geef gebruiker {UID} (apps) schrijfrechten op de dataset."
             )
+    with contextlib.suppress(PermissionError):  # NFSv4-ACL met aclmode=restricted: de ACL van de dataset beslist
+        os.chmod(DATA / "secrets", 0o700)
     try:
         os.chmod(PGDATA, 0o700)
-        os.chmod(DATA / "secrets", 0o700)
     except PermissionError:
         fail(f"{PGDATA} is niet van gebruiker {UID}; start de app als root of maak {UID} eigenaar van de dataset.")
     SOCKET_DIR.mkdir(parents=True, exist_ok=True)

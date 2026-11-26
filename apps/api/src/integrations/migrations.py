@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -113,7 +114,8 @@ def _write_backup(
         env["PGPASSWORD"] = str(password)
     try:
         backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
+        with contextlib.suppress(PermissionError):  # NFSv4-ACL met aclmode=restricted weigert chmod
+            os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
     except OSError as exc:
         raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -129,12 +131,14 @@ def _write_backup(
             result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)  # noqa: S603
             if result.returncode != 0 or not partial.is_file() or partial.stat().st_size == 0:
                 raise BackupError(f"pg_dump vóór de migratie mislukte (code {result.returncode})")
-            os.chmod(partial, 0o600)
+            with contextlib.suppress(PermissionError):  # idem; de ACL van de dataset bepaalt het dan
+                os.chmod(partial, 0o600)
             with partial.open("rb") as handle:
                 digest = hashlib.file_digest(handle, "sha256").hexdigest()
                 os.fsync(handle.fileno())
             with (Path(directory) / checksum.name).open("w", encoding="ascii") as handle:
-                os.fchmod(handle.fileno(), 0o600)
+                with contextlib.suppress(PermissionError):
+                    os.fchmod(handle.fileno(), 0o600)
                 handle.write(f"{digest}  {target.name}\n")
                 handle.flush()
                 os.fsync(handle.fileno())

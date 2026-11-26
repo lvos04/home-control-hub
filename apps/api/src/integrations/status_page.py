@@ -241,6 +241,7 @@ FOUTEN: dict[str, FoutSoort] = {
     "hub_incompatibel": FoutSoort(502, ERROR_MESSAGES["hub_incompatibel"]),
     "hub_antwoord_ongeldig": FoutSoort(502, ERROR_MESSAGES["hub_antwoord_ongeldig"]),
     "enroll_endpoint_ontbreekt": FoutSoort(502, ERROR_MESSAGES["enroll_endpoint_ontbreekt"]),
+    "koppelbestand_niet_opgeslagen": FoutSoort(503, ERROR_MESSAGES["koppelbestand_niet_opgeslagen"]),
 }
 #: fouten waarbij opnieuw invullen nu niet helpt (wachten, de pagina opnieuw laden of via de Hub)
 _GEEN_INVOER = frozenset(
@@ -250,6 +251,7 @@ _GEEN_INVOER = frozenset(
         "te_veel_pogingen",
         "rate_limited",
         "koppelstatus_onleesbaar",
+        "koppelbestand_niet_opgeslagen",
         "host_niet_toegestaan",
         "herkomst_onjuist",
         "ongeldig_formulier",

@@ -23,6 +23,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from .geheimbestand import alleen_eigenaar
 from .hubkeys import enroll_jwk
 
 VAULT_KEY = "vault.key"
@@ -40,6 +41,7 @@ def _write_new(path: Path, data: bytes) -> bool:
     except FileExistsError:
         return False
     try:
+        alleen_eigenaar(fd)  # een ACL-dataset (TrueNAS-preset Apps) negeert de 0600 van open()
         os.write(fd, data)
         os.fsync(fd)
     finally:
@@ -52,7 +54,7 @@ def _tighten(path: Path) -> None:
         mode = stat.S_IMODE(path.stat().st_mode)
         if mode & 0o077:
             os.chmod(path, 0o600)
-    except PermissionError:  # pragma: no cover - alleen als een andere gebruiker eigenaar is
+    except PermissionError:  # een andere eigenaar, of een NFSv4-ACL met aclmode=restricted: niet crashen
         pass
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import secrets
+import stat
 import sys
 import time
 import uuid
@@ -427,3 +428,31 @@ def idem(headers: dict[str, str] | None = None, key: str | None = None, **extra:
     if isinstance(headers, TokenHeaders):
         base["Authorization"] = f"Bearer {headers.mint()}"
     return {**base, "Idempotency-Key": key or str(uuid.uuid4()), **extra}
+
+
+def acl_dataset(monkeypatch: pytest.MonkeyPatch, *, chmod: str, herkend: bool) -> None:
+    """Bootst een ZFS-dataset met NFSv4-ACL na (TrueNAS-preset Apps; lokaal niet beschikbaar): elk nieuw bestand krijgt
+    0770 uit de overgeërfde ACE's (``aclinherit=passthrough`` negeert de 0600 van open()). ``chmod``: ``werkt``
+    (aclmode=passthrough), ``geweigerd`` (aclmode=restricted) of ``genegeerd``. ``herkend``: of de NFSv4-ACL zichtbaar
+    is als xattr (``system.nfs4_acl_xdr``). Zelfde nabootsing als in de executor (ai-server-manager 0.1.1)."""
+    import errno
+
+    import integrations.security.geheimbestand as geheimbestand
+
+    echte_open, echte_fchmod = os.open, os.fchmod
+
+    def open_acl(path: Any, flags: int, mode: int = 0o777, *args: Any, **kwargs: Any) -> int:
+        fd = echte_open(path, flags, mode, *args, **kwargs)
+        if flags & os.O_CREAT and stat.S_ISREG(os.fstat(fd).st_mode):
+            echte_fchmod(fd, 0o770)
+        return fd
+
+    def fchmod_acl(fd: int, mode: int) -> None:
+        if chmod == "geweigerd":
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        if chmod == "werkt":
+            echte_fchmod(fd, mode)
+
+    monkeypatch.setattr(os, "open", open_acl)
+    monkeypatch.setattr(os, "fchmod", fchmod_acl)
+    monkeypatch.setattr(geheimbestand, "nfs4_acl", lambda fd: herkend)

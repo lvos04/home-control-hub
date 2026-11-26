@@ -1,5 +1,16 @@
 # Wijzigingen
 
+## 0.1.1 — koppelen op een TrueNAS-dataset met preset Apps (2026-11-26)
+
+- Op een dataset met NFSv4-ACL kan ZFS de `0600` van een nieuw `hub-link.json` negeren en `chmod` weigeren
+  (`aclmode=restricted`); de dienst las zijn eigen koppelbestand dan als onleesbaar terug en een nieuw koppeltoken gaf
+  een lus. Nu accepteert de leescontrole rechten voor groep of anderen alleen als het bestand een NFSv4-ACL draagt;
+  een symlink, een andere eigenaar en schrijfrechten voor iedereen blijven onleesbaar. Na het aanmaken zet de dienst
+  `0600` waar dat kan (ook `vault.key` en `identity.ed25519`).
+- Een schrijfactie die een onleesbaar bestand zou opleveren vervangt niets: de vorige toestand blijft staan en een
+  koppelpoging meldt `koppelbestand_niet_opgeslagen` (503) in plaats van een onleesbare koppelstatus.
+- Een geweigerde `chmod` (back-upmap, map `secrets`) laat de dienst niet meer stoppen.
+
 ## S-P2-340 herstel — flowherstel via de Hub (2026-11-23)
 
 - Een herstelvoorstel bevat een lijst met de gevraagde momentopname, de checksums van beide flowsets, de aantallen

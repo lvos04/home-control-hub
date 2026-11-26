@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from fastapi.testclient import TestClient
 from integrations.hublink_store import LinkState, Pending
 from integrations.status_page import PairThrottle
 from tests import netwerk
-from tests.conftest import BROWSER_HEADERS, HUB_URL, PAIR_CODE, FakeHub
+from tests.conftest import BROWSER_HEADERS, HUB_URL, PAIR_CODE, FakeHub, acl_dataset
 
 pytestmark = pytest.mark.integration
 
@@ -223,3 +224,52 @@ def test_rate_limit_still_applies_after_refused_origins(client: Any, fake_hub: F
         assert _code(_post(client, csrf, fake_hub, headers={"Origin": "null"})) == "herkomst_onjuist"
     codes = [_code(_post(client, csrf, fake_hub, koppelcode="AAAA-BBBB-CCCC")) for _ in range(6)]
     assert codes == ["hub_weigerde"] * 5 + ["te_veel_pogingen"]
+
+
+# ------------------------------------------------------------------ koppelen op een ACL-dataset (TrueNAS-preset Apps)
+def _koppel_via_formulier(c: Any, fake_hub: FakeHub) -> Any:
+    assert 'name="koppelcode"' in c.get("/").text  # verse installatie: het koppelformulier staat er
+    return _post(c, _csrf(c), fake_hub)
+
+
+def test_koppelen_op_een_lege_appdata(app_factory: Any, fake_hub: FakeHub, data_dir: Path) -> None:
+    """De volledige koppelflow op een verse /appdata: formulier → Hub → gekoppeld en bevestigd, bestand 0600."""
+    assert not any(data_dir.iterdir())
+    c = app_factory()
+    r = _koppel_via_formulier(c, fake_hub)
+    assert _code(r) == "gekoppeld", r.text[:300]
+    st = c.app.state.hublink.state()
+    assert st.linked and st.confirmed_at is not None and not st.corrupt
+    assert stat.S_IMODE((data_dir / "secrets" / "hub-link.json").stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(("chmod", "herkend"), [("werkt", False), ("geweigerd", True), ("genegeerd", True)])
+def test_koppelen_op_een_acl_dataset(
+    app_factory: Any, fake_hub: FakeHub, data_dir: Path, monkeypatch: pytest.MonkeyPatch, chmod: str, herkend: bool
+) -> None:
+    """Koppelfout 0.1.0 (zoals bij de executor): op een dataset met preset Apps las de dienst zijn eigen hub-link.json
+    als onleesbaar terug, zodat koppelen mislukte en het formulier verdween. Nu slaagt koppelen."""
+    acl_dataset(monkeypatch, chmod=chmod, herkend=herkend)
+    c = app_factory()
+    r = _koppel_via_formulier(c, fake_hub)
+    assert _code(r) == "gekoppeld", r.text[:300]
+    st = c.app.state.hublink.state()
+    assert st.linked and st.confirmed_at is not None and not st.corrupt
+    assert not list((data_dir / "secrets").glob("hub-link.json.onleesbaar-*"))
+
+
+def test_koppelen_laat_nooit_een_onleesbaar_bestand_achter(
+    app_factory: Any, fake_hub: FakeHub, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """chmod geweigerd en de ACL niet herkenbaar: een nette 503 ``koppelbestand_niet_opgeslagen``, niets naar de Hub,
+    geen (onleesbaar) bestand, het formulier blijft; na herstel van de dataset lukt koppelen gewoon."""
+    acl_dataset(monkeypatch, chmod="geweigerd", herkend=False)
+    c = app_factory()
+    r = _koppel_via_formulier(c, fake_hub)
+    assert (r.status_code, _code(r)) == (503, "koppelbestand_niet_opgeslagen") and 'role="alert"' in r.text
+    assert fake_hub.enroll_requests == []
+    assert not (data_dir / "secrets" / "hub-link.json").exists()
+    assert not list((data_dir / "secrets").glob("hub-link.json.onleesbaar-*"))
+    assert not c.app.state.hublink.state().corrupt and 'name="koppelcode"' in c.get("/").text
+    monkeypatch.undo()
+    assert _code(_post(c, _csrf(c), fake_hub)) == "gekoppeld"

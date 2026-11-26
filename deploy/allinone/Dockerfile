@@ -40,7 +40,7 @@ RUN --mount=type=secret,id=ca_bundle,required=false \
 
 # ---------------------------------------------------------------- runtime
 FROM ${PYTHON_IMAGE}
-ARG VERSION=0.1.0
+ARG VERSION=0.1.1
 LABEL org.opencontainers.image.title="home-control-hub" \
       org.opencontainers.image.description="Home Control Hub — integratiedienst (netwerk, Node-RED, Authentik/SSO, energie), alles-in-één" \
       org.opencontainers.image.source="https://git.medialeon.nl/leon/home-control-hub" \

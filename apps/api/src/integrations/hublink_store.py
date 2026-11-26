@@ -10,7 +10,8 @@
   en een database-export (B12) bevat geen credentials.
 - ``schema_version``: deze dienst schrijft ``"1.3"``; een lezer accepteert elke ``1.x`` en negeert onbekende velden.
 - Onleesbaar (geen geldige JSON, geen object, een andere major van ``schema_version``, ontbrekende verplichte velden
-  ``schema_version``/``state``, een andere eigenaar dan dit proces of rechten ruimer dan 0600) → fail-closed: niets
+  ``schema_version``/``state``, een symlink, een andere eigenaar dan dit proces, wereld-schrijfbaar, of rechten ruimer
+  dan 0600 zonder NFSv4-ACL van de dataset; zie :mod:`.security.geheimbestand`) → fail-closed: niets
   wordt vertrouwd (``not_linked``) en de statuspagina biedt géén
   koppelformulier (onbekend of de dienst al eens gekoppeld was, dus geldt hij als "al eens gekoppeld"). Herstel gaat
   via een nieuw enrollment-token in het formulier van de Custom App (§3.8).
@@ -28,7 +29,6 @@ import fcntl
 import json
 import logging
 import os
-import stat
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -38,6 +38,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
 from . import APP_ID
+from .security.geheimbestand import alleen_eigenaar, eigen_geheim
 from .timeutil import utcnow
 
 log = logging.getLogger("integrations.hublink")
@@ -73,10 +74,17 @@ ERROR_MESSAGES: dict[str, str] = {
     "ingetrokken_door_hub": "De Hub heeft deze koppeling ingetrokken. Opnieuw koppelen gaat via de Hub.",
     "overzetten_onvolledig": "De koppeling uit een oudere versie kon niet volledig worden overgezet. Opnieuw koppelen "
     "gaat via de Hub.",
+    "koppelbestand_niet_opgeslagen": "Koppelen mislukt: deze dienst kon de koppelstatus niet veilig opslaan in "
+    "/appdata/secrets; hij staat weer zoals vóór de poging. Controleer de rechten van de dataset en probeer het opnieuw.",
     "koppelstatus_onleesbaar": "Het koppelbestand van deze dienst is onleesbaar; de dienst vertrouwt niets van de Hub. "
     "Opnieuw koppelen gaat via een nieuw token van de Hub (HUB_ENROLLMENT_TOKEN).",
 }
 UNREADABLE_SUFFIX = ".onleesbaar-"
+
+
+class KoppelbestandNietOpgeslagen(OSError):
+    """Het nieuwe ``hub-link.json`` zou deze dienst zelf als onleesbaar teruglezen (rechten die de dataset oplegt en die
+    niet als NFSv4-ACL herkenbaar zijn); er is niets vervangen, de vorige toestand blijft staan."""
 
 
 def error_message(code: str | None) -> str | None:
@@ -224,7 +232,7 @@ class HubLinkStore:
     # -------------------------------------------------------------- lezen
     def _load(self) -> LinkState:
         try:
-            st = os.stat(self.path)
+            st = os.lstat(self.path)  # een symlink is onleesbaar (O_NOFOLLOW hieronder)
         except FileNotFoundError:
             return LinkState()
         except OSError as exc:  # bv. geen rechten: onbekend → fail-closed
@@ -237,9 +245,10 @@ class HubLinkStore:
             if self._cache is not None and self._cache[0] == key:
                 return _clone(self._cache[1])
         try:
-            if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077:
-                raise PermissionError("verkeerde eigenaar of rechten ruimer dan 0600")
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            with os.fdopen(os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as fh:
+                if not eigen_geheim(fh.fileno()):
+                    raise PermissionError("verkeerde eigenaar of rechten (0600, of de NFSv4-ACL van de dataset)")
+                data = json.loads(fh.read().decode("utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("geen object")
             missing = [f for f in REQUIRED_FIELDS if f not in data]
@@ -277,21 +286,28 @@ class HubLinkStore:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
-    def _write(self, state: LinkState) -> None:
+    def _write(self, state: LinkState, *, set_aside: bool = False) -> None:
         state.schema_version = SCHEMA_VERSION  # een dienst schrijft de versie van het contract dat hij volgt (§3.5)
         data = state.model_dump(mode="json")
         payload = (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
         tmp = self.dir / f".hub-link.{uuid.uuid4().hex}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        # geërfde ACL's van de dataset (bv. NFSv4 op TrueNAS) kunnen de modus ruimer maken dan gevraagd; een ruimer
-        # bestand leest deze dienst zelf als onleesbaar (§3.5), dus de modus expliciet op 0600 zetten waar dat kan
-        with contextlib.suppress(OSError):
-            os.fchmod(fd, 0o600)
+        # geërfde ACL's van de dataset (bv. NFSv4 op TrueNAS) kunnen de modus ruimer maken dan gevraagd; daarom de modus
+        # expliciet op 0600 zetten waar dat kan
+        alleen_eigenaar(fd)
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
+                # nooit een bestand neerzetten dat deze dienst zelf als onleesbaar terugleest (§3.5): dan blijft de
+                # vorige toestand staan en krijgt de aanroeper een fout
+                if not eigen_geheim(fh.fileno()):
+                    raise KoppelbestandNietOpgeslagen(
+                        "nieuw hub-link.json zou onleesbaar zijn (rechten van de dataset)"
+                    )
+            if set_aside:
+                self._set_aside_unreadable()
             os.replace(tmp, self.path)
         except BaseException:
             with contextlib.suppress(OSError):
@@ -318,9 +334,7 @@ class HubLinkStore:
                 # nog steeds onbekend of de dienst al eens gekoppeld was: dat blijft na het schrijven zichtbaar
                 # (geen koppelformulier, niets vertrouwd) tot een geslaagde koppeling via een nieuw token
                 new.unreadable_replaced_at = current.unreadable_replaced_at or new.unreadable_replaced_at or now_iso()
-            if current.unreadable:
-                self._set_aside_unreadable()
-            self._write(new)
+            self._write(new, set_aside=current.unreadable)
             new._corrupt = False  # het bestand is nu weer leesbaar
             return new
 

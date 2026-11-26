@@ -1777,7 +1777,7 @@
   "info": {
     "description": "Integraties B10 netwerk/privacy, B11 Node-RED, B13 Authentik/SSO (incl. beheerherstel B13-001) en B14 energie/resources voor TrueNAS Home Platform V2 (platformcontract 1.3). Niet-gebouwde functies geven `501 capability_unavailable`; nooit gesimuleerd succes.",
     "title": "Home Control Hub — integratiedienst",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "openapi": "3.1.0",
   "paths": {

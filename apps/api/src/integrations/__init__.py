@@ -17,4 +17,4 @@ CONNECTOR_PREFIX = "/connector/v1"
 try:
     __version__ = metadata.version("home-control-hub")
 except metadata.PackageNotFoundError:  # pragma: no cover - alleen bij draaien zonder installatie
-    __version__ = "0.1.0"
+    __version__ = "0.1.1"

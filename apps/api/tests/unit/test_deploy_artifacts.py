@@ -77,8 +77,11 @@ def test_manifest_is_custom_app_and_safe() -> None:
     for s in m["storage"]:
         assert s["mount"] not in FORBIDDEN_HOST_PATHS
     assert m["validation_status"] == "unvalidated"
+    # het manifest wijst naar de laatst uitgebrachte image (met digest); VERSION mag de volgende release zijn, die
+    # de regisseur na de release met zijn digest in het manifest zet
     version = (REPO_ROOT / "VERSION").read_text().strip()
-    assert m["version"] == m["image"]["tag"] == version
+    assert m["version"] == m["image"]["tag"]
+    assert tuple(map(int, m["version"].split("."))) <= tuple(map(int, version.split(".")))
 
 
 def test_manifest_follows_contract_1_3() -> None:
