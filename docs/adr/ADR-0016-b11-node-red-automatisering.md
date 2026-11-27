@@ -21,7 +21,7 @@ Deze ronde bouwt de vijf werkpakketten:
 - Alles is getest met een in-repo Node-RED-simulator (`apps/api/tests/fakes/node_red_fake.py`) en een Hub-simulator
   (`tests/e2e/sim_hub.py`): **Sim-getest**.
 - De aannames over Node-RED zelf zijn daarnaast nagemeten tegen de **gepinde officiële image** in lokale
-  Docker-containers op de ontwikkelmachine (`tools/node_red_verify.py`, 39 controles, uitkomst in
+  Docker-containers op de ontwikkelmachine (`tools/node_red_verify.py`, alle controles en uitkomsten in
   `docs/b11/node-red-verificatie.json`). De simulator volgt precies die gemeten feiten
   (`test_fake_matches_the_verified_image_facts`). Die meting is gedaan met een eigen meetopstelling (gebruiker 1000,
   eigen argumenten met een beheerder en het dienstaccount, sinds S-P3-360 zonder `credentialSecret`), niet met het

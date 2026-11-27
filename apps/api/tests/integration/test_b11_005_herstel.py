@@ -1030,6 +1030,24 @@ def test_changed_flows_since_the_preview_stop_the_restore(scene: Scene, linked: 
     assert scene.nr.flows == flows_v1()
 
 
+def test_c12_leesprofiel_weigert_herstel_van_gewone_flows(
+    linked: Any, auth: Any, fake_hub: Any, node_red_fake: Any
+) -> None:
+    setup_node_red(linked, fake_hub, auth, flows=simple_flow(label="Oorspronkelijke flow"))
+    moment = b11.snapshot(linked, auth)["snapshot"]
+    huidig = simple_flow(label="Gewijzigde flow")
+    node_red_fake.deploy(huidig)
+    revisie = node_red_fake.rev
+    voorstel = b11.propose_restore(linked, auth, moment["id"])
+    assert voorstel.status_code == 201
+    antwoord = b11.apply(linked, fake_hub, b11.signed_restore(fake_hub, voorstel.json()))
+    assert antwoord.status_code == 502 and antwoord.json()["code"] == "node_red_fout"
+    detail = antwoord.json()["details"]
+    assert (detail["http_status"], detail["path"]) == (401, "/flows")
+    assert detail["readback"]["gelijk_aan_toestand_vooraf"] is True
+    assert node_red_fake.flows == huidig and node_red_fake.rev == revisie and node_red_fake.writes == []
+
+
 def test_changed_credential_secret_makes_node_red_refuse_and_nothing_changes(scene: Scene, linked: Any) -> None:
     scene.nr.credential_secret = "een-andere-credentialSecret"
     scene.nr._write_cred_file()
