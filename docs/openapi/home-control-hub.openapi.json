@@ -293,6 +293,119 @@
         "title": "ActivationIn",
         "type": "object"
       },
+      "AlertList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AlertStatus"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "null"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AlertList",
+        "type": "object"
+      },
+      "AlertStatus": {
+        "properties": {
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "rule": {
+            "enum": [
+              "meter_offline",
+              "boiler_usage",
+              "nas_load",
+              "daily_budget"
+            ],
+            "title": "Rule",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "onbekend",
+              "afwijkend",
+              "normaal"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "role",
+          "source",
+          "status",
+          "observed_at"
+        ],
+        "title": "AlertStatus",
+        "type": "object"
+      },
+      "AlertThresholds": {
+        "additionalProperties": false,
+        "properties": {
+          "boiler_increase_kwh": {
+            "description": "Toegestane toename per uur boven de drie voorafgaande gemeten boileruren.",
+            "maximum": 100.0,
+            "minimum": 0.001,
+            "title": "Boiler Increase Kwh",
+            "type": "number"
+          },
+          "daily_budget_eur": {
+            "description": "Budget voor variabele netafnamekosten per lokale woningdag in euro.",
+            "maximum": 100000.0,
+            "minimum": 0.01,
+            "title": "Daily Budget Eur",
+            "type": "number"
+          },
+          "nas_increase_points": {
+            "description": "Toegestane CPU-toename in procentpunten boven drie voorafgaande NAS-metingen.",
+            "exclusiveMaximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Nas Increase Points",
+            "type": "number"
+          },
+          "offline_after_minutes": {
+            "description": "Maximale leeftijd van een gemeten uurinterval.",
+            "maximum": 1440.0,
+            "minimum": 60.0,
+            "title": "Offline After Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "offline_after_minutes",
+          "boiler_increase_kwh",
+          "nas_increase_points",
+          "daily_budget_eur"
+        ],
+        "title": "AlertThresholds",
+        "type": "object"
+      },
       "AppSettingIn": {
         "additionalProperties": false,
         "properties": {
@@ -4577,6 +4690,129 @@
           }
         },
         "summary": "energy.advice.read (nog niet gebouwd → 501 capability_unavailable)",
+        "tags": [
+          "energy"
+        ]
+      }
+    },
+    "/integrations/v1/energy/alert-thresholds": {
+      "get": {
+        "operationId": "alert_thresholds_integrations_v1_energy_alert_thresholds_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AlertThresholds"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Alert Thresholds Integrations V1 Energy Alert Thresholds Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ingestelde meldingsdrempels (leeg tot een beheerder ze vastlegt)",
+        "tags": [
+          "energy"
+        ]
+      },
+      "put": {
+        "operationId": "set_alert_thresholds_integrations_v1_energy_alert_thresholds_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertThresholds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertThresholds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Energiedrempels voor meldingen instellen",
+        "tags": [
+          "energy"
+        ]
+      }
+    },
+    "/integrations/v1/energy/alerts": {
+      "get": {
+        "operationId": "energy_alerts_integrations_v1_energy_alerts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Actuele beoordeling per energieregel en bron",
         "tags": [
           "energy"
         ]

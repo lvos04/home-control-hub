@@ -164,14 +164,23 @@ def sync_usage(
         client, scope, revision = configured_client(db, settings, vault, transport)
     except SourceInactive:
         return True
-    except EnergyReadError:
+    except EnergyReadError as exc:
+        state = db.get(ServiceState, STATE_KEY)
+        if state is not None:
+            state.value = {**state.value, "reason_nl": str(exc)}
+            db.commit()
         return False
     state = db.get(ServiceState, STATE_KEY)
     previous = state.value if state and state.value.get("revision") == revision else {}
+    metadata = {**previous, "revision": revision, "scope": str(scope)}
+    watch_since = dict(previous.get("watch_since", {}))
     try:
         summary = client.read(EnergyRoute.SUMMARY)
         declared = {SOURCE_ROLES[r] for r in declared_roles(summary)}
         zone = home_zone(summary.get("timezone"))
+        metadata["timezone"] = zone.key
+        for role in declared:
+            watch_since.setdefault(role, now.isoformat())
         currency = summary.get("currency")
         today = now.astimezone(zone).date()
         yesterday = today - DAY
@@ -191,14 +200,15 @@ def sync_usage(
         for d, series in zip(days, exports, strict=True):
             archive.day(d, zone, now, series, declared)
         archive.replacements()
-        metadata = {
-            "revision": revision,
-            "timezone": zone.key,
-            "currency": currency if isinstance(currency, str) and re.fullmatch("[A-Z]{3}", currency) else None,
-            "backfill": (backfill - DAY).isoformat(),
-        }
+        for role in archive.roles:
+            watch_since.setdefault(role, now.isoformat())
+        metadata.pop("reason_nl", None)
+        metadata["currency"] = currency if isinstance(currency, str) and re.fullmatch("[A-Z]{3}", currency) else None
+        metadata["backfill"] = (backfill - DAY).isoformat()
     except EnergyReadError as exc:
-        metadata = {"revision": revision, "reason_nl": str(exc)}
+        # Bewaar de bewaakte rollen van deze koppeling om ook tijdens bronuitval meteruitval te kunnen melden.
+        metadata["reason_nl"] = str(exc)
+    metadata["watch_since"] = watch_since
     if state is None:
         db.add(ServiceState(key=STATE_KEY, value=metadata))
     else:

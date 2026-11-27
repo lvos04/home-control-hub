@@ -4,19 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date, datetime
+from uuid import UUID
 
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
-from ...deps import get_session
+from ... import audit
+from ...deps import check_if_match, etag, get_session, if_match, trace_id
 from ...errors import ApiError
+from ...idempotency import Result, idempotency_key, run_idempotent
 from ...models import ServiceState
-from ...security.auth import Principal, require_reader
+from ...security.auth import Principal, require_admin, require_reader
 from ...timeutil import utcnow
 from ..common import domain_router
+from .alerts import SETTINGS_KEY, AlertStatus, AlertThresholds, assess
 from .catalog import EXPECTED_METER_ROLES, QUALITY_LABELS, SOURCES
 from .client import EnergyReadError
 from .hourly import Direction, Period, Role, home_zone
@@ -179,3 +185,61 @@ def usage(
     if not 1 < day.year < 9999:
         raise ApiError(422, "validation_error", "De periode valt buiten het ondersteunde datumbereik.")
     return usage_report(session, scope, zone, archive.value.get("currency"), period, day, role, direction)
+
+
+@router.get("/alert-thresholds", summary="Ingestelde meldingsdrempels (leeg tot een beheerder ze vastlegt)")
+def alert_thresholds(
+    response: Response, session: Session = Depends(archive_session), _p: Principal = Depends(require_admin)
+) -> AlertThresholds | None:
+    state = session.get(ServiceState, SETTINGS_KEY)
+    if state is None:
+        return None
+    response.headers["ETag"] = etag(state.value["version"])
+    return AlertThresholds(**state.value["thresholds"])
+
+
+@router.put("/alert-thresholds", response_model=AlertThresholds, summary="Energiedrempels voor meldingen instellen")
+def set_alert_thresholds(
+    body: AlertThresholds,
+    request: Request,
+    session: Session = Depends(archive_session),
+    principal: Principal = Depends(require_admin),
+    key: UUID = Depends(idempotency_key),
+    match: str | None = Depends(if_match),
+    tid: str = Depends(trace_id),
+) -> JSONResponse:
+    # Ook gelijktijdige eerste PUTs moeten de opgeslagen Idempotency-Key zien vóór de ETag-controle.
+    session.execute(insert(ServiceState).values(key=SETTINGS_KEY, value={}).on_conflict_do_nothing())
+    row = session.get_one(ServiceState, SETTINGS_KEY, with_for_update=True)
+
+    def action() -> Result:
+        version = row.value.get("version", 0)
+        if version or match not in (None, "*"):
+            check_if_match(version, match)
+        row.value = {**row.value, "thresholds": body.model_dump(), "version": version + 1}
+        audit.record(
+            session,
+            domain="energy",
+            action="thresholds.updated",
+            entity_type="energy_thresholds",
+            entity_id="energy",
+            principal=principal,
+            trace_id=tid,
+            message_nl="De beheerder heeft de energiedrempels ingesteld.",
+        )
+        return 200, body, {"ETag": etag(version + 1)}
+
+    return run_idempotent(request, session, principal, key, body, action)
+
+
+class AlertList(BaseModel):
+    items: list[AlertStatus]
+    next_cursor: None = None
+
+
+@router.get("/alerts", summary="Actuele beoordeling per energieregel en bron")
+def energy_alerts(
+    request: Request, session: Session = Depends(archive_session), _p: Principal = Depends(require_reader)
+) -> AlertList:
+    checks = assess(session, session.get(ServiceState, SETTINGS_KEY), utcnow(), request.app.state.hublink_store.read())
+    return AlertList(items=[check.status() for check in checks])

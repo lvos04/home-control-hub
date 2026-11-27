@@ -27,6 +27,7 @@ from .domains.automation import inbox as flow_inbox
 from .domains.automation import restore as flow_restore
 from .domains.automation import simulate as flow_simulate
 from .domains.automation import snapshots as flow_snapshots
+from .domains.energy.alerts import notify_changes
 from .domains.energy.usage_sync import sync_usage
 from .domains.sso import authaudit
 from .domains.sso.authentik.client import AuthentikError, client_from_source
@@ -185,7 +186,10 @@ class Worker:
             self.state.next_energy_sync = now + 300
             self.state.energy_sync_ok = False
             with self.db.sessions() as session:
-                self.state.energy_sync_ok = sync_usage(session, self.settings, self.vault, self.transport, utcnow())
+                synced = sync_usage(session, self.settings, self.vault, self.transport, utcnow())
+            with self.db.sessions() as session:
+                notify_changes(session, utcnow(), self.store.read())
+            self.state.energy_sync_ok = synced
         return self.state.energy_sync_ok
 
     def housekeeping_step(self, now: float) -> None:

@@ -93,6 +93,26 @@ betekenis of precisie zouden verliezen. Herstel in dat geval de voor-upgradeback
 Bij meerdere terugstappen legt de dienst elke revisie apart vast, zodat de back-up van de volgende stap
 het bijbehorende schema kan lezen.
 
+**B14-005 afwijkingsmeldingen.** Een beheerder stelt via `PUT /integrations/v1/energy/alert-thresholds`
+vier drempels in. Gebruik een `Idempotency-Key` en bij een wijziging de ETag uit de bijbehorende GET.
+Een lezer ziet per regel de bron, meterrol, meettijd en uitkomst via `GET /integrations/v1/energy/alerts`.
+
+| Regel | Wanneer de worker meldt |
+| --- | --- |
+| Meter offline | Een bekende meterrol heeft langer dan de ingestelde tijd geen gemeten uurinterval. Bij een nieuwe rol begint de wachttijd bij de eerste herkenning. |
+| Boilerverbruik | Het laatste afgesloten uur ligt meer dan de ingestelde hoeveelheid kWh boven het gemiddelde van de drie voorafgaande gemeten uren van dezelfde meter. |
+| NAS-belasting | Een verse CPU-meting overschrijdt het gemiddelde van drie voorafgaande metingen met meer dan het ingestelde aantal procentpunten. Alle vier liggen binnen een kwartier. |
+| Dagbudget | De variabele kosten van de gemeten P1-netafname sinds lokale middernacht overschrijden het ingestelde eurobedrag. Elk verstreken uur heeft een afnameprijs nodig. |
+
+Voor de NAS-regel leest de worker de lokaal ontvangen Hub-gebeurtenissen van type `monitoring.metric.recorded` voor
+onderwerp `nas/nas`. De beveiligde ingang is `POST /integrations/v1/automation/events`. Een CPU-meting vermeldt
+`metriek=cpu.gebruik`, `eenheid=%`, `status=ok` en een numerieke `waarde`. De bronmeettijd `observed_at` moet
+overeenkomen met `timestamp_utc`. De huidige Hub levert deze metingen nog niet automatisch aan.
+
+Bij ontbrekende of verouderde metingen blijft het verbruik onbekend. De worker bewaart een open afwijking bij
+bronuitval en na een herstart. Voor een lopende piek houdt hij de oorspronkelijke basislijn aan. Probleem en
+herstel komen elk eenmaal in de uitgaande rij met dezelfde onderwerp-ID. De boiler wordt uitsluitend gemeten.
+
 De gegevensroutes van B10 en de overige gegevensroutes van B14 voor werklast en advies geven
 `501 capability_unavailable`.
 **Niets is op een echte NAS, met een echte Authentik of met een Node-RED op de NAS gevalideerd** (zie
