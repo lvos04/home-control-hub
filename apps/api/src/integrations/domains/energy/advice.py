@@ -43,6 +43,7 @@ ASSUMPTIONS = (
     "Het maximum voor deze methode is 0,80.",
 )
 SOURCES = ("my_house:energy/export", "my_house:tariffs", "monitoring.metric.recorded/cpu.gebruik")
+METHOD_INPUTS = {"bronnen": list(SOURCES), "aannames_nl": list(ASSUMPTIONS), "minimum_dagen": MIN_DAYS}
 
 
 def method_id(scope: UUID) -> UUID:
@@ -57,7 +58,7 @@ def register_advice_method(db: Session, scope: UUID) -> None:
             EnergyEstimateProvenance(
                 id=key,
                 method="vergelijkbare_dag",
-                assumptions={"bronnen": SOURCES, "aannames_nl": ASSUMPTIONS, "minimum_dagen": MIN_DAYS},
+                assumptions=METHOD_INPUTS,
                 confidence=CONFIDENCE_CAP,
                 created_at=utcnow(),
             )
@@ -70,6 +71,9 @@ class Comparison(BaseModel):
     quiet_kwh: Number
     busy_price_per_kwh: Number
     quiet_price_per_kwh: Number
+    measurement_quality: Literal["gemeten"] = "gemeten"
+    usage_source: Literal["my_house:energy/export"] = "my_house:energy/export"
+    tariff_source: Literal["my_house:tariffs"] = "my_house:tariffs"
 
     def saving(self) -> Decimal:
         shift = max(Decimal(0), self.busy_kwh - self.quiet_kwh)
@@ -82,6 +86,7 @@ class SavingsRange(BaseModel):
     currency: str
     unit_nl: Literal["per verplaatst werkuur"] = "per verplaatst werkuur"
     measurement_quality: Literal["geschat"] = "geschat"
+    source: Literal["vergelijkbare_dag"] = "vergelijkbare_dag"
 
 
 class CostAdvice(BaseModel):
@@ -216,10 +221,15 @@ def cost_advice(
     if supporting * 2 <= comparable or max(amounts) == 0:
         return AdviceReport(comparable_days=comparable, reason_nl="Geen onderbouwd kostenvoordeel bij deze werklast.")
     method = db.get(EnergyEstimateProvenance, method_id(scope))
-    if method is None or method.method != "vergelijkbare_dag" or method.confidence is None:
+    if (
+        method is None
+        or method.method != "vergelijkbare_dag"
+        or method.confidence != CONFIDENCE_CAP
+        or method.assumptions != METHOD_INPUTS
+    ):
         return AdviceReport(comparable_days=comparable, reason_nl="De herkomst van de adviesmethode ontbreekt.")
     # Aandeel dagen met meer afname in het drukke uur, gewogen naar de steekproefomvang n/(n+3).
-    confidence = (method.confidence * supporting / (comparable + MIN_DAYS)).quantize(Decimal("0.01"))
+    confidence = (CONFIDENCE_CAP * supporting / (comparable + MIN_DAYS)).quantize(Decimal("0.01"))
     advice = CostAdvice(
         advice_nl="Overweeg om verplaatsbaar achtergrondwerk, zoals indexeren of AV1-encodering, in het rustige uur te plannen.",
         assumptions_nl=list(ASSUMPTIONS),

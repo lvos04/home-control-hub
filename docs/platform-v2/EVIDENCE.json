@@ -171,13 +171,13 @@
  },
  {
   "id": "B14-004",
-  "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
-  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyCostModel.requires_meter). apps/api/tests/integration/test_platform_core.py::test_unbuilt_domain_data_is_501_not_empty toetst de 501 van de adviesroute. De proef met en zonder meetreeks staat open.",
-  "blokkade": "De adviesroute aan gemeten intervallen koppelen. In de simulator toetsen dat zonder meetreeks geen besparingsbedrag verschijnt. Daarna de bandbreedte van het advies met een fysieke meter over vergelijkbare dagen toetsen (N-P6-06).",
-  "opmerking": "Het kostenmodel verplicht de vlag requires_meter. De adviesroute geeft 501. VERSIE 2: het kostenadvies op basis van gemeten intervallen en vergelijkbare dagen (S-P3-330) en het Hub-kostenscherm met bron en meetdekking (S-P3-160) zijn uitgesteld. Het scherm wacht op de uitgestelde Hub-kostenmodule (S-P3-150).",
+  "status": "Bezig",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "Bouwcommit de2ea0c. apps/api/tests/integration/test_b14_004_advies.py toetst de adviesroute met een woningbron, Hub-events en PostgreSQL. De simulator meet op drie werkdagen een band van 0,00 tot 0,90 EUR per verplaatst werkuur en een zekerheid van 0,27. Zonder gemeten reeks blijft de advieslijst leeg.",
+  "blokkade": "N-P6-06 vereist vergelijkbare echte woningdagen, een fysieke meter, de ingeregelde koppeling en toestemming voor de praktijkproef.",
+  "opmerking": "S-P3-330 vergelijkt afname en tarieven van dezelfde fysieke P1-meter bij vergelijkbare werklast. Een onvolledig of dubbel klokuur, een andere meter en een schatting tellen niet mee. De worker voegt de herkomst van de methode eenmaal per woning toe. De voor-na-proef behoudt zes gemeten intervallen met hun ID en waarde. Het advies is een berekening. De Hub-weergave valt onder S-P3-160 en een eventuele taaltoelichting onder P5.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-24"
+  "bijgewerkt": "2026-11-28"
  },
  {
   "id": "B14-005",

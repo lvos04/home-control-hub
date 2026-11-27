@@ -546,6 +546,12 @@
             "title": "Date",
             "type": "string"
           },
+          "measurement_quality": {
+            "const": "gemeten",
+            "default": "gemeten",
+            "title": "Measurement Quality",
+            "type": "string"
+          },
           "quiet_kwh": {
             "title": "Quiet Kwh",
             "type": "number"
@@ -553,6 +559,18 @@
           "quiet_price_per_kwh": {
             "title": "Quiet Price Per Kwh",
             "type": "number"
+          },
+          "tariff_source": {
+            "const": "my_house:tariffs",
+            "default": "my_house:tariffs",
+            "title": "Tariff Source",
+            "type": "string"
+          },
+          "usage_source": {
+            "const": "my_house:energy/export",
+            "default": "my_house:energy/export",
+            "title": "Usage Source",
+            "type": "string"
           }
         },
         "required": [
@@ -2021,6 +2039,12 @@
             "const": "geschat",
             "default": "geschat",
             "title": "Measurement Quality",
+            "type": "string"
+          },
+          "source": {
+            "const": "vergelijkbare_dag",
+            "default": "vergelijkbare_dag",
+            "title": "Source",
             "type": "string"
           },
           "unit_nl": {

@@ -2,6 +2,8 @@
 
 ## Nog niet uitgebracht
 
+- De energieadviesroute vergelijkt gemeten P1-uren en toont voor verplaatsbaar achtergrondwerk een kostenband
+  met de gebruikte dagen, aannames en zekerheid. Zonder passende meetreeks is de uitkomst `geen meter, geen bedrag`.
 - Een Authentik-aanmelding blijft bruikbaar na heractivering op hetzelfde adres. Een andere bestemming vereist
   een nieuwe aanmelding. Bij een upgrade blijft een bestaande aanmelding bruikbaar als het volledige auditspoor
   hetzelfde adres bevestigt. Ontbreekt dat bewijs, voer het token opnieuw in bij het bedoelde adres.

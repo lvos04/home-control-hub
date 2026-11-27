@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from integrations.domains.energy.models import EnergyEstimateProvenance, EnergyUsageInterval
 from tests.conftest import idem
 from tests.integration.test_b14_001_dekkingsmatrix import ENERGY
-from tests.integration.test_b14_002_tijdreeks import row
+from tests.integration.test_b14_002_tijdreeks import hours, row
 from tests.integration.test_b14_002_tijdreeks import source as source
 from tests.integration.test_b14_002_tijdreeks import sync as sync
 from tests.integration.test_b14_005_meldingen import cpu
@@ -47,12 +47,15 @@ def history(linked, auth, source, sync, fake_hub, monkeypatch):
         quiet_load=20,
         quarters=(0, 15, 30, 45),
         prices=(0.4, 0.1),
+        quiet_hour=23,
     ):
         source.hour_rows[day] = []
-        for hour, kwh, load, price in zip(
-            (18, 23), (busy_kwh, quiet_kwh), (busy_load, quiet_load), prices, strict=True
-        ):
-            start = instant(day, hour)
+        readings = {18: (busy_kwh, busy_load, prices[0]), quiet_hour: (quiet_kwh, quiet_load, prices[1])}
+        for start in hours(day):
+            clock_hour = start.astimezone(ZONE).hour
+            if clock_hour not in readings:
+                continue
+            kwh, load, price = readings[clock_hour]
             source.hour_rows[day].append(row(start, kwh, role=role, quality=quality, device=device))
             if price is not None:
                 source.tariffs.append(
@@ -145,11 +148,18 @@ def test_bandbreedte_bron_zekerheid_en_alleen_een_planningsadvies(linked, auth, 
         "currency": "EUR",
         "unit_nl": "per verplaatst werkuur",
         "measurement_quality": "geschat",
+        "source": "vergelijkbare_dag",
     }
     assert 0 <= item["confidence"] == 0.27 <= 1
     assert item["method"] == "vergelijkbare_dag" and item["disclaimer_nl"] == "De besparing is niet gegarandeerd."
     assert [d["date"] for d in item["days"]] == [(MON + i * DAY).isoformat() for i in range(3)]
     assert [d["busy_kwh"] for d in item["days"]] == [4, 2, 0.5]
+    assert all(
+        d["measurement_quality"] == "gemeten"
+        and d["usage_source"] == "my_house:energy/export"
+        and d["tariff_source"] == "my_house:tariffs"
+        for d in item["days"]
+    )
     assert item["sources"] == ["my_house:energy/export", "my_house:tariffs", "monitoring.metric.recorded/cpu.gebruik"]
     assert "P1-meter" in " ".join(item["assumptions_nl"]) and "AV1" in item["advice_nl"]
     assert "boiler" not in str(body).lower() and "action_id" not in item and "target" not in item
@@ -161,6 +171,20 @@ def test_bandbreedte_bron_zekerheid_en_alleen_een_planningsadvies(linked, auth, 
         assert method.method == item["method"] and method.assumptions["aannames_nl"] == item["assumptions_nl"]
         assert snapshot(db) == before
     assert (fake_hub.requests, source.calls) == seen
+
+
+@pytest.mark.parametrize("end", [date(2026, 3, 29), date(2026, 10, 25)])
+def test_ontbrekend_of_dubbel_lokaal_uur_telt_niet_mee(linked, auth, history, monkeypatch, end):
+    monkeypatch.setattr("integrations.domains.energy.router.utcnow", lambda: instant(end + DAY, 12))
+    ordinary = [end - i * DAY for i in (21, 14, 7)]
+    for day in [*ordinary, end]:
+        history(day, quiet_hour=2)
+    result = get(linked, auth, day=end, quiet_hour=2)
+    assert result["comparable_days"] == 3
+    (item,) = result["items"]
+    assert [d["date"] for d in item["days"]] == [d.isoformat() for d in ordinary]
+    assert item["savings"]["low"] == item["savings"]["high"] == 0.9
+    assert item["disclaimer_nl"] == "De besparing is niet gegarandeerd."
 
 
 def test_een_ontbrekende_prijs_of_valuta_sluit_het_bedrag_uit(linked, auth, source, history, sync):
@@ -221,7 +245,11 @@ def test_bestaand_archief_krijgt_alleen_de_adviesherkomst(linked, auth, history,
     initial = get(linked, auth)["items"][0]
     key = UUID(initial["provenance_id"])
     with linked.app.state.db.sessions() as db:
-        db.delete(db.get(EnergyEstimateProvenance, key))
+        method = db.get(EnergyEstimateProvenance, key)
+        method.assumptions = {}
+        db.commit()
+        assert get(linked, auth)["items"] == []
+        db.delete(method)
         db.commit()  # Archief van vóór de adviesmethode.
         stmt = (
             select(EnergyUsageInterval.id, EnergyUsageInterval.delta)
