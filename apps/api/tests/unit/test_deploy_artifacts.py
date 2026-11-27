@@ -29,6 +29,14 @@ DEPLOY = REPO_ROOT / "deploy"
 FORBIDDEN_HOST_PATHS = ("/", "/mnt", "/etc", "/var/run", "/root")
 
 
+def test_forgejo_behoudt_de_run_van_elke_commit() -> None:
+    workflow = yaml.safe_load((REPO_ROOT / ".forgejo/workflows/ci.yml").read_text())
+    concurrency = workflow.get("concurrency")
+    if concurrency is not None:
+        group = concurrency if isinstance(concurrency, str) else concurrency["group"]
+        assert "${{ github.sha }}" in group or "${{ gitea.sha }}" in group
+
+
 def test_openapi_export_has_no_drift() -> None:
     committed = (REPO_ROOT / "docs/openapi/home-control-hub.openapi.json").read_text(encoding="utf-8")
     assert export_openapi() == committed, "OpenAPI wijkt af: draai 'make openapi' en commit het resultaat"
