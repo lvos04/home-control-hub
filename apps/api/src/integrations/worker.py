@@ -57,6 +57,7 @@ class WorkerState:
     next_node_red_sync: float = 0.0
     next_isolation_check: float = 0.0
     next_energy_sync: float = 0.0
+    energy_sync_ok: bool = True
     last_push_ok: str | None = None
     stats: dict[str, int] = field(
         default_factory=lambda: {
@@ -179,12 +180,13 @@ class Worker:
                 flow_snapshots.run_isolation_check(s, self.settings, self.vault, self.transport, trace_id=trace)
                 s.commit()
 
-    def energy_step(self, now: float) -> None:
-        if now < self.state.next_energy_sync:
-            return
-        self.state.next_energy_sync = now + 300
-        with self.db.sessions() as session:
-            sync_usage(session, self.settings, self.vault, self.transport, utcnow())
+    def energy_step(self, now: float) -> bool:
+        if now >= self.state.next_energy_sync:
+            self.state.next_energy_sync = now + 300
+            self.state.energy_sync_ok = False
+            with self.db.sessions() as session:
+                self.state.energy_sync_ok = sync_usage(session, self.settings, self.vault, self.transport, utcnow())
+        return self.state.energy_sync_ok
 
     def housekeeping_step(self, now: float) -> None:
         with self.db.sessions() as s:
@@ -217,7 +219,8 @@ class Worker:
             strict=True,
         ):
             try:
-                step()
+                if step() is False:
+                    failed.append(name)
             except DBAPIError as exc:  # KLEIN-32: zonder de DETAIL-regel van PostgreSQL
                 failed.append(name)
                 log.error("workerstap %s mislukt: %s", name, db_error_text(exc))

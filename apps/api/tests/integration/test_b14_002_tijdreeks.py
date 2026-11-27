@@ -11,10 +11,14 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from integrations.domains.energy.models import EnergyMeter, EnergyMeterRole, EnergyTariff, EnergyUsageInterval
-from integrations.worker import Worker
+from integrations.models import ServiceState
+from integrations.worker import HEARTBEAT_KEY, Worker
 from tests.fakes.my_house_energy import MyHouseEnergy
 from tests.integration.test_b14_001_dekkingsmatrix import ENERGY, configure
 
@@ -83,6 +87,53 @@ def report(client, auth, day, period="day", direction="import"):
     )
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def test_energiestoring_blijft_in_hartslag_tot_nieuwe_meting(linked, source, fake_hub):
+    transport = httpx.MockTransport(lambda r: source.handle(r) if r.url.host == "woning.test" else fake_hub.handler(r))
+    worker = Worker(linked.app.state.settings, transport)
+    try:
+        source.summary_status = 403
+        worker.run_once()
+
+        def mislukt():
+            with linked.app.state.db.sessions() as db:
+                return db.get(ServiceState, HEARTBEAT_KEY).value["mislukte_stappen"]
+
+        assert "energie" in mislukt()
+        source.summary_status = 200
+        worker.run_once()
+        assert "energie" in mislukt()
+        worker.state.next_energy_sync = 0
+        worker.run_once()
+        assert "energie" not in mislukt()
+    finally:
+        worker.db.dispose()
+
+
+def test_onbekend_queryveld_geweigerd_voor_bronverzoek(linked, auth, source, sync):
+    day = date(2026, 4, 8)
+    sync(day)
+    assert report(linked, auth, day)["role"] == "p1_net"
+    checks = list(source.checks)
+    url = ENERGY + "/usage?rol=airco_outdoor"
+    assert linked.get(url).status_code == 401
+    assert linked.get(url, headers=auth("kind")).status_code == 403
+    response = linked.get(url, headers=auth("viewer"))
+    assert (response.status_code, response.json()["code"]) == (422, "validation_error")
+    assert source.checks == checks
+
+
+def test_onbereikbaar_archief_geeft_503_zonder_bronverzoek(linked, auth, source, monkeypatch):
+    def offline(*args, **kwargs):
+        raise OperationalError(None, None, OSError("proefarchief offline"))
+
+    checks = list(source.checks)
+    monkeypatch.setattr(Session, "scalar", offline)
+    with TestClient(linked.app, raise_server_exceptions=False) as client:
+        response = client.get(ENERGY + "/usage", headers=auth("viewer"))
+    assert (response.status_code, response.json()["code"]) == (503, "dependency_unavailable")
+    assert int(response.headers["Retry-After"]) > 0 and source.checks == checks
 
 
 @pytest.mark.parametrize(("day", "count"), [(date(2026, 3, 29), 23), (date(2026, 10, 25), 25)])

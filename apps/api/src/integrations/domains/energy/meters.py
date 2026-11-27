@@ -29,6 +29,10 @@ ABSENT = "my_house meldt deze meterrol niet."
 NAS_ABSENT = "my_house meldt geen losse vermogensmeter voor de NAS."
 
 
+class SourceInactive(EnergyReadError):
+    """Zonder actieve bron heeft de worker geen synchronisatietaak."""
+
+
 class MeterItem(BaseModel):
     id: UUID
     role: str
@@ -66,9 +70,9 @@ def configured_client(
     """Houd de bronconfiguratie vast tot het bijbehorende leesresultaat verwerkt is."""
     source = session.scalar(select(IntegrationSource).where(IntegrationSource.source_id == SOURCE).with_for_update())
     if source is None or not source.base_url:
-        raise EnergyReadError("De bron my_house is niet ingesteld.")
+        raise SourceInactive("De bron my_house is niet ingesteld.")
     if not source.enabled:
-        raise EnergyReadError("De bron my_house staat uit.")
+        raise SourceInactive("De bron my_house staat uit.")
     if source.credential_ref != source_ref(SOURCE):
         raise EnergyReadError("De eigen viewer-koppeling voor my_house ontbreekt.")
     try:

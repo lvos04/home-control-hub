@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date, datetime
 
 from fastapi import Depends, Query, Request
 from pydantic import BaseModel
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 
 from ...deps import get_session
@@ -120,6 +123,18 @@ def coverage(
     return coverage_payload(meter_inventory(request, session))
 
 
+def archive_session(request: Request) -> Iterator[Session]:
+    try:
+        yield from get_session(request)
+    except (InterfaceError, OperationalError, PoolTimeout):
+        raise ApiError(
+            503,
+            "dependency_unavailable",
+            "Het energiearchief is tijdelijk onbereikbaar.",
+            headers={"Retry-After": "300"},
+        ) from None
+
+
 @router.get(
     "/usage",
     summary="Verbruik en variabele kosten per lokale woningdag (B14-002)",
@@ -135,9 +150,11 @@ def usage(
     role: Role = "p1_net",
     direction: Direction = "import",
     timezone: str | None = Query(None, description="Optioneel ter controle van de door de woning gemelde tijdzone."),
-    session: Session = Depends(get_session),
+    session: Session = Depends(archive_session),
     _p: Principal = Depends(require_reader),
 ) -> UsageReport:
+    if request.query_params.keys() - {"period", "date", "role", "direction", "timezone"}:
+        raise ApiError(422, "validation_error", "Onbekend queryveld voor het verbruiksrapport.")
     state = request.app.state
     try:
         client, scope, revision = configured_client(session, state.settings, state.vault, state.http_transport)

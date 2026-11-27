@@ -28,7 +28,7 @@ from .hourly import (
     parse_export,
     series_ref,
 )
-from .meters import SOURCE, configured_client
+from .meters import SOURCE, SourceInactive, configured_client
 from .models import EnergyEstimateProvenance, EnergyMeter, EnergyMeterRole, EnergyUsageInterval
 from .readings import SOURCE_ROLES, declared_roles
 from .tariffs import store_tariffs
@@ -159,11 +159,13 @@ class Archive:
 
 def sync_usage(
     db: Session, settings: Settings, vault: Vault, transport: httpx.BaseTransport | None, now: datetime
-) -> None:
+) -> bool:
     try:
         client, scope, revision = configured_client(db, settings, vault, transport)
+    except SourceInactive:
+        return True
     except EnergyReadError:
-        return
+        return False
     state = db.get(ServiceState, STATE_KEY)
     previous = state.value if state and state.value.get("revision") == revision else {}
     try:
@@ -202,3 +204,4 @@ def sync_usage(
     else:
         state.value = metadata
     db.commit()
+    return "reason_nl" not in metadata
