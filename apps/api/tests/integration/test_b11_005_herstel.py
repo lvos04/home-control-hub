@@ -1031,21 +1031,31 @@ def test_changed_flows_since_the_preview_stop_the_restore(scene: Scene, linked: 
 
 
 def test_c12_leesprofiel_weigert_herstel_van_gewone_flows(
-    linked: Any, auth: Any, fake_hub: Any, node_red_fake: Any
+    app_factory: Any, auth: Any, fake_hub: Any, node_red_fake: Any
 ) -> None:
-    setup_node_red(linked, fake_hub, auth, flows=simple_flow(label="Oorspronkelijke flow"))
-    moment = b11.snapshot(linked, auth)["snapshot"]
+    client = app_factory()
+    assert pair(client, fake_hub).ok
+    setup_node_red(client, fake_hub, auth, flows=simple_flow(label="Oorspronkelijke flow"))
+    moment = b11.snapshot(client, auth)["snapshot"]
     huidig = simple_flow(label="Gewijzigde flow")
     node_red_fake.deploy(huidig)
     revisie = node_red_fake.rev
-    voorstel = b11.propose_restore(linked, auth, moment["id"])
+    voorstel = b11.propose_restore(client, auth, moment["id"])
     assert voorstel.status_code == 201
-    antwoord = b11.apply(linked, fake_hub, b11.signed_restore(fake_hub, voorstel.json()))
-    assert antwoord.status_code == 502 and antwoord.json()["code"] == "node_red_fout"
+    assert voorstel.json()["credentials"]["terugzetten"] is False
+    antwoord = b11.apply(client, fake_hub, b11.signed_restore(fake_hub, voorstel.json()))
+    assert antwoord.status_code == 500 and antwoord.json()["code"] == "herstel_niet_vastgelegd"
     detail = antwoord.json()["details"]
-    assert (detail["http_status"], detail["path"]) == (401, "/flows")
-    assert detail["readback"]["gelijk_aan_toestand_vooraf"] is True
-    assert node_red_fake.flows == huidig and node_red_fake.rev == revisie and node_red_fake.writes == []
+    assert detail["flows_geblokkeerd"] is True and detail["oorzaak"] == "aanmelding_geweigerd"
+    synchronisatie = client.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
+    assert (synchronisatie["fout"]["http_status"], synchronisatie["fout"]["path"]) == (401, "/flows")
+    state = client.app.state
+    with (
+        state.db.sessions() as db,
+        nodered.client_from_source(db, state.settings, state.vault, state.http_transport) as lezer,
+    ):
+        teruggelezen = lezer.get_flows()
+    assert teruggelezen.flows == huidig and teruggelezen.rev == revisie and node_red_fake.writes == []
 
 
 def test_changed_credential_secret_makes_node_red_refuse_and_nothing_changes(scene: Scene, linked: Any) -> None:
