@@ -140,7 +140,10 @@ def archive_session(request: Request) -> Iterator[Session]:
     summary="Verbruik en variabele kosten per lokale woningdag (B14-002)",
     responses={
         501: {"description": "Bron of eerste uur-export ontbreekt"},
-        503: {"description": "De bron of de viewer-koppeling is niet beschikbaar"},
+        503: {
+            "description": "De bron, de viewer-koppeling of het energiearchief is tijdelijk onbereikbaar",
+            "headers": {"Retry-After": {"description": "Wachttijd in seconden", "schema": {"type": "integer"}}},
+        },
     },
 )
 def usage(
