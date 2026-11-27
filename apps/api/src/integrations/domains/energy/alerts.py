@@ -147,16 +147,14 @@ def _house_checks(db: Session, now: datetime, limits: AlertThresholds | None, op
             boiler.compare_growth(last.usage.value, previous, limits.boiler_increase_kwh, opened)
         elif role == "p1_net" and meta.get("currency") == "EUR":
             # Basisbedrag is de som sinds lokale middernacht. Elk verstreken uur vereist een meting én een tarief.
-            day_hours = [
-                h for h in slots if h.start_utc.astimezone(zone).date() == last.start_utc.astimezone(zone).date()
-            ]
+            day_hours = [h for h in slots if h.start_utc.astimezone(zone).date() == today]
             _budget(budget, day_hours, limits.daily_budget_eur)
     return checks
 
 
 def _budget(check: Check, day_hours: Sequence[Hour], limit: float) -> None:
     costs = [h.cost.value for h in day_hours if h.cost.quality == "gemeten" and h.cost.value is not None]
-    if len(costs) == len(day_hours):
+    if day_hours and len(costs) == len(day_hours):
         check.observed_at = day_hours[-1].end_utc
         check.breached = sum(costs, Decimal(0)) > Decimal(str(limit))
 

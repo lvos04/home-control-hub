@@ -236,6 +236,21 @@ def test_aanhoudende_piek_een_event_ook_na_herstart_en_geen_persoonsgegevens(lin
     assert {method for method, _ in house.calls} == {"GET"}
 
 
+def test_dagbudget_begint_op_de_nieuwe_woningdag(linked, auth, house, tick):
+    install(linked, auth)
+    supply(house, 24, peak=False)
+    morgen = DAY + timedelta(days=1)
+    middernacht = hours(morgen)[0]
+    regel = ("daily_budget", "p1_net")
+    tick(middernacht - timedelta(minutes=5))
+    assert statuses(linked, auth)[regel] == "afwijkend"
+    tick(middernacht + timedelta(minutes=5))
+    assert statuses(linked, auth)[regel] == "onbekend"
+    house.hour_rows[morgen] = [row(middernacht, 1)]
+    tick(middernacht + timedelta(hours=1))
+    assert statuses(linked, auth)[regel] == "normaal"
+
+
 def test_onvolledig_ongeprijsd_en_geschat_blijven_onbekend(linked, auth, house, tick):
     install(linked, auth)
     supply(house, 6)
