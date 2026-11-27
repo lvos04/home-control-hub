@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import uuid
 from typing import Any
 
@@ -13,7 +14,8 @@ from sqlalchemy import create_engine, inspect, select, text
 
 from integrations.config import Settings
 from integrations.migrations import downgrade, head_revision, upgrade
-from integrations.models import IdempotencyRecord, all_models
+from integrations.models import IdempotencyRecord, IntegrationSource, VaultSecret, all_models
+from integrations.sources import source_ref
 from tests.conftest import AUTHENTIK_URL, FakeHub, fresh, idem, recreate_database
 
 pytestmark = pytest.mark.integration
@@ -24,11 +26,6 @@ pytestmark = pytest.mark.integration
     ["netalertx", "adguard_home", "tailscale", "cloudflared", "router", "truenas_metrics", "mediaguard_encoding"],
 )
 def test_bronadres_bindt_de_aanmelding(paired_client: Any, auth: Any, source_id: str) -> None:
-    import secrets
-
-    from integrations.models import VaultSecret
-    from integrations.sources import source_ref
-
     url = f"/integrations/v1/sources/{source_id}"
 
     def put(address: str, **fields: str) -> dict[str, Any]:
@@ -44,6 +41,27 @@ def test_bronadres_bindt_de_aanmelding(paired_client: Any, auth: Any, source_id:
     assert not put("https://tweede.test")["credential_present"]
     with paired_client.app.state.db.sessions() as db:
         assert db.get(VaultSecret, source_ref(source_id)) is None
+
+
+def test_adreswissel_bewaart_kluisrij_van_andere_bron(paired_client: Any, auth: Any) -> None:
+    url = "/integrations/v1/sources/router"
+    c = paired_client
+
+    def headers() -> dict[str, str]:
+        return idem(auth("admin"), **{"If-Match": "*"})
+
+    assert c.put(url, json={"base_url": "https://eerste.test"}, headers=headers()).status_code == 201
+    foreign = source_ref("authentik")
+    with c.app.state.db.sessions.begin() as db:
+        c.app.state.vault.put(db, foreign, secrets.token_urlsafe(32))
+        db.get(IntegrationSource, "router").credential_ref = foreign
+    with c.app.state.db.sessions() as db:
+        before = bytes(db.get(VaultSecret, foreign).ciphertext)
+    moved = c.put(url, json={"base_url": "https://tweede.test"}, headers=headers())
+    assert moved.status_code == 200 and not moved.json()["runtime"]["credential_present"]
+    with c.app.state.db.sessions() as db:
+        row = db.get(VaultSecret, foreign)
+        assert row is not None and bytes(row.ciphertext) == before
 
 
 # ------------------------------------------------------------------ migraties

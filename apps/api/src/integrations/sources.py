@@ -294,8 +294,8 @@ def put_source(
         # De aanmelding hoort bij de bevestigde bestemming. Authentik bewaart zijn eigen koppeling bij herconfiguratie.
         if body.clear_credential or (changed_url and source_id != "authentik"):
             previous = row.credential_ref
-            if previous and not body.credential and (source_id != "my_house" or previous == ref):
-                vault.delete(session, previous)
+            if previous == ref and not body.credential:
+                vault.delete(session, ref)
             row.credential_ref = None
         if source_id == "my_house" and (body.credential or (body.enabled and row.credential_ref)):
             try:
