@@ -38,6 +38,7 @@ from .domains.energy.client import (
     energy_address,
     stored_viewer,
 )
+from .domains.energy.workload_sources import confirmed_hub, mediaguard_path
 from .domains.network.catalog import SOURCES as NETWORK_SOURCES
 from .domains.sso.catalog import SOURCES as SSO_SOURCES
 from .errors import ApiError, capability_unavailable, not_found
@@ -238,6 +239,13 @@ def put_source(
             )
         except HubUrlError as exc:
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
+    if source_id == "mediaguard_encoding":
+        if body.credential:
+            raise ApiError(422, "validation_error", "De planner gebruikt de bestaande dienstaanmelding bij de Hub.")
+        if body.enabled:
+            base = confirmed_hub(request.app.state.hublink_store.read(), settings)
+            if not base or not mediaguard_path(base_url, base):
+                raise ApiError(422, "validation_error", "Kies de MediaGuard-adapterroute op de bevestigde HTTPS-Hub.")
     if source_id == "my_house" and base_url:
         try:
             energy_address(base_url, settings)

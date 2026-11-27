@@ -41,6 +41,16 @@ def test_no_unverified_claims_about_external_apps() -> None:
                 "DELTA_MATRIX.md §6" in spec.api_verification_ref
                 and "NIET GEVALIDEERD (hardware)" in spec.api_verification_ref
             )
+        elif spec.source_id in ("truenas_metrics", "mediaguard_encoding"):
+            assert spec.api_verification == "geverifieerd_docs"
+            assert "Platformcontract 1.4 §4.4" in spec.api_verification_ref
+            assert "NIET GEVALIDEERD (echte NAS)" in spec.api_verification_ref
+            path = (
+                "/api/v1/observability/nas"
+                if spec.source_id == "truenas_metrics"
+                else "/api/v1/adapterkoppelingen/{link_id}/mediaguard"
+            )
+            assert path in spec.api_verification_ref
         elif spec.source_id == "node_red":
             # B11: gemeten tegen een lokale container van de gepinde image; de echte NAS blijft NIET GEVALIDEERD
             assert spec.api_verification == "geverifieerd_installatie"
@@ -77,6 +87,7 @@ def test_built_capabilities_are_exactly_b13_b11_and_energy_reads() -> None:
     assert built == {
         "energy.meters.read",
         "energy.usage.read",
+        "energy.workload.read",
         "automation.isolation.check",
         "automation.flows.read",
         "automation.event_types.read",

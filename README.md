@@ -113,8 +113,30 @@ Bij ontbrekende of verouderde metingen blijft het verbruik onbekend. De worker b
 bronuitval en na een herstart. Voor een lopende piek houdt hij de oorspronkelijke basislijn aan. Probleem en
 herstel komen elk eenmaal in de uitgaande rij met dezelfde onderwerp-ID. De boiler wordt uitsluitend gemeten.
 
-De gegevensroutes van B10 en de overige gegevensroutes van B14 voor werklast en advies geven
-`501 capability_unavailable`.
+### Dagplanner voor werklasten
+
+`GET /integrations/v1/energy/workloads` geeft de plantypen, reserveringen en tijdvakken per uur.
+Met `date` en `timezone` kiest de lezer een kalenderdag en IANA-tijdzone. De standaard is vandaag in UTC.
+De begin- en eindtijden zijn UTC. Bij een klokwisseling kan de lokale dag 23 of 25 uren bevatten.
+
+`items` geeft per werklast de eigenaar, prioriteitsklasse, onderbreekbaarheid en behoefte aan een veilig
+stoppunt. De vijf plantypen uit B14 zijn ook beschikbaar op een lege installatie. Bestaande werklasten
+behouden hun eigen ID en instellingen. `reservations` bevat de vastgelegde vensters en hun status.
+In `hours[].slots` wacht een geplande of actieve achtergrondtaak gedurende de overlap met een actieve
+interactieve reservering (`interactieve_werklast`). Het opgeslagen venster houdt zijn oorspronkelijke status.
+
+De dienst leest met `werklast.lezen` op de bevestigde HTTPS-Hub. De NAS-metingen komen van
+`GET /api/v1/observability/nas`. Voor AV1 kiest een beheerder in de adapterlijst van de Hub de
+MediaGuard-koppeling. Stel in de bestaande bronconfiguratie (`PUT /integrations/v1/sources/mediaguard_encoding`)
+`enabled` in op `true` en `base_url` op `<bevestigde HTTPS-Hub>/api/v1/adapterkoppelingen/<link_id>/mediaguard`.
+Beide lezingen gebruiken de bestaande dienstaanmelding.
+
+`sources` toont de verse belastingspercentages en de meettijd, het aantal lopende encodes en de pauzestand
+per AV1-baan. Een gemeten pauze krijgt de vaste reden `eigenaar_gepauzeerd`. De dagplanner toont die
+momentopname alleen in het uur van de meting. Bij uitval of onvoldoende leesrecht staat de betreffende bron
+op `onbekend`. Bij gedeeltelijke NAS-dekking staan de ontbrekende metrieken apart vermeld.
+
+De gegevensroutes van B10 en de adviesroute van B14 geven `501 capability_unavailable`.
 **Niets is op een echte NAS, met een echte Authentik of met een Node-RED op de NAS gevalideerd** (zie
 `docs/platform-v2/EVIDENCE.json`).
 

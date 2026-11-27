@@ -270,7 +270,7 @@ TRUNCATE = (
     "automation_flow_version, automation_trigger, automation_flow_token, automation_event, automation_delivery, "
     "automation_flow_run, automation_action_request, automation_replay_key, automation_rate_limit, "
     "automation_flow_owner, automation_restore, automation_execution_nonce, energy_usage_interval, "
-    "energy_estimate_provenance, energy_tariff, energy_meter_role, energy_meter "
+    "energy_estimate_provenance, energy_tariff, energy_meter_role, energy_meter, energy_workload_reservation, energy_workload "
     "RESTART IDENTITY CASCADE"
 )
 

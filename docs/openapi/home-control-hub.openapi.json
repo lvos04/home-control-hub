@@ -815,6 +815,47 @@
         "title": "EmergencyAccessIn",
         "type": "object"
       },
+      "Encoding": {
+        "properties": {
+          "banen": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Lane"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Banen"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "status": {
+            "default": "onbekend",
+            "enum": [
+              "gemeten",
+              "onbekend"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Encoding",
+        "type": "object"
+      },
       "EvaluateIn": {
         "additionalProperties": false,
         "properties": {
@@ -958,6 +999,48 @@
         "title": "KitVerifyIn",
         "type": "object"
       },
+      "Lane": {
+        "properties": {
+          "lane": {
+            "enum": [
+              "cpu",
+              "gpu"
+            ],
+            "title": "Lane",
+            "type": "string"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "running": {
+            "minimum": 0.0,
+            "title": "Running",
+            "type": "integer"
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "const": "eigenaar_gepauzeerd",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Wait Reason"
+          }
+        },
+        "required": [
+          "lane",
+          "running",
+          "paused",
+          "wait_reason"
+        ],
+        "title": "Lane",
+        "type": "object"
+      },
       "LimitEntry": {
         "additionalProperties": false,
         "properties": {
@@ -1004,6 +1087,44 @@
           "rate_limits"
         ],
         "title": "LimitsIn",
+        "type": "object"
+      },
+      "LoadReading": {
+        "properties": {
+          "bron": {
+            "enum": [
+              "truenas.reporting.realtime",
+              "beszel"
+            ],
+            "title": "Bron",
+            "type": "string"
+          },
+          "metriek": {
+            "enum": [
+              "cpu.gebruik",
+              "geheugen.beschikbaar_pct",
+              "gpu.gebruik"
+            ],
+            "title": "Metriek",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "waarde_pct": {
+            "title": "Waarde Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "metriek",
+          "bron",
+          "waarde_pct",
+          "observed_at"
+        ],
+        "title": "LoadReading",
         "type": "object"
       },
       "MappingIn": {
@@ -1242,6 +1363,41 @@
         "title": "NackIn",
         "type": "object"
       },
+      "NasLoad": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LoadReading"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "onbekend": {
+            "items": {
+              "enum": [
+                "cpu.gebruik",
+                "geheugen.beschikbaar_pct",
+                "gpu.gebruik"
+              ],
+              "type": "string"
+            },
+            "title": "Onbekend",
+            "type": "array"
+          },
+          "status": {
+            "default": "onbekend",
+            "enum": [
+              "gemeten",
+              "gedeeltelijk",
+              "onbekend"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "NasLoad",
+        "type": "object"
+      },
       "OwnerEntry": {
         "additionalProperties": false,
         "properties": {
@@ -1300,6 +1456,93 @@
           "owner"
         ],
         "title": "OwnerIn",
+        "type": "object"
+      },
+      "PlanHour": {
+        "properties": {
+          "encoding": {
+            "$ref": "#/components/schemas/Encoding"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSlot"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "PlanHour",
+        "type": "object"
+      },
+      "PlanSlot": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "reservation_id": {
+            "format": "uuid",
+            "title": "Reservation Id",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "voorstel",
+              "gepland",
+              "actief",
+              "wacht",
+              "klaar",
+              "geannuleerd"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "interactieve_werklast",
+                  "eigenaar_gepauzeerd",
+                  "veilig_stoppunt",
+                  "onbekend"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Reason"
+          }
+        },
+        "required": [
+          "reservation_id",
+          "start",
+          "end",
+          "status",
+          "wait_reason"
+        ],
+        "title": "PlanSlot",
         "type": "object"
       },
       "ProposeIn": {
@@ -1448,6 +1691,68 @@
           "source"
         ],
         "title": "Quantity",
+        "type": "object"
+      },
+      "Reservation": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "voorstel",
+              "gepland",
+              "actief",
+              "wacht",
+              "klaar",
+              "geannuleerd"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "interactieve_werklast",
+                  "eigenaar_gepauzeerd",
+                  "veilig_stoppunt",
+                  "onbekend"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Reason"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          },
+          "workload_id": {
+            "format": "uuid",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workload_id",
+          "window_start",
+          "window_end",
+          "status"
+        ],
+        "title": "Reservation",
         "type": "object"
       },
       "RestoreCheckIn": {
@@ -1883,6 +2188,110 @@
           "home_id"
         ],
         "title": "ViewerPairing",
+        "type": "object"
+      },
+      "Workload": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "needs_safe_checkpoint": {
+            "title": "Needs Safe Checkpoint",
+            "type": "boolean"
+          },
+          "owner_app": {
+            "title": "Owner App",
+            "type": "string"
+          },
+          "preemptible": {
+            "title": "Preemptible",
+            "type": "boolean"
+          },
+          "priority_class": {
+            "enum": [
+              "interactief",
+              "hoog",
+              "normaal",
+              "achtergrond"
+            ],
+            "title": "Priority Class",
+            "type": "string"
+          },
+          "workload_key": {
+            "title": "Workload Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_app",
+          "workload_key",
+          "priority_class",
+          "preemptible",
+          "needs_safe_checkpoint"
+        ],
+        "title": "Workload",
+        "type": "object"
+      },
+      "WorkloadPlan": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "hours": {
+            "items": {
+              "$ref": "#/components/schemas/PlanHour"
+            },
+            "title": "Hours",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Workload"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "reservations": {
+            "items": {
+              "$ref": "#/components/schemas/Reservation"
+            },
+            "title": "Reservations",
+            "type": "array"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/WorkloadSources"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "timezone",
+          "items",
+          "reservations",
+          "hours",
+          "sources"
+        ],
+        "title": "WorkloadPlan",
+        "type": "object"
+      },
+      "WorkloadSources": {
+        "properties": {
+          "mediaguard_encoding": {
+            "$ref": "#/components/schemas/Encoding"
+          },
+          "truenas_metrics": {
+            "$ref": "#/components/schemas/NasLoad"
+          }
+        },
+        "title": "WorkloadSources",
         "type": "object"
       }
     }
@@ -5013,25 +5422,64 @@
     },
     "/integrations/v1/energy/workloads": {
       "get": {
-        "operationId": "endpoint_integrations_v1_energy_workloads_get",
+        "operationId": "workloads_integrations_v1_energy_workloads_get",
+        "parameters": [
+          {
+            "description": "Kalenderdatum in de gevraagde tijdzone.",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Kalenderdatum in de gevraagde tijdzone.",
+              "title": "Date"
+            }
+          },
+          {
+            "description": "IANA-tijdzone voor de daggrenzen.",
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "description": "IANA-tijdzone voor de daggrenzen.",
+              "maxLength": 128,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Energy Workloads Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorkloadPlan"
                 }
               }
             },
             "description": "Successful Response"
           },
-          "501": {
-            "description": "capability_unavailable"
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "energy.workload.read (nog niet gebouwd → 501 capability_unavailable)",
+        "summary": "Werklasten, reserveringen per uur en actuele bronmetingen (B14-003)",
         "tags": [
           "energy"
         ]

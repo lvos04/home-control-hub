@@ -30,12 +30,13 @@ from .meters import ABSENT, NAS_ABSENT, Inventory, MeterItem, configured_client,
 from .readings import LIVE_MAX_AGE, Quality
 from .usage import UsageReport, usage_report
 from .usage_sync import STATE_KEY
+from .workload_sources import workload_sources
+from .workloads import WorkloadPlan, day_plan
 
 router = domain_router(
     "energy",
     SOURCES,
     {
-        "/workloads": ("energy.workload.read", ("B14-003",)),
         "/advice": ("energy.advice.read", ("B14-004",)),
     },
 )
@@ -243,3 +244,25 @@ def energy_alerts(
 ) -> AlertList:
     checks = assess(session, session.get(ServiceState, SETTINGS_KEY), utcnow(), request.app.state.hublink_store.read())
     return AlertList(items=[check.status() for check in checks])
+
+
+@router.get("/workloads", summary="Werklasten, reserveringen per uur en actuele bronmetingen (B14-003)")
+def workloads(
+    request: Request,
+    day: date | None = Query(None, alias="date", description="Kalenderdatum in de gevraagde tijdzone."),
+    timezone: str = Query("UTC", max_length=128, description="IANA-tijdzone voor de daggrenzen."),
+    session: Session = Depends(archive_session),
+    _p: Principal = Depends(require_reader),
+) -> WorkloadPlan:
+    try:
+        zone = home_zone(timezone)
+    except EnergyReadError:
+        raise ApiError(422, "validation_error", "De tijdzone voor de dagplanner is ongeldig.") from None
+    day = day or utcnow().astimezone(zone).date()
+    if not 1 < day.year < 9999 or any(
+        k not in {"date", "timezone"} or len(request.query_params.getlist(k)) != 1 for k in request.query_params
+    ):
+        raise ApiError(422, "validation_error", "Ongeldige datum of queryparameters voor de dagplanner.")
+    state = request.app.state
+    sources = workload_sources(session, state.hub, state.hublink_store.read())
+    return day_plan(session, day, zone, sources)

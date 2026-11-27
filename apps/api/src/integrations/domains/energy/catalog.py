@@ -55,8 +55,11 @@ SOURCES: tuple[SourceSpec, ...] = (
         install_method="n.v.t.",
         upstream="https://www.truenas.com/docs/",
         required_decisions=("D01",),
-        api_verification="te_verifieren",
-        capabilities=(cap("energy.workload.read", "Werkloadbelasting per app", "read", ("B14-003",)),),
+        api_verification="geverifieerd_docs",
+        api_verification_ref="Platformcontract 1.4 §4.4, GET /api/v1/observability/nas. NIET GEVALIDEERD (echte NAS).",
+        capabilities=(
+            cap("energy.workload.read", "Dagplanner en NAS-belasting", "read", ("B14-003",), build_status="gebouwd"),
+        ),
         notes_nl="Geen wattage afleiden uit CPU% zonder kalibratie tegen een echte meter (B14-001).",
     ),
     SourceSpec(
@@ -69,7 +72,8 @@ SOURCES: tuple[SourceSpec, ...] = (
         install_method="bestaand",
         upstream="https://github.com/lvos04/media-guard-ultimate",
         required_decisions=("D07",),
-        api_verification="te_verifieren",
+        api_verification="geverifieerd_docs",
+        api_verification_ref="Platformcontract 1.4 §4.4, GET /api/v1/adapterkoppelingen/{link_id}/mediaguard. NIET GEVALIDEERD (echte NAS).",
         capabilities=(
             cap("energy.reservations.propose", "Werkloadreservering/pauzevoorstel", "propose", ("B14-003",), "R1"),
         ),

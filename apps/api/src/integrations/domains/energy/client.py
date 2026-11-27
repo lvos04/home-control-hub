@@ -111,7 +111,7 @@ class EnergyClient:
                     with client.stream("GET", path, params=params, extensions=tls) as response:
                         if response.status_code != 200:
                             raise ViewerDenied("my_house weigert de controle van de viewer-koppeling.")
-                        return _json(response)
+                        return read_energy_json(response)
 
                 nonce = secrets.token_urlsafe(24)
                 identity = check("/api/v1/pairing/identity", {"client_id": str(pairing.client_id), "nonce": nonce})
@@ -166,7 +166,7 @@ class EnergyClient:
                     client.stream("GET", path, params=params, extensions=tls) as response,
                 ):
                     if response.status_code == 200:
-                        return _json(response)
+                        return read_energy_json(response)
                     if response.status_code in (401, 403):
                         raise ViewerDenied("my_house weigert de viewer-koppeling.")
                     if response.status_code not in (429, 502, 503, 504) or "Retry-After" in response.headers:
@@ -181,7 +181,7 @@ class EnergyClient:
         raise EnergyReadError("my_house is niet bereikbaar voor de energielezing.")
 
 
-def _json(response: httpx.Response) -> Any:
+def read_energy_json(response: httpx.Response, source: str = "my_house") -> Any:
     body = bytearray()
     for block in response.iter_bytes(chunk_size=65536):
         if len(body) + len(block) > MAX_BODY_BYTES:
@@ -190,4 +190,4 @@ def _json(response: httpx.Response) -> Any:
     try:
         return json.loads(body)
     except (ValueError, RecursionError):
-        raise EnergyReadError("my_house gaf een ongeldig JSON-antwoord.") from None
+        raise EnergyReadError(f"{source} gaf een ongeldig JSON-antwoord.") from None
