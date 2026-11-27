@@ -501,6 +501,12 @@ def restore_via_hub(lab: Lab, connector_port: int, apply_requests: list[dict[str
     assert readback["gelezen"] is True and readback["gelijk_aan_momentopname"] is True
     assert readback["snapshot_id"] == snapshot.json()["snapshot"]["id"]
     assert readback["checksum_sha256"] == snapshot.json()["snapshot"]["checksum_sha256"]
+    (change,) = preview.json()["diff"][0]["changes"]
+    assert change == {
+        "field": "checksum_sha256",
+        "before": proposal["resource_etag"].removeprefix("sha256:"),
+        "after": readback["checksum_sha256"],
+    }
     assert proof["after_hash"] == "sha256:" + readback["checksum_sha256"]
     assert proof["before_hash"] == proposal["resource_etag"]
     assert proof["policy_hash"] == approval["policy_hash"] and proof["methode"] == body["action_id"]
@@ -512,6 +518,11 @@ def restore_via_hub(lab: Lab, connector_port: int, apply_requests: list[dict[str
     (signed,) = apply_requests
     assert signed["approval"]["request_id"] == proposal["request_id"]
     assert signed["proposal"]["reason"] == body["reason"]
+    bearer = lab.hub_service_jwt(lab.link()["service_id"])
+    duplicate = lab.api("POST", "/connector/v1/apply", bearer, idem=True, body=signed)
+    assert (duplicate.status_code, duplicate.json()["code"]) == (409, "nonce_al_gebruikt")
+    repeated_token = lab.api("POST", "/connector/v1/apply", bearer, idem=True, body=signed)
+    assert (repeated_token.status_code, repeated_token.json()["details"]["reason"]) == (401, "token_replayed")
     signed["proposal"]["reason"] = "h" + signed["proposal"]["reason"][1:]
     bearer = lab.hub_service_jwt(lab.link()["service_id"])
     refused = lab.api("POST", "/connector/v1/apply", bearer, idem=True, body=signed)
