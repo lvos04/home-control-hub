@@ -4,6 +4,8 @@ Gemaakt met `make schermafdrukken` (Playwright 1.65, Chromium, `locale nl-NL`, T
 Hub-simulator (`tests/ui/genereer_toestanden.py`; vaste trace-ID's). Validatie: **Sim-getest** — geen echte Hub,
 geen echte NAS, geen echte telefoon of schermlezer.
 
+Nieuwe afdrukken staan per proef onder `tests/ui/test-results/`. Met de Playwright-optie `--output` kies je een eigen uitvoermap.
+
 | Bestand | Toestand |
 |---|---|
 | `niet-gekoppeld-<thema>-<breedte>.png` | nog nooit gekoppeld: koppelformulier (Hub-adres, koppelcode, vingerafdruk); totaal "Niet gereed" |

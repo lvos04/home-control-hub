@@ -8,14 +8,13 @@
 //   toestand; Referrer-Policy same-origin (contract 1.3 §3.7 punt 1),
 //   Tab-doorloop met zichtbare ring ≥ 3 px (390 en 1440) en stippelranden bij forced colors.
 // De pagina's komen uit de echte app tegen de Hub-simulator (genereer_toestanden.py) — uitkomst: Sim-getest.
-// SCHERMAFDRUKKEN=1: verplichte toestanden × 360/768/1440 × licht/donker naar docs/screenshots/peil/statuspagina/.
+// SCHERMAFDRUKKEN=1: verplichte toestanden × 360/768/1440 × licht/donker in de uitvoermap van deze proef.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const UIT = process.env.STATUSPAGINA_UIT ?? path.join(__dirname, 'uit');
-const AFDRUKKEN = path.resolve(__dirname, '../../docs/screenshots/peil/statuspagina');
 const BREEDTES = [320, 360, 390, 768, 1024, 1440];
 const AFDRUK_BREEDTES = [360, 768, 1440];
 const VERPLICHT = [
@@ -66,7 +65,7 @@ async function serveer(page: Page, body: string, meta: Meta, extern: string[]): 
 
 for (const { naam, body, meta } of toestanden()) {
   for (const thema of THEMAS) {
-    test(`${naam} · ${thema.naam}`, async ({ page }) => {
+    test(`${naam} · ${thema.naam}`, async ({ page }, testInfo) => {
       const csp: string[] = [];
       const fouten: string[] = [];
       const extern: string[] = [];
@@ -195,9 +194,8 @@ for (const { naam, body, meta } of toestanden()) {
         }
 
         if (process.env.SCHERMAFDRUKKEN && VERPLICHT.includes(naam) && AFDRUK_BREEDTES.includes(breedte)) {
-          fs.mkdirSync(AFDRUKKEN, { recursive: true });
           await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-          await page.screenshot({ path: path.join(AFDRUKKEN, `${naam}-${thema.naam}-${breedte}.png`), fullPage: true });
+          await page.screenshot({ path: testInfo.outputPath(`${naam}-${thema.naam}-${breedte}.png`), fullPage: true });
         }
       }
 
@@ -213,6 +211,12 @@ for (const { naam, body, meta } of toestanden()) {
       expect(csp, 'CSP-overtredingen').toEqual([]);
       expect(fouten, 'paginafouten').toEqual([]);
       expect(extern, 'externe verzoeken').toEqual([]);
+      if (process.env.SCHERMAFDRUKKEN && VERPLICHT.includes(naam)) {
+        for (const breedte of AFDRUK_BREEDTES) {
+          const naamPng = `${naam}-${thema.naam}-${breedte}.png`;
+          expect(fs.existsSync(testInfo.outputPath(naamPng)), `Schermafdruk in de proefuitvoer: ${naamPng}`).toBe(true);
+        }
+      }
     });
   }
 }

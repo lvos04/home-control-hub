@@ -21,7 +21,7 @@ e2e-alleen-lezen:
 	HCH_E2E_RO_IMAGE=$(IMAGE) $(PY) -m pytest -q tests/e2e/test_automation_e2e.py -p no:cacheprovider
 
 # Statuspagina in Peil (HC11): toestanden uit de echte app (PostgreSQL + Hub-simulator) → Playwright (axe-core,
-# overloop 320–1440 px, CSP, focus) → schermafdrukken in docs/screenshots/peil/statuspagina/.
+# overloop 320–1440 px, CSP, focus) → schermafdrukken per proef onder tests/ui/test-results/.
 toestanden:
 	$(PY) tests/ui/genereer_toestanden.py
 

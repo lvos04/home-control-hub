@@ -132,7 +132,7 @@ jobs:
         with:
           name: statuspagina-peil
           path: |
-            docs/screenshots/peil/statuspagina/*.png
+            tests/ui/test-results/**/*.png
             tests/ui/uit/
             tests/ui/review-uit/
           retention-days: 14
