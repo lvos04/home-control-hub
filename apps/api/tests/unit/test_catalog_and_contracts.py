@@ -85,6 +85,7 @@ def test_no_unverified_claims_about_external_apps() -> None:
 def test_built_capabilities_are_exactly_b13_b11_and_energy() -> None:
     built = {c.capability_id for s in ALL_SOURCES.values() for c in s.capabilities if c.build_status == "gebouwd"}
     assert built == {
+        "energy.advice.read",
         "energy.meters.read",
         "energy.usage.read",
         "energy.workload.read",
