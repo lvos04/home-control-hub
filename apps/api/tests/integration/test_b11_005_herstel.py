@@ -889,6 +889,7 @@ WRONG_TARGETS: dict[str, Any] = {
         ("goedkeuring_ander_beleid", 409, "goedkeuring_past_niet", {"gewijzigd": ["policy_hash"]}),
         ("goedkeuring_verlopen", 403, "forbidden", {"reason": "goedkeuring_verlopen"}),
         ("andere_actie", 403, "forbidden", {"reason": "actie_niet_toegestaan"}),
+        ("flow_als_voorsteller", 403, "forbidden", {"reason": "menselijke_voorsteller_verplicht"}),
         ("ander_doel", 422, "parameters_ongeldig", {}),
         ("oude_doelvorm", 422, "parameters_ongeldig", {}),
         ("andere_host", 422, "parameters_ongeldig", {}),
@@ -929,6 +930,8 @@ def test_signed_but_wrong_requests_are_refused_and_recorded(
         }
     elif kind == "andere_actie":
         kwargs = {"proposal_overrides": {"action_id": "automation.flows.wissen"}}
+    elif kind == "flow_als_voorsteller":
+        kwargs = {"actor": {"type": "flow", "id": "proefflow"}}
     elif kind in WRONG_TARGETS:
         kwargs = {"proposal_overrides": {"target": WRONG_TARGETS[kind]}}
     elif kind == "extra_parameter":

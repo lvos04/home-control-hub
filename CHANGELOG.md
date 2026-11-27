@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## Nog niet uitgebracht
+
+- De connector controleert bij flowherstel ook zelf of een gebruiker het voorstel deed.
+- Bij de overgang naar de event-ID als bron-ID kan een eerder ontvangen event lokaal nog op verzending wachten.
+  Weigert de Hub de tweede levering, dan blijft het event zichtbaar als `dead_letter` met reden `bron_id_conflict`.
+
 ## 0.1.1 — koppelen op een TrueNAS-dataset met preset Apps (2026-11-26)
 
 - Op een dataset met NFSv4-ACL kan ZFS de `0600` van een nieuw `hub-link.json` negeren en `chmod` weigeren

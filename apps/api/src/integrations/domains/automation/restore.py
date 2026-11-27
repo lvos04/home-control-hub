@@ -486,6 +486,10 @@ def apply(
                 {"action_id": str(proposal["action_id"])[:80]},
             )
         )
+    if proposal["actor"]["type"] != "user":
+        return refused(
+            _refuse_403("menselijke_voorsteller_verplicht", "Alleen een gebruiker mag flowherstel voorstellen.", trace_id)
+        )
     # 6: parameterschema en doel
     snapshot_id = parse_parameters(proposal["parameters"])
     if snapshot_id is None or not target_ok(dict(proposal["target"])):
