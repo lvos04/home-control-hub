@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 # vaste tijdzone (zoals CI) en vaste trace-ID's: de afdrukken zijn dan vergelijkbaar tussen runs
 os.environ["TZ"] = "UTC"
@@ -31,6 +32,8 @@ time.tzset()
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "apps" / "api"))
 
+from energie_fixture import TOESTANDEN as ENERGIETOESTANDEN  # noqa: E402
+from energie_fixture import vul_energie  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from tests import netwerk  # noqa: E402
 from tests.conftest import (  # noqa: E402
@@ -50,6 +53,7 @@ from integrations.migrations import upgrade  # noqa: E402
 
 DB_NAAM = "hch_ui_toestanden"
 TRACE = {
+    **{naam: str(uuid5(NAMESPACE_URL, naam)) for naam in ENERGIETOESTANDEN},
     "niet-gekoppeld": "0b5c2d6e-1f3a-4c8b-9d7e-2a6f4b1c3e01",
     "koppelen-mislukt": "3d8a1f4e-6b2c-4e95-a7d0-91c5b8e2f364",
     "invoer-ongeldig": "6a1e9c3b-7d24-4f58-8b0a-5c2d9e1f4a02",
@@ -137,6 +141,7 @@ def main() -> int:
         koppelen_bezig,
         herkomst_geweigerd,
         domeinnaam,
+        energie,
     ]
     for stap in stappen:
         stap(t)
@@ -147,6 +152,13 @@ def niet_gekoppeld(t: Toestanden) -> None:
     c = t.app("niet-gekoppeld", FakeHub(HubKeys()))
     r = _get(c, "niet-gekoppeld")
     t.bewaar("niet-gekoppeld", r, "nog nooit gekoppeld: koppelformulier", ["Niet gereed", 'action="/koppelen"'])
+
+
+def energie(t: Toestanden) -> None:
+    c, _ = _gekoppelde_app(t, "energie-leeg")
+    for naam, tekst in ENERGIETOESTANDEN.items():
+        vul_energie(t.url, naam)
+        t.bewaar(naam, _get(c, naam), tekst, ['id="h-energie"', tekst])
 
 
 def koppelen_mislukt(t: Toestanden) -> None:

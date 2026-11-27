@@ -622,11 +622,29 @@ def test_every_failure_has_status_code_trace_id_role_and_field(code: str) -> Non
 
 def test_unsafe_hub_address_is_never_a_link() -> None:
     link = _link("gekoppeld")
-    for slecht in ("javascript:alert(1)", 'http://x"><script>alert(1)</script>', "ftp://hub.test"):
+    for slecht in (
+        "javascript:alert(1)",
+        'http://x"><script>alert(1)</script>',
+        "ftp://hub.test",
+        "https://hub.test/pad",
+        "https://naam@hub",
+        "http://localhost",
+        "http://hub.test:99999",
+        "https://[",
+        "http://hub%2ftest",
+    ):
         link.hub_url = slecht
         data = bouw_model(_meting(link), csrf="c")
         assert data["hub_adres"] == ""
         assert "<script" not in _html(data) and "javascript:" not in _html(data)
+        assert "Hub openen</a>" not in _html(data) and 'href=""' not in _html(data)
+
+
+def test_energie_verwijst_alleen_naar_een_eerder_opgeslagen_hubadres() -> None:
+    for soort in ("gekoppeld", "ontkoppeld", "ingetrokken", "bezig", "onleesbaar"):
+        html = _html(bouw_model(_meting(_link(soort)), csrf="c"))
+        energie = html.split('<section class="blok" aria-labelledby="h-energie">', 1)[1].split("</section>", 1)[0]
+        assert ('href="http://hub.test:30400"' in energie) == (soort in ("gekoppeld", "ontkoppeld", "ingetrokken"))
 
 
 def test_host_notice_before_filling_in_the_form() -> None:

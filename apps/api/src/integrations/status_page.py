@@ -50,6 +50,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -59,10 +60,13 @@ from .domains import DOMAIN_TITLES_NL, DOMAINS
 from .domains.sso import service as sso_service
 from .enrollment import stale_koppelcode
 from .errors import trace_id_for
+from .hubclient import validate_hub_url
 from .hublink_store import ERROR_MESSAGES, LINK_FILE, LinkState
 from .peil import MELDING_ICOON, TONEN, TOTAAL_TONEN, SjabloonOntbreekt, render, sjabloon
 from .security.secrets import secrets_present
 from .sources import ALL_SOURCES, PROBE_MAX_AGE
+from .status_energy import lees_energie, onleesbaar
+from .timeutil import nl_datumtijd
 
 log = logging.getLogger("integrations.statuspagina")
 router = APIRouter(include_in_schema=False)
@@ -123,8 +127,7 @@ _TOTAAL_TOON = {3: "storing", 2: "beperkt", 1: "onbekend", 0: "gezond"}
 _WOORD = {"gezond": "Gezond", "beperkt": "Beperkt", "storing": "Storing", "onbekend": "Onbekend"}
 _BRON_TOON = {"healthy": "gezond", "degraded": "beperkt", "down": "storing", "unknown": "onbekend"}
 _HERSTEL_TOON = {"ok": "gezond", "risico": "beperkt", "onbekend": "onbekend"}
-_MAANDEN = ("jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec")
-_HTTP_ADRES = re.compile(r"^https?://[^\s\"'<>]+$")
+_HTTP_ADRES = re.compile(r"""https?://[^\s\x00-\x1f\x7f"'<>\\]+""", re.I)
 _NUMERIEK = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*")
 _NAAM = re.compile(r"[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?)*")
 
@@ -423,6 +426,8 @@ class Meting:
     bronnen: tuple[BronStand, ...] = field(default_factory=tuple)
     herstel_accounts: int | None = None  # aantal actieve accounts in het herstelregister; None = niet te meten
     host_ok: bool = True  # §3.7 punt 4: mag deze pagina via dit adres koppelen?
+    energie: list[dict[str, str]] = field(default_factory=list)
+    loopback_hub: bool = False
 
 
 def meet(request: Request) -> Meting:
@@ -433,6 +438,8 @@ def meet(request: Request) -> Meting:
     niveau: str | None = None
     accounts: int | None = None
     bronnen: list[BronStand] = []
+    energie = onleesbaar()
+    link = state.hublink.state()
     rijen: dict[str, Any] | None = None
     if db_ok:
         from .models import IntegrationSource
@@ -443,6 +450,10 @@ def meet(request: Request) -> Meting:
                 niveau = str(overall["level"])
                 accounts = int(overall["counts"]["accounts"])
                 rijen = {r.source_id: r for r in s.query(IntegrationSource).all()}
+                try:
+                    energie = lees_energie(s, rijen.get("my_house"), link, nu)
+                except Exception as exc:  # ook bij een onvolledige migratie blijft de rest van de pagina leesbaar
+                    log.warning("statuspagina: energiestand niet te lezen (%s)", type(exc).__name__)
         except Exception as exc:  # een half gemigreerde database mag de statuspagina nooit laten crashen
             log.warning("statuspagina: stand van herstelregister/bronnen niet te lezen (%s)", type(exc).__name__)
             niveau, accounts, rijen = None, None, None
@@ -464,21 +475,17 @@ def meet(request: Request) -> Meting:
         schema_huidig=huidig,
         schema_verwacht=state.alembic_head,
         geheimen=secrets_present(state.settings.secrets_dir),
-        link=state.hublink.state(),
+        link=link,
         herstel_niveau=niveau,
         bronnen=tuple(bronnen),
         herstel_accounts=accounts,
         host_ok=host_toegestaan(request.headers.get("host")),
+        energie=energie,
+        loopback_hub=state.settings.allow_loopback_hub,
     )
 
 
 # ------------------------------------------------------------------------------------------------ opmaak
-
-
-def nl_datumtijd(dt: datetime) -> str:
-    """``9 nov 2026, 11:56 UTC`` (Peil §11.2, 24-uurs tijd; de tijdzone erbij, want die van de NAS is onbekend)."""
-    zone = dt.tzname() or dt.strftime("%z")
-    return f"{dt.day} {_MAANDEN[dt.month - 1]} {dt.year}, {dt:%H:%M}" + (f" {zone}" if zone else "")
 
 
 def _iso(dt: datetime) -> str:
@@ -492,6 +499,21 @@ def _parse(waarde: str | None) -> datetime | None:
         return datetime.fromisoformat(waarde.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _hub_adres(m: Meting) -> str:
+    adres = m.link.hub_url or ""
+    if m.link.corrupt or not m.link.first_linked_at or not _HTTP_ADRES.fullmatch(adres):
+        return ""
+    try:
+        adres = validate_hub_url(adres, allow_loopback=m.loopback_hub)
+        host = urlsplit(adres).hostname or ""
+        if ":" in host:  # IPv6 is door urlsplit en validate_hub_url gecontroleerd
+            return adres if "%" not in host else ""
+        naam = host.rstrip(".").encode("idna").decode("ascii").lower()
+        return adres if _NAAM.fullmatch(naam) else ""
+    except ValueError:
+        return ""
 
 
 def _toon(toon: str) -> str:
@@ -649,7 +671,7 @@ def bouw_model(
 
     gereed = not niet_gereed
     dienst_blok = _dienst_blok(m)
-    totaal_toon, totaal_label, toelichting = _totaal(rijen, gereed, niet_gereed, dienst_blok)
+    totaal_toon, totaal_label, toelichting = _totaal(rijen, gereed, niet_gereed, [*dienst_blok, *m.energie])
     bezig = koppelen_bezig(m.link) and toestand != "koppelstatus_onleesbaar"
     sinds = _bezig_sinds(m.link, nu) if bezig else None
 
@@ -680,14 +702,13 @@ def bouw_model(
         "csrf_token": csrf,
         "dienst_blok_titel": "Wat deze dienst doet",
         "dienst_blok": dienst_blok,
+        "energie_rijen": m.energie,
+        "hub_adres": _hub_adres(m),
     }
     if toestand == "gekoppeld":
         linked_at = _parse(m.link.linked_at)
-        adres = m.link.hub_url or ""
         data.update(
             gekoppeld_sinds=nl_datumtijd(linked_at.astimezone(nu.tzinfo)) if linked_at else "onbekend",
-            # alleen een http(s)-adres uit de opgeslagen koppeling (gecontroleerd bij het koppelen) wordt een link
-            hub_adres=adres if _HTTP_ADRES.match(adres) else "",
             hub_vingerafdruk=m.link.pins.keyset_fingerprint if m.link.pins else "onbekend",
         )
     if fout is not None:

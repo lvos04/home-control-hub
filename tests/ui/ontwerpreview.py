@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from energie_fixture import TOESTANDEN as ENERGIETOESTANDEN
+from energie_fixture import vul_energie
 from sqlalchemy import create_engine, text
 
 REPO = Path(__file__).resolve().parents[2]
@@ -344,6 +346,15 @@ def gekoppeld_met_bronnen(r: Review) -> None:
         r.bekijk(d, "gekoppeld en bevestigd; testdata: bronnen gezond/beperkt/storing/nooit gemeten/verouderd", GET, [])
 
 
+def energie(r: Review) -> None:
+    with r.dienst("energie") as d:
+        r.koppel_via_http(d)
+        for naam, tekst in ENERGIETOESTANDEN.items():
+            d.naam = naam
+            vul_energie(d.db_url, naam)
+            r.bekijk(d, tekst, GET, ['id="h-energie"', tekst])
+
+
 def niet_bevestigd(r: Review) -> None:
     with r.dienst("niet-bevestigd") as d:
         r.koppel_via_http(d)
@@ -469,6 +480,7 @@ TOESTANDEN: list[Callable[[Review], None]] = [
     koppelen_bezig,
     gekoppeld,
     gekoppeld_met_bronnen,
+    energie,
     niet_bevestigd,
     sleutelrotatie_geweigerd,
     ingetrokken,
@@ -480,7 +492,10 @@ TOESTANDEN: list[Callable[[Review], None]] = [
 
 
 #: rijen waarvan de laatste meting oud is (testdata): die mogen nooit groen zijn (Peil §4.1/§4.4, 05_OPERATIES)
-VEROUDERD = {"gekoppeld-met-bronnen": ["Authentik en toegangsbeheer (B13)"]}
+VEROUDERD = {
+    "gekoppeld-met-bronnen": ["Authentik en toegangsbeheer (B13)"],
+    "energie-verouderd": ["Slimme meter (P1)", "Boilermeter", "Airco (gedeelde buitenunit)"],
+}
 NOOIT_GROEN = re.compile(r"^(Onbekend|Verouderd|Niet |Ontkoppeld|Ingetrokken|Koppelen bezig|Onleesbaar|Onvolledig)")
 #: groen mag alleen met het vaste Peil-woord: "Gezond" in een rij, "Alles gezond" in de totaalpil (Peil §11.1)
 GROENE_WOORDEN = {"Gezond", "Alles gezond"}

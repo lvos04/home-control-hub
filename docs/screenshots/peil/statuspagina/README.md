@@ -8,6 +8,11 @@ Nieuwe afdrukken staan per proef onder `tests/ui/test-results/`. Met de Playwrig
 
 | Bestand | Toestand |
 |---|---|
+| `energie-leeg-…` | Er is nog geen actieve woningbron. |
+| `energie-bezig-…` | De ingestelde bron wacht op de eerste vermogensmeting. |
+| `energie-gemeten-…` | Meetkwaliteit en meettijd per rol, inclusief nul watt, een schatting en een open boilerafwijking. |
+| `energie-verouderd-…` | Elke verlopen rol toont onbekend vermogen en zijn laatst bekende meettijd. |
+| `energie-storing-…` | De bronlezing mislukte, met de eerder geregistreerde afwijking nog in beeld. |
 | `niet-gekoppeld-<thema>-<breedte>.png` | nog nooit gekoppeld: koppelformulier (Hub-adres, koppelcode, vingerafdruk); totaal "Niet gereed" |
 | `koppelen-mislukt-…` | de Hub weigerde de koppelcode: HTTP 400, code `hub_weigerde`, selecteerbare trace-ID, veldfout bij Koppelcode |
 | `gekoppeld-…` | gekoppeld en door de Hub bevestigd, met de melding na het koppelen; "Gekoppeld" is een neutrale pil |
@@ -16,10 +21,12 @@ Nieuwe afdrukken staan per proef onder `tests/ui/test-results/`. Met de Playwrig
 | `onleesbaar-…` | koppelbestand onleesbaar (Peil 1.1.1): Storing "Onleesbaar", geen formulier, code en pad, geen live-regio |
 | `koppelen-bezig-…` | er loopt een koppelpoging (Peil 1.1.1): "Koppelen bezig" met de starttijd, geen formulier |
 
-Thema's `licht` en `donker` (`prefers-color-scheme`), breedtes 360, 768 en 1440 px. De UI-tests draaien daarnaast
+De 40 energieafdrukken tonen het blok op 360, 390, 768 en 1440 px in licht en donker.
+De overige afdrukken tonen de hele pagina in beide thema's op 360, 768 en 1440 px. De UI-tests draaien daarnaast
 ook 320, 390 en 1024 px en vijf extra toestanden (ongeldige invoer, te veel pogingen, ontkoppeld, een POST met
 `Origin: null` en de pagina via een domeinnaam). CI bewaart dezelfde afdrukken als artefact `statuspagina-peil`.
 
-Opnieuw gemaakt voor Peil 1.1.1 en contract 1.3 (ADR-0014; eerder na de ontwerpreview, ADR-0012) en verkleind met
-`pngquant --quality=80-95` (kleurenpalet; verschil niet zichtbaar). De afdrukken van de ontwerpreview zelf (14
-toestanden uit de draaiende dienst) staan in `docs/ontwerp/peil-review/`.
+De paginabrede afdrukken zijn voor Peil 1.1.1 en contract 1.3 opnieuw gemaakt en verkleind met
+`pngquant --quality=80-95` (ADR-0014). De afdrukken van de 14 toestanden uit de eerdere ontwerpreview
+staan in `docs/ontwerp/peil-review/` (ADR-0012). De metingen van het energieblok staan in
+`docs/ontwerp/PEIL_REVIEW.md`.

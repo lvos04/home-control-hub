@@ -87,7 +87,9 @@ def test_api_databasefout_logt_geen_detail(
     assert body["trace_id"] in logtekst
 
 
-@pytest.mark.parametrize(("methode", "onderdeel"), [("start_step", "start"), ("energy_step", "energie")])
+@pytest.mark.parametrize(
+    ("methode", "onderdeel"), [("start_step", "start"), ("energy_step", "energie"), ("meter_step", "meters")]
+)
 def test_worker_databasefout_logt_geen_detail(
     clean_db: str, caplog: pytest.LogCaptureFixture, methode: str, onderdeel: str
 ) -> None:
@@ -99,7 +101,16 @@ def test_worker_databasefout_logt_geen_detail(
         _schending(db, "check")
 
     worker: Any = Worker.__new__(Worker)
-    namen = ("start_step", "enroll_step", "link_step", "push_step", "authentik_step", "automation_step", "energy_step")
+    namen = (
+        "start_step",
+        "enroll_step",
+        "link_step",
+        "push_step",
+        "authentik_step",
+        "automation_step",
+        "energy_step",
+        "meter_step",
+    )
     for naam in namen:
         setattr(worker, naam, (lambda *_: None))
     setattr(worker, methode, stap)

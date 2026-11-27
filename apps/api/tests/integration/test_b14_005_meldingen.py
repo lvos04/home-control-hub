@@ -21,7 +21,7 @@ from integrations.worker import Worker
 from tests.b11 import envelope
 from tests.conftest import ENV_TOKEN, REPO_ROOT, envelope_problems, idem
 from tests.fakes.my_house_energy import MyHouseEnergy
-from tests.integration.test_b14_001_dekkingsmatrix import ENERGY, configure
+from tests.integration.test_b14_001_dekkingsmatrix import ENERGY, configure, energieblok
 from tests.integration.test_b14_002_tijdreeks import hours, row
 
 THRESHOLDS = ENERGY + "/alert-thresholds"
@@ -190,6 +190,37 @@ def test_bekende_meter_zonder_eerste_meting_krijgt_eerst_de_wachttijd(linked, au
 def snapshot(db):
     intervals = db.scalars(select(EnergyUsageInterval).order_by(EnergyUsageInterval.id))
     return [(r.id, r.meter_id, r.start_utc, r.end_utc, r.delta, r.quality, r.source_ref) for r in intervals]
+
+
+def test_statuspagina_toont_open_meldingen_tot_herstel_en_behoudt_archief(linked, auth, house, tick):
+    install(linked, auth)
+    supply(house, 6)
+    stamp = hours(DAY)[6] + timedelta(minutes=2)
+    tick(stamp)
+    with linked.app.state.db.sessions() as db:
+        voor = snapshot(db)
+        assert sum(r[4] is not None for r in voor) == 12
+    meldingen = outgoing(linked)
+    assert len(meldingen) == 2
+    assert linked.get(ENERGY + "/meters", headers=auth("viewer")).status_code == 200
+    blok = energieblok(linked)
+    assert "Afwijkend boilerverbruik" in blok and "Dagbudget overschreden" in blok
+    assert all(x not in blok for x in ("EUR", "€", "testmeter B", "<form", "<button"))
+    with linked.app.state.db.sessions() as db:
+        assert snapshot(db) == voor
+    assert outgoing(linked) == meldingen
+    house.status = 503
+    tick(stamp + timedelta(minutes=1))
+    assert "Afwijkend boilerverbruik" in energieblok(linked)
+    house.status = 200
+    supply(house, 10, peak=False, grid=0.25)
+    tick(hours(DAY)[10])
+    assert "Geen openstaande afwijkingen geregistreerd." in energieblok(linked)
+    supply(house, 12)
+    tick(hours(DAY)[12])
+    assert "Dagbudget overschreden" in energieblok(linked)
+    assert configure(linked, auth, MyHouseEnergy()).is_success
+    assert "Dagbudget overschreden" not in energieblok(linked)
 
 
 def test_aanhoudende_piek_een_event_ook_na_herstart_en_geen_persoonsgegevens(linked, auth, house, tick):

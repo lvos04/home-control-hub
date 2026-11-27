@@ -28,6 +28,8 @@ from .domains.automation import restore as flow_restore
 from .domains.automation import simulate as flow_simulate
 from .domains.automation import snapshots as flow_snapshots
 from .domains.energy.alerts import notify_changes
+from .domains.energy.meters import refresh_inventory
+from .domains.energy.readings import LIVE_MAX_AGE
 from .domains.energy.usage_sync import sync_usage
 from .domains.sso import authaudit
 from .domains.sso.authentik.client import AuthentikError, client_from_source
@@ -58,6 +60,7 @@ class WorkerState:
     next_node_red_sync: float = 0.0
     next_isolation_check: float = 0.0
     next_energy_sync: float = 0.0
+    next_meter_read: float = 0.0
     energy_sync_ok: bool = True
     last_push_ok: str | None = None
     stats: dict[str, int] = field(
@@ -192,6 +195,13 @@ class Worker:
             self.state.energy_sync_ok = synced
         return self.state.energy_sync_ok
 
+    def meter_step(self, now: float) -> None:
+        """Ververs het livevermogen los van de uurcijfers, ook als niemand de pagina opent."""
+        if now >= self.state.next_meter_read:
+            self.state.next_meter_read = now + LIVE_MAX_AGE.total_seconds() / 2
+            with self.db.sessions() as session:
+                refresh_inventory(session, self.settings, self.vault, self.transport)
+
     def housekeeping_step(self, now: float) -> None:
         with self.db.sessions() as s:
             self.state.stats["closed_activations"] += close_expired_activations(s)
@@ -207,7 +217,17 @@ class Worker:
         now = time.monotonic()
         started = utcnow()
         failed: list[str] = []
-        names = ("start", "koppelen", "koppeling", "push", "authentik", "automatisering", "energie", "onderhoud")
+        names = (
+            "start",
+            "koppelen",
+            "koppeling",
+            "push",
+            "authentik",
+            "automatisering",
+            "energie",
+            "meters",
+            "onderhoud",
+        )
         for name, step in zip(
             names,
             (
@@ -218,6 +238,7 @@ class Worker:
                 lambda: self.authentik_step(now),
                 lambda: self.automation_step(now),
                 lambda: self.energy_step(now),
+                lambda: self.meter_step(now),
                 lambda: self.housekeeping_step(now),
             ),
             strict=True,

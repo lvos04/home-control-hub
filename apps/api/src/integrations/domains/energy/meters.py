@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...config import Settings
-from ...models import IntegrationSource
+from ...models import IntegrationSource, ServiceState
 from ...security.vault import Vault
 from ...sources import source_ref
 from ...timeutil import utcnow
@@ -25,6 +25,7 @@ from .models import EnergyMeter, EnergyMeterRole
 from .readings import SOURCE_ROLES, Quality, Reading, declared_roles, live_readings
 
 SOURCE = "my_house"
+STATUS_KEY = "energy_meter_status"
 ABSENT = "my_house meldt deze meterrol niet."
 NAS_ABSENT = "my_house meldt geen losse vermogensmeter voor de NAS."
 
@@ -86,20 +87,59 @@ def configured_client(
 
 def meter_inventory(request: Request, session: Session) -> Inventory:
     state = request.app.state
+    return refresh_inventory(session, state.settings, state.vault, state.http_transport)
+
+
+def refresh_inventory(
+    session: Session, settings: Settings, vault: Vault, transport: httpx.BaseTransport | None
+) -> Inventory:
     try:
-        client, scope, revision = configured_client(session, state.settings, state.vault, state.http_transport)
+        client, scope, revision = configured_client(session, settings, vault, transport)
+    except SourceInactive as exc:
+        return Inventory({}, str(exc))
     except EnergyReadError as exc:
+        source = session.get(IntegrationSource, SOURCE)
+        if source is not None:
+            _save_status(session, source.link_revision, None, failed=True)
+            session.commit()
         return Inventory({}, str(exc))
 
+    failed = False
     try:
         readings, reason = _read(client)
     except EnergyReadError as exc:
         readings = {}
         reason = str(exc)
+        failed = True
 
     inventory = _register(session, scope, revision, readings, reason)
+    _save_status(session, revision, inventory, failed=failed)
     session.commit()
     return inventory
+
+
+def _save_status(session: Session, revision: str, inventory: Inventory | None, *, failed: bool) -> None:
+    """Kleine projectie voor de statuspagina, in dezelfde transactie en onder dezelfde brongrendel."""
+    state = session.get(ServiceState, STATUS_KEY)
+    previous = state.value if state and state.value.get("revision") == revision else {}
+    if inventory is None:
+        # Bij uitval mag alleen de laatste bronmeettijd zichtbaar blijven.
+        rows = {role: {"at": row.get("at")} for role, row in previous.get("meters", {}).items()}
+    else:
+        rows = {
+            role: {
+                "at": item.last_updated.isoformat() if item.last_updated else None,
+                "watts": item.last_measurement,
+                "quality": item.measurement_quality,
+                "stale": item.reason_code == "meting_verouderd",
+            }
+            for role, item in inventory.meters.items()
+        }
+    value = {"revision": revision, "failed": failed, "meters": rows}
+    if state is None:
+        session.add(ServiceState(key=STATUS_KEY, value=value))
+    else:
+        state.value = value
 
 
 def _register(session: Session, scope: UUID, revision: str, readings: dict[str, Reading], reason: str) -> Inventory:

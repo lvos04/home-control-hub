@@ -83,6 +83,18 @@ def kandidaten(peil_dir: Path | None) -> list[Path]:
     return [*paden, repo / "design" / "ontwerptaal" / SJABLOON]
 
 
+def _met_energieblok(tekst: str) -> str:
+    """Gebruik hetzelfde Peil-dienstblok tweemaal. Alleen vaste sjabloontekst wordt samengesteld, vóór het escapen."""
+    sectie = re.search(r'<section class="blok" aria-labelledby="h-dienst">.*?</section>', tekst, re.S)
+    hub = re.search(r'<p class="knoppen"><a [^>]*href="{{hub_adres}}"[^>]*>Hub openen</a></p>', tekst)
+    if not sectie or not hub:
+        raise SjabloonOntbreekt("Het Peil-dienstblok of de Hub-link ontbreekt.")
+    link = "<!--ALS:hub_adres-->" + hub[0] + "<!--/ALS:hub_adres-->"
+    energie = sectie[0].replace("h-dienst", "h-energie").replace("{{dienst_blok_titel}}", "Energie")
+    energie = energie.replace("ELK:dienst_blok", "ELK:energie_rijen").replace("</section>", link + "\n</section>")
+    return tekst.replace(hub[0], link, 1).replace(sectie[0], sectie[0] + "\n\n" + energie, 1)
+
+
 @functools.cache
 def lees(pad: Path) -> Sjabloon:
     data = pad.read_bytes()
@@ -98,7 +110,7 @@ def lees(pad: Path) -> Sjabloon:
         rest.decode("utf-8"),
         count=1,
     )
-    return Sjabloon(m["versie"], m["sha"], f"{m['repo']}@{m['commit']}", tekst, intact)
+    return Sjabloon(m["versie"], m["sha"], f"{m['repo']}@{m['commit']}", _met_energieblok(tekst), intact)
 
 
 def sjabloon(peil_dir: Path | None = None) -> Sjabloon:

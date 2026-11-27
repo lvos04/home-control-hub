@@ -324,3 +324,45 @@ Voor de eigenaar van `ai-server-manager/design/ontwerptaal` (`bouw/statuspagina.
     alle toestanden op 390 px en `gekoppeld-met-bronnen`, `koppelen-mislukt` en `onleesbaar` op alle breedtes.
 - **Vaste set van de UI-tests (HC11), opnieuw gemaakt na de reparaties:** `docs/screenshots/peil/statuspagina/`.
 - **Referentie (Peil):** `ai-server-manager/design/ontwerptaal/shots/statuspagina*-{licht,donker}-{360,390,768,1440}.png`.
+
+## S-P3-350 · Ontwerp van het energieblok · 27 november 2026
+
+Onder ‘Wat deze dienst doet’ komt een tweede Peil-dienstblok met de kop ‘Energie’.
+Elke verwachte meterrol krijgt een eigen rij. De pil geeft de meetkwaliteit aan. In
+de toelichting staan het vermogen in watt, de bron en de meettijd met tijdzone.
+‘Gemeten’ en ‘Geschat’ zijn feiten. ‘Onbekend’ krijgt een reden. Bij een meettijd ouder dan vijf minuten of
+een verouderingssignaal van de bron toont de rij ‘Verouderd’, de laatst bekende
+meettijd en onbekend vermogen. Nul watt blijft een geldige meting.
+
+Zonder ingestelde woningbron verschijnt een korte uitleg met de instelplek in de Hub.
+Een ingestelde bron die op de eerste meting wacht, krijgt ‘Bezig’. Bij een leesfout
+verschijnt ‘Storing’. Openstaande afwijkingen komen uit de laatste beoordeling van
+de energieregels. Een regel blijft zichtbaar tot herstel voor dezelfde bron is
+vastgelegd. De secundaire link ‘Hub openen’ gebruikt het gecontroleerde adres van de
+bestaande koppeling. Instellen, kosten en grafieken horen op de Hub-schermen.
+
+De sectie hergebruikt de kop, lijst, pil met icoon, reden en link uit Peil 1.1.1.
+Op 360 en 390 px mag de pil onder de naam doorlopen. Op 768 en 1440 px blijft de
+leesvolgorde gelijk. De browserproeven omvatten ook 320 en 1024 px, licht en donker.
+De pagina leest uitsluitend de lokale stand. Het ophalen van metergegevens hoort
+bij de bronlezer en staat los van het openen van de pagina.
+
+### Bouwcontrole van het energieblok
+
+Chromium doorliep de vijf energietoestanden en de twaalf bestaande paginatoestanden
+in licht en donker op 320, 360, 390, 768, 1024 en 1440 px. Alle 34 browsertests
+voldeden aan de bestaande eisen voor onder meer axe, toetsenbordfocus en overloop.
+De 40 afdrukken in `docs/screenshots/peil/statuspagina/` tonen alleen het energieblok.
+Op 360 px passen ‘Slimme meter (P1)’ en ‘Gemeten’ naast elkaar. De betekenis blijft
+bij een verlopen meting leesbaar aan het woord ‘Verouderd’, het klokicoon en de arcering.
+De fixture toont drie verschillende bronmeettijden.
+
+Chromium gebruikte Noto Sans als systeemletter. Met DejaVu Sans afgedwongen en
+geverifieerd in de browser gaven de vijf energietoestanden op alle zes breedtes in
+beide thema’s samen 60 metingen zonder horizontale overloop.
+
+De ontwerpreview tegen de draaiende testdienst en de Hub-simulator telde 228
+metingen op dezelfde zes breedtes, inclusief 60 metingen van de vijf
+energietoestanden. Er waren nul overtredingen. De laagste contrastverhoudingen
+waren 8,34 voor tekst, 4,86 voor betekenisdragende randen, 5,41 voor iconen en
+7,79 voor de toetsenbordfocus.

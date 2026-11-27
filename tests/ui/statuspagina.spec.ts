@@ -17,7 +17,9 @@ import path from 'node:path';
 const UIT = process.env.STATUSPAGINA_UIT ?? path.join(__dirname, 'uit');
 const BREEDTES = [320, 360, 390, 768, 1024, 1440];
 const AFDRUK_BREEDTES = [360, 768, 1440];
+const ENERGIE = ['energie-leeg', 'energie-bezig', 'energie-gemeten', 'energie-verouderd', 'energie-storing'];
 const VERPLICHT = [
+  ...ENERGIE,
   'niet-gekoppeld',
   'koppelen-mislukt',
   'gekoppeld',
@@ -69,6 +71,8 @@ for (const { naam, body, meta } of toestanden()) {
       const csp: string[] = [];
       const fouten: string[] = [];
       const extern: string[] = [];
+      const energie = ENERGIE.includes(naam);
+      const afdrukBreedtes = energie ? [360, 390, 768, 1440] : AFDRUK_BREEDTES;
       page.on('console', (m) => {
         if (/Content Security Policy|Refused to/i.test(m.text())) csp.push(m.text());
       });
@@ -85,6 +89,22 @@ for (const { naam, body, meta } of toestanden()) {
         await page.setViewportSize({ width: breedte, height: 900 });
         await page.goto(ADRES);
         const plek = `${naam} · ${thema.naam} · ${breedte}px`;
+        const energieblok = page.getByRole('region', { name: 'Energie', exact: true });
+        if (energie) {
+          await expect(energieblok.getByRole('link', { name: 'Hub openen' })).toHaveAttribute('href', 'http://hub.test:30400');
+          await expect(energieblok.locator('button, form, input, canvas, figure')).toHaveCount(0);
+          await expect(energieblok).not.toContainText(/€|\bEUR\b/);
+          const p1 = energieblok.getByRole('listitem').filter({ hasText: 'Slimme meter (P1)' }).first();
+          if (naam === 'energie-gemeten') {
+            await expect(p1).toContainText('420 W');
+            await expect(energieblok.locator('.pil-feit', { hasText: 'Geschat' })).toHaveCount(1);
+            await expect(energieblok).toContainText('Afwijkend boilerverbruik');
+          } else if (naam === 'energie-verouderd') {
+            await expect(p1.locator('.pil-verouderd')).toHaveText('Verouderd');
+            await expect(p1).toContainText('Huidig vermogen onbekend');
+            await expect(energieblok).not.toContainText(/\d W\b/);
+          }
+        }
 
         const achtergrond = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
         expect(achtergrond, `${plek}: thema actief`).toBe(thema.achtergrond);
@@ -193,9 +213,11 @@ for (const { naam, body, meta } of toestanden()) {
           }
         }
 
-        if (process.env.SCHERMAFDRUKKEN && VERPLICHT.includes(naam) && AFDRUK_BREEDTES.includes(breedte)) {
+        if (process.env.SCHERMAFDRUKKEN && VERPLICHT.includes(naam) && afdrukBreedtes.includes(breedte)) {
           await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-          await page.screenshot({ path: testInfo.outputPath(`${naam}-${thema.naam}-${breedte}.png`), fullPage: true });
+          const pad = testInfo.outputPath(`${naam}-${thema.naam}-${breedte}.png`);
+          if (energie) await energieblok.screenshot({ path: pad });
+          else await page.screenshot({ path: pad, fullPage: true });
         }
       }
 
@@ -212,7 +234,7 @@ for (const { naam, body, meta } of toestanden()) {
       expect(fouten, 'paginafouten').toEqual([]);
       expect(extern, 'externe verzoeken').toEqual([]);
       if (process.env.SCHERMAFDRUKKEN && VERPLICHT.includes(naam)) {
-        for (const breedte of AFDRUK_BREEDTES) {
+        for (const breedte of afdrukBreedtes) {
           const naamPng = `${naam}-${thema.naam}-${breedte}.png`;
           expect(fs.existsSync(testInfo.outputPath(naamPng)), `Schermafdruk in de proefuitvoer: ${naamPng}`).toBe(true);
         }

@@ -8,10 +8,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from integrations.domains.energy.client import BoundViewer, ViewerPairing
+from integrations.domains.energy.meters import STATUS_KEY
 from integrations.domains.energy.models import EnergyMeter, EnergyMeterRole
+from integrations.models import ServiceState
+from integrations.worker import Worker
 from tests.conftest import idem
 from tests.fakes.my_house_energy import MyHouseEnergy
 from tests.unit.test_authentik_execution_transport import TlsAuthentik
@@ -54,6 +57,90 @@ def rows(linked: Any, auth: Any, path: str) -> dict[str, Any]:
     response = linked.get(path, headers=auth("viewer"))
     assert response.status_code == 200
     return {item["role"]: item for item in response.json()["items"]}
+
+
+def energieblok(client: Any) -> str:
+    response = client.get("/")
+    assert response.status_code == 200
+    return response.text.split('<section class="blok" aria-labelledby="h-energie">', 1)[1].split("</section>", 1)[0]
+
+
+def test_statuspagina_van_eerste_meting_tot_bronwissel(linked, auth, monkeypatch):
+    assert "Er is geen actieve woningbron." in energieblok(linked)
+    bron = MyHouseEnergy()
+    bron.live["parts"][0]["source_quality"] = "estimated"
+    assert configure(linked, auth, bron).status_code == 201
+    assert "De dienst wacht op de eerste meting." in energieblok(linked)
+    worker = Worker(linked.app.state.settings, linked.app.state.http_transport)
+    try:
+        worker.meter_step(0)
+    finally:
+        worker.db.dispose()
+    verzoeken = (list(bron.calls), list(bron.checks))
+    sql = []
+
+    def registreer(_conn, _cursor, statement, *_):
+        sql.append(statement.lstrip().split()[0].upper())
+
+    engine = linked.app.state.db.engine
+    event.listen(engine, "before_cursor_execute", registreer)
+    try:
+        # Beoordeel op de echte grens, ook als de worker na het opslaan stilvalt.
+        meettijd = datetime.fromisoformat(bron.at)
+
+        class Klok(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return tijdstip
+
+        tijdstip = meettijd + timedelta(seconds=300)
+        monkeypatch.setattr("integrations.status_page.datetime", Klok)
+        blok = energieblok(linked)
+        assert "Gemeten</span>" in blok and "-42,5 W." in blok and "0 W." in blok
+        assert "Geschat</span>" in blok and "74 W." in blok
+        assert "my_house meldt geen losse vermogensmeter" in blok
+        assert bron.address not in blok and bron.token not in blok and str(bron.home) not in blok
+        tijdstip += timedelta(seconds=1)
+        oud = energieblok(linked)
+        assert oud.count("Verouderd</span>") == 3 and "Huidig vermogen onbekend" in oud
+        assert " W." not in oud and "Laatste meting van my_house op" in oud
+    finally:
+        event.remove(engine, "before_cursor_execute", registreer)
+    assert sql and set(sql) == {"SELECT"}
+    assert verzoeken == (bron.calls, bron.checks)
+
+    bron.reachable = False
+    rows(linked, auth, ENERGY + "/coverage")
+    storing = energieblok(linked)
+    assert "Storing</span>" in storing and " W." not in storing
+    vervanger = MyHouseEnergy()
+    assert configure(linked, auth, vervanger).status_code == 200
+    nieuw = energieblok(linked)
+    assert "De dienst wacht op de eerste meting." in nieuw
+    assert "Laatste meting van my_house op" not in nieuw and " W." not in nieuw
+
+
+def test_statuspagina_leest_bestaande_meettijden_zonder_watt_te_verzinnen(linked, auth, bron):
+    rows(linked, auth, ENERGY + "/meters")
+    with linked.app.state.db.sessions() as db:
+        db.delete(db.get_one(ServiceState, STATUS_KEY))
+        db.commit()  # oude opslagvorm met uitsluitend de bevestigde roltijden
+    blok = energieblok(linked)
+    assert blok.count("Laatste meting van my_house op") == 3 and blok.count("Onbekend</span>") == 4
+    assert " W." not in blok
+    bron.live["parts"][0]["stale"] = True
+    rows(linked, auth, ENERGY + "/coverage")
+    blok = energieblok(linked)
+    assert blok.count("Verouderd</span>") == 1 and "74 W." not in blok and "-42,5 W." in blok
+
+
+def test_statuspagina_laat_ongeldige_opgeslagen_hublink_weg(linked):
+    store = linked.app.state.hublink_store
+    store.update(lambda stand: stand.model_copy(update={"hub_url": "https://hub.test/ongeldig"}))
+    pagina = linked.get("/")
+    assert pagina.status_code == 200 and 'id="h-energie"' in pagina.text
+    assert "Hub openen</a>" not in pagina.text and 'href=""' not in pagina.text
+    assert "hub.test/ongeldig" not in pagina.text
 
 
 def test_meters_rollen_en_herkomst(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
