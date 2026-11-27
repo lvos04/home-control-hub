@@ -350,7 +350,7 @@ def test_woningzone_bronwissel_en_alleen_uurcijfers(linked, auth, source, sync):
 
 
 def test_terugmigratie_zonder_precisieverlies(linked, source, sync):
-    from integrations.migrations import BackupError, downgrade
+    from integrations.migrations import BackupError, downgrade, upgrade
 
     day = date(2026, 5, 5)
     # Beide richtingen en beide afgesloten dagen volledig gemeten. Alleen de vierde decimaal blokkeert.
@@ -359,13 +359,23 @@ def test_terugmigratie_zonder_precisieverlies(linked, source, sync):
             row(t, 0.0001, metric=metric) for t in hours(d) for metric in ("energy_import_kwh", "energy_export_kwh")
         ]
     sync(day)
-    with pytest.raises(BackupError, match="zonder verlies"):
-        downgrade(linked.app.state.settings, "0008")
-    assert linked.app.state.db.current_revision() == "0009"
-    with linked.app.state.db.sessions() as db:
-        stored = db.scalars(select(EnergyUsageInterval)).all()
-        assert len(stored) == 96
-        assert all(r.meter_id and r.quality == "gemeten" and str(r.delta) == "0.0001" for r in stored)
+    state = linked.app.state
+    beginrevisie = state.db.current_revision()
+    assert beginrevisie is not None
+    try:
+        # De precisiecontrole hoort bij de stap van 0009 naar 0008.
+        downgrade(state.settings, "0009")
+        with pytest.raises(BackupError, match="zonder verlies"):
+            downgrade(state.settings, "0008")
+        assert state.db.current_revision() == "0009"
+        with state.db.sessions() as db:
+            stored = db.scalars(select(EnergyUsageInterval)).all()
+            assert len(stored) == 96
+            assert all(r.meter_id and r.quality == "gemeten" and str(r.delta) == "0.0001" for r in stored)
+    finally:
+        # Elke afgeronde terugmigratie is apart vastgelegd. Herstel het beginschema voor de volgende proef.
+        upgrade(state.settings, beginrevisie)
+    assert state.db.current_revision() == beginrevisie
 
 
 @pytest.mark.parametrize("mixed", [False, True])
