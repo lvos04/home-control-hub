@@ -77,11 +77,8 @@ def test_manifest_is_custom_app_and_safe() -> None:
     for s in m["storage"]:
         assert s["mount"] not in FORBIDDEN_HOST_PATHS
     assert m["validation_status"] == "unvalidated"
-    # het manifest wijst naar de laatst uitgebrachte image (met digest); VERSION mag de volgende release zijn, die
-    # de regisseur na de release met zijn digest in het manifest zet
     version = (REPO_ROOT / "VERSION").read_text().strip()
-    assert m["version"] == m["image"]["tag"]
-    assert tuple(map(int, m["version"].split("."))) <= tuple(map(int, version.split(".")))
+    assert m["version"] == m["image"]["tag"] == version
 
 
 def test_manifest_follows_contract_1_3() -> None:
@@ -199,7 +196,9 @@ def test_no_yaml_or_compose_install_instructions() -> None:
     assert "Custom App" in guide and "30420" in guide and "/appdata" in guide
     # contract 1.2: tag met digest (§2.2), publieke image met registry-login alleen als terugval (§2.1),
     # HUB_KEY_FINGERPRINT (§3.2) en geen lokale ontkoppelcode meer (§3.7)
-    assert "@sha256:" in guide and "release/digests.json" in guide and "HUB_KEY_FINGERPRINT" in guide
+    image = yaml.safe_load((DEPLOY / "manifest/home-control-hub.manifest.yaml").read_text(encoding="utf-8"))["image"]
+    assert f"{image['tag']}@{image['digest']}" in guide
+    assert "release/digests.json" in guide and "HUB_KEY_FINGERPRINT" in guide
     assert "terugval" in guide.lower() and "ontkoppelcode" not in guide.lower()
     lowered = guide.lower()
     assert "install via yaml" in lowered  # alleen genoemd als wat je NIET doet

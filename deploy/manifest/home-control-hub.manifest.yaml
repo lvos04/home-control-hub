@@ -16,13 +16,13 @@ description_nl: >-
   Integratiedienst: netwerk/privacy (NetAlertX, AdGuard Home, Tailscale, Cloudflared), Node-RED-automatisering,
   Authentik/SSO met beheerherstel (register en adviseur; de noodlogin zelf zit in de Hub) en energie/resources.
   API-dienst met alleen een kleine Nederlandse statuspagina; alle schermen staan in de Hub-UI van ai-server-manager.
-version: "0.1.0"
+version: "0.1.1"
 install:
   method: custom_app
 image:
   repository: ghcr.io/lvos04/home-control-hub
-  tag: "0.1.0"
-  digest: sha256:b691683455cb38f7eebceead98544946f9d741288449f85739a5339cd7aa681b  # uit digests.json van v0.1.0
+  tag: "0.1.1"
+  digest: sha256:52dc80ad3b038a8a34b12096bd18791a4f299339629c955ae81c3d8776c40929
 custom_app:
   storage:
     - name: appdata

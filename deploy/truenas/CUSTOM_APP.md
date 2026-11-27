@@ -25,16 +25,15 @@ App-formulier** van TrueNAS: geen YAML, geen *Install via YAML*, geen docker com
 | Wat | Waarde |
 |---|---|
 | Image | `ghcr.io/lvos04/home-control-hub` (publiek pakket; registry-login alleen als terugval, zie stap 0) |
-| Tag | `<versie>@sha256:<digest>` uit `release/digests.json` van de release, bv. `0.1.0@sha256:` + 64 hex (**nooit** `latest`) |
+| Tag | `0.1.1@sha256:52dc80ad3b038a8a34b12096bd18791a4f299339629c955ae81c3d8776c40929` (zie `release/digests.json` van de release). Gebruik **nooit** `latest`. |
 | Poort | container `30420` → host `30420` (voorstel; de Hub controleert vooraf op conflicten) |
 | Opslag | één dataset → `/appdata` |
 | Omgevingsvariabelen | geen verplichte; voor koppelen zonder wedloop `HUB_URL` + `HUB_ENROLLMENT_TOKEN` + `HUB_KEY_FINGERPRINT` |
 
 ## 0. Image ophalen (publiek; registry-login alleen als terugval)
 
-- **Standaard:** het GHCR-pakket wordt publiek (besluit 3 van de gebruiker, pas na een scan van de volledige
-  historie). TrueNAS haalt de image dan zonder registry-login op. Zolang het pakket nog privé is, mislukt ophalen
-  (`denied`); installeren op een echte NAS is dan **Geblokkeerd / NIET GEVALIDEERD**.
+- Het GHCR-pakket voor versie `0.1.1` is publiek. Laat de registry-login leeg. Weigert GHCR het ophalen
+  (`denied`), dan is installatie via het formulier **Geblokkeerd / NIET GEVALIDEERD**.
 - **Terugval:** *Apps → Configuration → Sign-in to a Docker registry* → *Other Registry*, URI `https://ghcr.io`, met een
   GitHub-token dat **alleen** pakketten mag lezen (`read:packages`). Dat token is jouw geheim in TrueNAS — nooit in een
   app-formulier, manifest, repo of log. Gedrag met GHCR-tokens: **NIET GEVALIDEERD (echte NAS)**.
@@ -57,7 +56,7 @@ en van zijn eigen submappen (`postgres`, `secrets`, `backups`).
 |---|---|---|
 | Application Name | | `home-control-hub` (een andere naam mag; de dienst meldt zich altijd als `home-control-hub`) |
 | Image Configuration | Repository | `ghcr.io/lvos04/home-control-hub` |
-| | Tag | `<versie>@sha256:<digest>` uit `release/digests.json` (trekt op digest). Weigert het formulier het `@`-teken, vul dan alleen de exacte versie in (bv. `0.1.0`); de Hub leest de digest na installatie terug en stopt bij een afwijking. **Of het formulier `@` accepteert en of TrueNAS daarmee updates ziet: NIET GEVALIDEERD (echte NAS).** |
+| | Tag | Neem de volledige tag uit de tabel hierboven over. Weigert het formulier het `@`-teken, vul dan voor deze release `0.1.1` in. De Hub leest de digest na installatie terug en stopt bij een afwijking. **Of het formulier `@` accepteert en of TrueNAS daarmee updates ziet: NIET GEVALIDEERD (echte NAS).** |
 | | Pull Policy | *Pull the image if it is not already present on host* |
 | Container Configuration | Timezone | jouw tijdzone |
 | | Restart Policy | *Unless Stopped* |
@@ -185,7 +184,8 @@ Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.**
 
 ## Updaten en terugdraaien
 
-- **Updaten:** app → **Edit** → Tag naar de nieuwe `<versie>@sha256:<digest>` → **Update**. Bij openstaande
+- Open de app, kies **Edit**, vul bij **Tag** de tag met digest van de doelrelease in en kies **Update**.
+  Voor versie `0.1.1` staat de volledige tag onder [Wat je nodig hebt](#wat-je-nodig-hebt). Bij openstaande
   databasewijzigingen maakt de app eerst een back-up (`/appdata/backups/voor-upgrade-*.dump`, de nieuwste 3 blijven)
   en voert dan de migraties uit. **Mislukt de back-up, dan migreert de app niet** en stopt hij met een melding in de
   log (bijv. te weinig vrije ruimte op de dataset). Mislukt een migratie, dan blijft de oude database ongewijzigd en
@@ -226,4 +226,4 @@ Custom App op TrueNAS geïnstalleerd; zie STAPPEN_P6.md.**
 | Statuspagina: *Het formulier kwam niet van deze pagina* (`herkomst_onjuist`) | Het formulier werd van een andere pagina of app verstuurd, of de browser stuurde geen herkomst. Laad de statuspagina opnieuw en vul het daar in. |
 | Statuspagina: *De koppelstatus is onleesbaar* | Het koppelbestand is beschadigd of heeft de verkeerde rechten. Maak in de Hub een nieuw koppeltoken en zet het in `HUB_ENROLLMENT_TOKEN`; het oude bestand blijft bewaard als `hub-link.json.onleesbaar-<tijd>`. |
 | Koppelen mislukt: *koppelstatus niet veilig opslaan* (`koppelbestand_niet_opgeslagen`) | De dataset geeft nieuwe bestanden ruimere rechten dan 0600, weigert `chmod` en de NFSv4-ACL is niet herkenbaar. Er is niets opgeslagen; de dienst staat zoals vóór de poging. Geef de dataset de preset *Apps* (NFSv4-ACL) of zorg dat gebruiker 568 de rechten van zijn eigen bestanden mag zetten, en koppel opnieuw. Vanaf 0.1.1 accepteert de dienst op een dataset met NFSv4-ACL de rechten die de ACL oplegt (een symlink, een andere eigenaar of schrijfrechten voor iedereen blijven onleesbaar). |
-| Image kan niet worden opgehaald (`denied`) | Het GHCR-pakket is nog privé; zie stap 0 (terugval met registry-login). |
+| Image kan niet worden opgehaald (`denied`) | Controleer de repository en de tag aan de hand van de tabel hierboven. Zie stap 0 voor de terugval met registry-login. |
