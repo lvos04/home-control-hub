@@ -161,13 +161,13 @@
  },
  {
   "id": "B14-003",
-  "status": "Niet gestart",
-  "validatie": "Niet getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
-  "bewijs": "Commit 3816636, apps/api/src/integrations/domains/energy/models.py (EnergyWorkload en EnergyWorkloadReservation) en apps/api/src/integrations/domains/energy/router.py (werklastroute). De proef met een actieve stream staat open.",
-  "blokkade": "De planner bouwen en met testgegevens de prioriteit en wachtreden bij overlappende werklasten toetsen. Daarna op de NAS bij een actieve stream verifiëren dat MediaGuard de AV1-taak zonder bestandsverlies laat wachten.",
-  "opmerking": "Het schema bevat prioriteitsklassen en reserveringsvensters. De werklastroute geeft 501. VERSIE 2: de dagplanner en reserveringsvoorstellen zijn uitgesteld (S-P3-320).",
+  "status": "Bezig",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "S-P3-320, bouwcommits 0c353ad en 570ddb2. apps/api/tests/integration/test_b14_003_werklast.py toetst de dagplanner, de contractlezingen, het R1-voorstel, gelijktijdige aanvragen en behoud van de simulatorgegevens. Forgejo-run 43 op 570ddb2 (https://git.medialeon.nl/leon/home-control-hub/actions/runs/43). tests/interop/test_hub_workloads.py vergelijkt de Hub-projecties van contract 1.4 met de lezer. Commit 7a28200 bevat de regressieproeven voor het herhaalde lokale uur en een meting die tijdens de tweede lezing verloopt.",
+  "blokkade": "N-P6-05 vereist een echte NAS, een testprofiel en een actieve stream. Vergelijk vóór en na de kijkgegevens, de AV1-voortgang en de mediabestanden terwijl MediaGuard de kijkpauze beheert.",
+  "opmerking": "De dagplanner leest NAS-belasting en beide AV1-banen op de bevestigde HTTPS-Hub. Bij uitval blijft de bron onbekend. De planner bepaalt wachtredenen lokaal en bewaart voorstellen met audit. In de voor-na-proef bleven twee kijkrecords, twee AV1-checkpoints en het testbestand beschikbaar en inhoudelijk gelijk. De simulator ontving vier GET-verzoeken.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-24"
+  "bijgewerkt": "2026-11-27"
  },
  {
   "id": "B14-004",
