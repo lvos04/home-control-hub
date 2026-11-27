@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import chain, groupby, islice
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
@@ -159,16 +160,24 @@ def _budget(check: Check, day_hours: Sequence[Hour], limit: float) -> None:
         check.breached = sum(costs, Decimal(0)) > Decimal(str(limit))
 
 
-def _nas_check(
-    db: Session, now: datetime, limits: AlertThresholds | None, opened: dict[str, Any], link: LinkState
-) -> Check:
+def _nas_checks(
+    db: Session,
+    now: datetime,
+    limits: AlertThresholds | None,
+    opened: dict[str, Any],
+    link: LinkState,
+    *,
+    history: bool = False,
+    after: datetime | None = None,
+) -> Iterator[Check]:
     since = source_timestamp(link.linked_at)
-    check = Check("nas_load", "nas", UUID(link.service_id) if link.linked and link.service_id else None)
-    if not limits or not check.scope or not since:
-        return check
+    scope = UUID(link.service_id) if link.linked and link.service_id else None
+    if not limits or not scope or not since:
+        yield Check("nas_load", "nas", scope)
+        return
     # De beveiligde B11-ingang bewaart het Hub-event al. Lees alleen de projectie van het NAS-CPU-kanaal.
     event = AutomationEvent
-    readings = db.execute(
+    query = (
         select(
             event.timestamp_utc,
             event.payload["waarde"],
@@ -190,36 +199,45 @@ def _nas_check(
             event.received_at >= since,
         )
         .distinct()
-        .order_by(event.timestamp_utc.desc())
-        .limit(5)  # vier verschillende meettijden plus één rij om een conflict op het vierde tijdstip te zien
     )
-    samples: dict[datetime, list[Decimal | None]] = defaultdict(list)
-    for at, value, unit, status, observed in readings:
+    # Voor de leesroute volstaan vier meettijden plus één rij om een conflict op de vierde tijd te zien.
+    readings = (
+        iter(db.execute(query.order_by(event.timestamp_utc).execution_options(yield_per=256)))
+        if history
+        else reversed(db.execute(query.order_by(event.timestamp_utc.desc()).limit(5)).all())
+    )
+    previous: deque[tuple[datetime, Decimal | None]] = deque(maxlen=3)
+    latest = Check("nas_load", "nas", scope)
+    for at, group in groupby(readings, key=lambda r: r[0]):
+        rows = list(islice(group, 2))  # DISTINCT voegt identieke lezingen samen.
+        _, value, unit, status, observed = rows[0]
         valid = (
-            type(value) in (float, int)
+            len(rows) == 1
+            and type(value) in (float, int)
             and 0 <= value <= 100
             and unit == "%"
             and status == "ok"
             and source_timestamp(observed) == at
         )
-        samples[at].append(Decimal(str(value)) if valid else None)
-    if samples:
-        check.observed_at = next(iter(samples))
-        if now - check.observed_at <= NAS_FRESH:
-            values = [
-                group[0] if len(group) == 1 else None
-                for at, group in samples.items()
-                if check.observed_at - at <= NAS_FRESH
-            ]
-            check.compare_growth(values[0], values[1:4], limits.nas_increase_points, opened)
-    return check
+        current = Decimal(str(value)) if valid else None
+        fresh = now - at <= NAS_FRESH
+        if not history or (fresh and (after is None or at > after)):
+            latest = Check("nas_load", "nas", scope, observed_at=at)
+            if fresh:
+                baseline = [v for t, v in previous if at - t <= NAS_FRESH]
+                latest.compare_growth(current, baseline, limits.nas_increase_points, opened)
+            if history:
+                yield latest
+        previous.append((at, current))
+    if not history:
+        yield latest
 
 
 def assess(db: Session, state: ServiceState | None, now: datetime, link: LinkState) -> list[Check]:
     data = state.value if state else {}
     limits = AlertThresholds(**data["thresholds"]) if "thresholds" in data else None
     opened = data.get("open", {})
-    return [*_house_checks(db, now, limits, opened), _nas_check(db, now, limits, opened, link)]
+    return [*_house_checks(db, now, limits, opened), *_nas_checks(db, now, limits, opened, link)]
 
 
 def notify_changes(db: Session, now: datetime, link: LinkState) -> None:
@@ -230,7 +248,14 @@ def notify_changes(db: Session, now: datetime, link: LinkState) -> None:
     if last and last > now:
         return
     opened = dict(state.value.get("open", {}))
-    for check in assess(db, state, now, link):
+    limits = AlertThresholds(**state.value["thresholds"]) if "thresholds" in state.value else None
+    # Oudere workers bewaarden alleen de beoordelingstijd. Speel hun al beoordeelde periode niet opnieuw af.
+    nas_at = source_timestamp(state.value.get("nas_observed_at", state.value.get("evaluated_at")))
+    house = _house_checks(db, now, limits, opened)
+    nas = _nas_checks(db, now, limits, opened, link, history=True, after=nas_at)
+    for check in chain(house, nas):
+        if check.rule == "nas_load" and check.observed_at is not None:
+            nas_at = check.observed_at
         subject = check.subject
         if subject is None or check.breached is None:
             continue  # onbekend sluit een lopende afwijking nooit
@@ -263,5 +288,10 @@ def notify_changes(db: Session, now: datetime, link: LinkState) -> None:
                 "ernst": "middel" if check.breached else "info",
             },
         )
-    state.value = {**state.value, "open": opened, "evaluated_at": now.isoformat()}
+    state.value = {
+        **state.value,
+        "open": opened,
+        "evaluated_at": now.isoformat(),
+        "nas_observed_at": nas_at.isoformat() if nas_at is not None else None,
+    }
     db.commit()

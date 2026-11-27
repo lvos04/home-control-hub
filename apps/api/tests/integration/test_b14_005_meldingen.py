@@ -367,6 +367,63 @@ def test_nas_groei_uit_de_hub_geen_herstel_bij_veroudering(linked, auth, fake_hu
         assert all(s not in json.dumps(e) for s in (ENV_TOKEN, "woning.test", "testonderwerp"))
 
 
+def test_nas_piek_en_herstel_tussen_twee_workerrondes(linked, auth, fake_hub, tick, monkeypatch):
+    install(linked, auth)
+    start = datetime.now(UTC) + timedelta(seconds=1)
+
+    def meet(minuut, waarde):
+        stamp = start + timedelta(minutes=minuut)
+        assert (
+            linked.post(
+                "/integrations/v1/automation/events", json=cpu(stamp, waarde), headers=idem(fake_hub.service_auth())
+            ).status_code
+            == 201
+        )
+
+    for minuut in range(4):
+        meet(minuut, 30)
+    tick(start + timedelta(minutes=3))
+    assert statuses(linked, auth)["nas_load", "nas"] == "normaal"
+    meet(5, 30)
+    meet(4, 80)  # De herstelde waarde kwam als eerste binnen.
+    at = start + timedelta(minutes=8)
+    emit = events.emit
+
+    def weiger_herstel(db, **kwargs):
+        if kwargs["event_type"] == "energy.nas_load.recovered":
+            raise RuntimeError("Gesimuleerde schrijffout")
+        return emit(db, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(events, "emit", weiger_herstel)
+        with pytest.raises(RuntimeError, match="Gesimuleerde schrijffout"):
+            tick(at)
+    assert not outgoing(linked)
+    for moment in (at, at, at + timedelta(minutes=3)):
+        tick(moment)
+        assert types(linked) == ["energy.nas_load.degraded", "energy.nas_load.recovered"]
+        assert statuses(linked, auth)["nas_load", "nas"] == "normaal"
+
+
+def test_oude_workerstand_speelt_eerder_beoordeelde_nas_piek_niet_opnieuw_af(linked, auth, fake_hub, tick):
+    install(linked, auth)
+    start = datetime.now(UTC) + timedelta(seconds=1)
+    for minuut, waarde in enumerate((30, 30, 30, 80, 30)):
+        stamp = start + timedelta(minutes=minuut)
+        assert (
+            linked.post(
+                "/integrations/v1/automation/events", json=cpu(stamp, waarde), headers=idem(fake_hub.service_auth())
+            ).status_code
+            == 201
+        )
+    with linked.app.state.db.sessions.begin() as db:
+        state = db.get(ServiceState, SETTINGS_KEY)
+        state.value = {**state.value, "evaluated_at": stamp.isoformat(), "open": {}}
+    tick(stamp + timedelta(seconds=5))
+    assert not outgoing(linked)
+    assert statuses(linked, auth)["nas_load", "nas"] == "normaal"
+
+
 def test_mislukte_transactie_laat_geen_half_incident_achter(linked, auth, house, tick, monkeypatch):
     install(linked, auth)
     supply(house, 6)
