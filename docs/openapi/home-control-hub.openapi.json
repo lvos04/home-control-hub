@@ -406,6 +406,36 @@
         "title": "AlertThresholds",
         "type": "object"
       },
+      "ApiErrorBody": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "trace_id": {
+            "format": "uuid",
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "details",
+          "trace_id"
+        ],
+        "title": "ApiErrorBody",
+        "type": "object"
+      },
       "AppSettingIn": {
         "additionalProperties": false,
         "properties": {
@@ -2298,6 +2328,13 @@
         },
         "title": "WorkloadSources",
         "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HubJWT": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -5139,22 +5176,16 @@
         ]
       },
       "put": {
+        "description": "Vereist een Hub-JWT met de rol admin. Bij een bestaande instelling is If-Match verplicht.",
         "operationId": "set_alert_thresholds_integrations_v1_energy_alert_thresholds_put",
         "parameters": [
           {
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
+              "format": "uuid",
+              "type": "string"
             }
           },
           {
@@ -5193,22 +5224,108 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "ETag": {
+                "description": "Versie van de opgeslagen drempels",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Idempotency-Key ontbreekt of is geen UUID"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Aanmelding ontbreekt, is ongeldig of is verlopen"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "De rol admin is vereist"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "If-Match verwijst naar een verouderde versie"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Verzoek te groot"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Ongeldige drempels of dezelfde Idempotency-Key bij een ander verzoek"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "If-Match ontbreekt bij een bestaande instelling"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Het energiearchief of de controle op tokenhergebruik is tijdelijk onbereikbaar"
           }
         },
+        "security": [
+          {
+            "HubJWT": []
+          }
+        ],
         "summary": "Energiedrempels voor meldingen instellen",
         "tags": [
           "energy"
+        ],
+        "x-required-roles": [
+          "admin"
         ]
       }
     },

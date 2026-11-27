@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -37,6 +38,22 @@ from .status_page import router as status_router
 log = logging.getLogger("integrations")
 
 
+class IntegrationsAPI(FastAPI):
+    def openapi(self) -> dict[str, Any]:
+        schema = super().openapi()
+        put = schema["paths"][f"{API_PREFIX}/energy/alert-thresholds"]["put"]
+        # De gedeelde dependency behandelt een ontbrekende header zelf (HTTP 400).
+        # FastAPI leidt uit haar Python-default ten onrechte een optionele header af.
+        key = next(p for p in put["parameters"] if p["in"] == "header" and p["name"] == "Idempotency-Key")
+        key.update(required=True, schema={"type": "string", "format": "uuid"})
+        schema["components"].setdefault("securitySchemes", {})["HubJWT"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+        return schema
+
+
 def create_app(settings: Settings | None = None, transport: httpx.BaseTransport | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     created = ensure_secrets(settings.secrets_dir)
@@ -63,7 +80,7 @@ def create_app(settings: Settings | None = None, transport: httpx.BaseTransport 
         yield
         db.dispose()
 
-    app = FastAPI(
+    app = IntegrationsAPI(
         title="Home Control Hub — integratiedienst",
         version=__version__,
         description=(

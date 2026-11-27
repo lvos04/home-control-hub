@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ... import audit
 from ...deps import check_if_match, etag, get_session, if_match, trace_id
-from ...errors import ApiError
+from ...errors import ApiError, ApiErrorBody
 from ...idempotency import Result, idempotency_key, run_idempotent
 from ...models import ServiceState
 from ...security.auth import Principal, require_admin, require_reader
@@ -199,7 +199,29 @@ def alert_thresholds(
     return AlertThresholds(**state.value["thresholds"])
 
 
-@router.put("/alert-thresholds", response_model=AlertThresholds, summary="Energiedrempels voor meldingen instellen")
+@router.put(
+    "/alert-thresholds",
+    response_model=AlertThresholds,
+    summary="Energiedrempels voor meldingen instellen",
+    description="Vereist een Hub-JWT met de rol admin. Bij een bestaande instelling is If-Match verplicht.",
+    openapi_extra={"security": [{"HubJWT": []}], "x-required-roles": ["admin"]},
+    responses={
+        200: {"headers": {"ETag": {"description": "Versie van de opgeslagen drempels", "schema": {"type": "string"}}}},
+        **{
+            status: {"description": description, "model": ApiErrorBody}
+            for status, description in {
+                400: "Idempotency-Key ontbreekt of is geen UUID",
+                401: "Aanmelding ontbreekt, is ongeldig of is verlopen",
+                403: "De rol admin is vereist",
+                412: "If-Match verwijst naar een verouderde versie",
+                413: "Verzoek te groot",
+                422: "Ongeldige drempels of dezelfde Idempotency-Key bij een ander verzoek",
+                428: "If-Match ontbreekt bij een bestaande instelling",
+                503: "Het energiearchief of de controle op tokenhergebruik is tijdelijk onbereikbaar",
+            }.items()
+        },
+    },
+)
 def set_alert_thresholds(
     body: AlertThresholds,
     request: Request,

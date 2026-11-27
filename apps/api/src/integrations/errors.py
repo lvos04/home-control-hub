@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -18,6 +19,13 @@ from .logfilter import db_error_text
 log = logging.getLogger("integrations")
 
 TRACE_HEADER = "X-Trace-Id"
+
+
+class ApiErrorBody(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any]
+    trace_id: uuid.UUID
 
 
 class ApiError(Exception):

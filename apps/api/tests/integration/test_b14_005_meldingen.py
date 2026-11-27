@@ -407,3 +407,25 @@ def test_twee_workers_melden_een_overgang(linked, auth, house, tick):
         for worker in workers:
             worker.result(timeout=15)
     assert sorted(types(linked)) == ["energy.boiler_usage.degraded", "energy.daily_budget.degraded"]
+
+
+def test_openapi_drempelfouten_kloppen_met_de_route(linked, auth):
+    doc = json.loads((REPO_ROOT / "docs/openapi/home-control-hub.openapi.json").read_text())
+    put = doc["paths"][THRESHOLDS]["put"]
+    install(linked, auth)
+    gevallen = [
+        ({}, LIMITS, 401),
+        (idem(auth("viewer")), LIMITS, 403),
+        (auth("admin"), LIMITS, 400),
+        (idem(auth("admin"), key="ongeldig"), LIMITS, 400),
+        (idem(auth("admin")), LIMITS, 428),
+        (idem(auth("admin"), **{"If-Match": 'W/"0"'}), LIMITS, 412),
+        (idem(auth("admin")), LIMITS | {"daily_budget_eur": -1}, 422),
+    ]
+    for headers, body, status in gevallen:
+        response = linked.put(THRESHOLDS, json=body, headers=headers)
+        assert response.status_code == status
+        ref = put["responses"][str(status)]["content"]["application/json"]["schema"]["$ref"]
+        assert set(response.json()) == set(doc["components"]["schemas"][ref.rsplit("/", 1)[1]]["required"])
+    bewaard = linked.get(THRESHOLDS, headers=auth("admin"))
+    assert bewaard.headers["ETag"] == 'W/"1"' and bewaard.json() == LIMITS
