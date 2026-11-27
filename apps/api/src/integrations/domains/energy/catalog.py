@@ -33,6 +33,13 @@ SOURCES: tuple[SourceSpec, ...] = (
                 build_status="gebouwd",
             ),
             cap(
+                "energy.advice.read",
+                "Kostenadvies per gemeten P1-meter voor vergelijkbare werklasturen",
+                "read",
+                ("B14-004",),
+                build_status="gebouwd",
+            ),
+            cap(
                 "energy.usage.read",
                 "Verbruiksintervallen met kwaliteitslabel",
                 "read",

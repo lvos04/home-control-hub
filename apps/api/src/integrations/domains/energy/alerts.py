@@ -7,19 +7,18 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from itertools import chain, groupby, islice
+from itertools import chain
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ... import events
 from ...hublink_store import LinkState
 from ...models import IntegrationSource, ServiceState
-from ..automation.models import AutomationEvent
 from .hourly import DAY, HOUR, Role, home_zone
+from .load_history import cpu_readings
 from .meters import SOURCE
 from .readings import source_timestamp
 from .usage import Hour, usage_report
@@ -175,51 +174,9 @@ def _nas_checks(
     if not limits or not scope or not since:
         yield Check("nas_load", "nas", scope)
         return
-    # De beveiligde B11-ingang bewaart het Hub-event al. Lees alleen de projectie van het NAS-CPU-kanaal.
-    event = AutomationEvent
-    query = (
-        select(
-            event.timestamp_utc,
-            event.payload["waarde"],
-            event.payload["eenheid"],
-            event.payload["status"],
-            event.payload["observed_at"],
-        )
-        .where(
-            event.source_app == "ai-server-manager",
-            event.received_by == "service:hub",
-            event.catalog_status == "geldig",
-            event.test_run_id.is_(None),
-            event.event_type == "monitoring.metric.recorded",
-            event.entity_type == "nas",
-            event.entity_id == "nas",
-            event.payload["metriek"].astext == "cpu.gebruik",
-            event.timestamp_utc >= max(since, now - 2 * NAS_FRESH),
-            event.timestamp_utc <= now,
-            event.received_at >= since,
-        )
-        .distinct()
-    )
-    # Voor de leesroute volstaan vier meettijden plus één rij om een conflict op de vierde tijd te zien.
-    readings = (
-        iter(db.execute(query.order_by(event.timestamp_utc).execution_options(yield_per=256)))
-        if history
-        else reversed(db.execute(query.order_by(event.timestamp_utc.desc()).limit(5)).all())
-    )
     previous: deque[tuple[datetime, Decimal | None]] = deque(maxlen=3)
     latest = Check("nas_load", "nas", scope)
-    for at, group in groupby(readings, key=lambda r: r[0]):
-        rows = list(islice(group, 2))  # DISTINCT voegt identieke lezingen samen.
-        _, value, unit, status, observed = rows[0]
-        valid = (
-            len(rows) == 1
-            and type(value) in (float, int)
-            and 0 <= value <= 100
-            and unit == "%"
-            and status == "ok"
-            and source_timestamp(observed) == at
-        )
-        current = Decimal(str(value)) if valid else None
+    for at, current in cpu_readings(db, since, now - 2 * NAS_FRESH, now, latest_four=not history):
         fresh = now - at <= NAS_FRESH
         if not history or (fresh and (after is None or at > after)):
             latest = Check("nas_load", "nas", scope, observed_at=at)

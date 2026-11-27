@@ -95,6 +95,30 @@ def usage_report(
     direction: Direction,
 ) -> UsageReport:
     first, after = period_days(period, day)
+    prices = Prices(db, scope, direction, midnight(first, zone), midnight(after, zone))
+    days = usage_days(db, scope, zone, currency, first, after, role, direction, prices)
+    return UsageReport(
+        **totals(days).model_dump(),
+        period=period,
+        timezone=zone.key,
+        currency=currency,
+        role=role,
+        direction=direction,
+        days=days,
+    )
+
+
+def usage_days(
+    db: Session,
+    scope: UUID,
+    zone: ZoneInfo,
+    currency: str | None,
+    first: date,
+    after: date,
+    role: Role,
+    direction: Direction,
+    prices: Prices,
+) -> list[Day]:
     start, end = midnight(first, zone), midnight(after, zone)
     ref = series_ref(scope, role, direction)
     slots: dict[datetime, list[tuple[EnergyUsageInterval, bool]]] = defaultdict(list)
@@ -113,7 +137,6 @@ def usage_report(
         )
     ):
         slots[record.start_utc.astimezone(UTC)].append((record, confirmation == METER_CONFIRMATION))
-    prices = Prices(db, scope, direction, start, end)
     days = []
     while first < after:
         items = []
@@ -145,12 +168,4 @@ def usage_report(
             )
         days.append(Day(**totals(items).model_dump(), date=first, hours=items))
         first += DAY
-    return UsageReport(
-        **totals(days).model_dump(),
-        period=period,
-        timezone=zone.key,
-        currency=currency,
-        role=role,
-        direction=direction,
-        days=days,
-    )
+    return days

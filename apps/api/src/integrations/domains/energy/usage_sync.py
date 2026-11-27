@@ -15,6 +15,7 @@ from ...config import Settings
 from ...models import ServiceState
 from ...security.vault import Vault
 from ...timeutil import utcnow
+from .advice import register_advice_method
 from .client import EnergyReadError, EnergyRoute, ViewerDenied
 from .hourly import (
     DAY,
@@ -200,6 +201,7 @@ def sync_usage(
         for d, series in zip(days, exports, strict=True):
             archive.day(d, zone, now, series, declared)
         archive.replacements()
+        register_advice_method(db, scope)
         for role in archive.roles:
             watch_since.setdefault(role, now.isoformat())
         metadata.pop("reason_nl", None)

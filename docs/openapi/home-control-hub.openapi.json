@@ -293,6 +293,35 @@
         "title": "ActivationIn",
         "type": "object"
       },
+      "AdviceReport": {
+        "properties": {
+          "comparable_days": {
+            "default": 0,
+            "title": "Comparable Days",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CostAdvice"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "reason_nl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Nl"
+          }
+        },
+        "title": "AdviceReport",
+        "type": "object"
+      },
       "AlertList": {
         "properties": {
           "items": {
@@ -500,6 +529,143 @@
           }
         },
         "title": "ClaimIn",
+        "type": "object"
+      },
+      "Comparison": {
+        "properties": {
+          "busy_kwh": {
+            "title": "Busy Kwh",
+            "type": "number"
+          },
+          "busy_price_per_kwh": {
+            "title": "Busy Price Per Kwh",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "quiet_kwh": {
+            "title": "Quiet Kwh",
+            "type": "number"
+          },
+          "quiet_price_per_kwh": {
+            "title": "Quiet Price Per Kwh",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "busy_kwh",
+          "quiet_kwh",
+          "busy_price_per_kwh",
+          "quiet_price_per_kwh"
+        ],
+        "title": "Comparison",
+        "type": "object"
+      },
+      "CostAdvice": {
+        "properties": {
+          "advice_nl": {
+            "title": "Advice Nl",
+            "type": "string"
+          },
+          "assumptions_nl": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions Nl",
+            "type": "array"
+          },
+          "busy_hour": {
+            "title": "Busy Hour",
+            "type": "integer"
+          },
+          "confidence": {
+            "description": "Indicatie op basis van aantal dagen en overeenstemming.",
+            "title": "Confidence",
+            "type": "number"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/Comparison"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "disclaimer_nl": {
+            "default": "De besparing is niet gegarandeerd.",
+            "title": "Disclaimer Nl",
+            "type": "string"
+          },
+          "meter_id": {
+            "format": "uuid",
+            "title": "Meter Id",
+            "type": "string"
+          },
+          "method": {
+            "const": "vergelijkbare_dag",
+            "title": "Method",
+            "type": "string"
+          },
+          "period_end": {
+            "format": "date",
+            "title": "Period End",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date",
+            "title": "Period Start",
+            "type": "string"
+          },
+          "provenance_id": {
+            "format": "uuid",
+            "title": "Provenance Id",
+            "type": "string"
+          },
+          "quiet_hour": {
+            "title": "Quiet Hour",
+            "type": "integer"
+          },
+          "role": {
+            "const": "p1_net",
+            "default": "p1_net",
+            "title": "Role",
+            "type": "string"
+          },
+          "savings": {
+            "$ref": "#/components/schemas/SavingsRange"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advice_nl",
+          "assumptions_nl",
+          "method",
+          "provenance_id",
+          "sources",
+          "meter_id",
+          "timezone",
+          "period_start",
+          "period_end",
+          "busy_hour",
+          "quiet_hour",
+          "days",
+          "confidence",
+          "savings"
+        ],
+        "title": "CostAdvice",
         "type": "object"
       },
       "Coverage": {
@@ -1835,6 +2001,41 @@
           }
         },
         "title": "RunIn",
+        "type": "object"
+      },
+      "SavingsRange": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "measurement_quality": {
+            "const": "geschat",
+            "default": "geschat",
+            "title": "Measurement Quality",
+            "type": "string"
+          },
+          "unit_nl": {
+            "const": "per verplaatst werkuur",
+            "default": "per verplaatst werkuur",
+            "title": "Unit Nl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "currency"
+        ],
+        "title": "SavingsRange",
         "type": "object"
       },
       "Scope": {
@@ -5123,27 +5324,159 @@
     },
     "/integrations/v1/energy/advice": {
       "get": {
-        "operationId": "endpoint_integrations_v1_energy_advice_get",
+        "description": "Leest gemeten P1-netafname, afnametarieven en historische werklast. Bij onvoldoende gegevens bevat de lijst een reden en nul adviezen.",
+        "operationId": "advice_integrations_v1_energy_advice_get",
+        "parameters": [
+          {
+            "description": "Laatste afgesloten woningdag van de terugblik. Standaard gisteren.",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Laatste afgesloten woningdag van de terugblik. Standaard gisteren.",
+              "title": "Date"
+            }
+          },
+          {
+            "description": "Fysieke P1-meter. Standaard de laatst herkende P1-meter in het tijdvak.",
+            "in": "query",
+            "name": "meter_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Fysieke P1-meter. Standaard de laatst herkende P1-meter in het tijdvak.",
+              "title": "Meter Id"
+            }
+          },
+          {
+            "description": "Lokaal beginuur van het drukke werkuur.",
+            "in": "query",
+            "name": "busy_hour",
+            "required": false,
+            "schema": {
+              "default": 18,
+              "description": "Lokaal beginuur van het drukke werkuur.",
+              "maximum": 23,
+              "minimum": 0,
+              "title": "Busy Hour",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Lokaal beginuur van het rustige alternatief.",
+            "in": "query",
+            "name": "quiet_hour",
+            "required": false,
+            "schema": {
+              "default": 23,
+              "description": "Lokaal beginuur van het rustige alternatief.",
+              "maximum": 23,
+              "minimum": 0,
+              "title": "Quiet Hour",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Endpoint Integrations V1 Energy Advice Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AdviceReport"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Een geldige aanmelding is vereist."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Een leesrol is vereist."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "Ongeldige datum, meter of uurkeuze."
+          },
           "501": {
-            "description": "capability_unavailable"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "De ingestelde bron heeft geen bruikbare viewer-koppeling."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": "De viewer-koppeling, de bron of het archief is tijdelijk onbereikbaar.",
+            "headers": {
+              "Retry-After": {
+                "description": "Wachttijd in seconden",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
-        "summary": "energy.advice.read (nog niet gebouwd → 501 capability_unavailable)",
+        "security": [
+          {
+            "HubJWT": []
+          }
+        ],
+        "summary": "Kostenadvies voor een werkuur op vergelijkbare woningdagen (B14-004)",
         "tags": [
           "energy"
+        ],
+        "x-required-roles": [
+          "viewer",
+          "operator",
+          "admin"
         ]
       }
     },

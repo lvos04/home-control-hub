@@ -93,6 +93,31 @@ betekenis of precisie zouden verliezen. Herstel in dat geval de voor-upgradeback
 Bij meerdere terugstappen legt de dienst elke revisie apart vast, zodat de back-up van de volgende stap
 het bijbehorende schema kan lezen.
 
+### Kostenadvies voor verplaatsbaar werk
+
+Met een leesrol geeft `GET /integrations/v1/energy/advice` een kostenband per verplaatst werkuur voor bijvoorbeeld de
+zoekindex of AV1-encodering. De route vergelijkt standaard 18.00 met 23.00 uur in de tijdzone van de woning.
+Met `busy_hour` en `quiet_hour` kies je andere, verschillende uren. `date` is de laatste afgesloten dag van een
+terugblik van 28 woningdagen en staat standaard op gisteren. Via `meter_id` kun je een specifieke fysieke P1-meter
+kiezen. Zonder die parameter gebruikt de dienst de laatst herkende P1-meter in het tijdvak.
+
+Voor een advies zijn minstens drie werkdagen of drie weekenddagen nodig, overeenkomstig de gekozen einddatum.
+Op elke gebruikte dag heeft dezelfde meter beide uren volledig gemeten. Per kwartier is minstens één CPU-meting van
+de gekoppelde Hub nodig. Alle metingen in het drukke uur liggen op of boven 60%, alle metingen in het rustige uur
+op of onder 30%. Een dubbel klokuur, een tellerreset of een onbekende werklast maakt het uur ongeschikt.
+
+De berekening veronderstelt dat het extra gemeten woningverbruik kan meeverhuizen en dat het overige verbruik gelijk
+blijft. Per dag vermenigvuldigt de dienst de extra kWh met het prijsverschil tussen beide uren. Bij gelijke of lagere
+afname in het drukke uur, of zonder goedkoper alternatief, telt die dag als nul. Een meerderheid van de dagen moet
+extra afname laten zien. Het antwoord toont de laagste en hoogste uitkomst in de woningvaluta, de gebruikte dagen,
+beide meterwaarden en tarieven, de aannames en de herkomst van de methode. De besparing is niet gegarandeerd.
+
+De zekerheid is `0,80 × aantal dagen met extra afname / (aantal vergelijkbare dagen + 3)`, afgerond op twee decimalen.
+Die score beschrijft de samenhang met de werklast. De P1-meter meet het hele huis. De worker registreert de herkomst
+van de rekenmethode eenmaal per woning. De adviesroute leest de gegevens en plant of bedient zelf geen apparaat.
+Zonder gemeten reeks voor de gekozen meter is de reden `geen meter, geen bedrag`. Bij te weinig vergelijkbare dagen,
+een ontbrekend tarief of ontbrekende herkomst geeft de dienst een lege advieslijst met de bijbehorende reden.
+
 **B14-005 afwijkingsmeldingen.** Een beheerder stelt via `PUT /integrations/v1/energy/alert-thresholds`
 vier drempels in. Elke PUT vereist een `Idempotency-Key` (UUID). Bij de eerste instelling mag
 `If-Match` ontbreken. Bij een wijziging staat de actuele ETag in het antwoord van de bijbehorende GET.

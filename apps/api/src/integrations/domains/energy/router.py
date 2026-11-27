@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -22,24 +23,19 @@ from ...models import ServiceState
 from ...security.auth import Principal, require_admin, require_reader
 from ...timeutil import utcnow
 from ..common import domain_router
+from .advice import NO_METER, AdviceReport, cost_advice
 from .alerts import SETTINGS_KEY, AlertStatus, AlertThresholds, assess
 from .catalog import EXPECTED_METER_ROLES, QUALITY_LABELS, SOURCES
 from .client import EnergyReadError
-from .hourly import Direction, Period, Role, home_zone
-from .meters import ABSENT, NAS_ABSENT, Inventory, MeterItem, configured_client, meter_inventory
+from .hourly import DAY, Direction, Period, Role, home_zone
+from .meters import ABSENT, NAS_ABSENT, Inventory, MeterItem, SourceInactive, configured_client, meter_inventory
 from .readings import LIVE_MAX_AGE, Quality
 from .usage import UsageReport, usage_report
 from .usage_sync import STATE_KEY
 from .workload_sources import workload_sources
 from .workloads import WorkloadPlan, day_plan
 
-router = domain_router(
-    "energy",
-    SOURCES,
-    {
-        "/advice": ("energy.advice.read", ("B14-004",)),
-    },
-)
+router = domain_router("energy", SOURCES, {})
 
 
 class MeterList(BaseModel):
@@ -142,6 +138,32 @@ def archive_session(request: Request) -> Iterator[Session]:
         ) from None
 
 
+class MissingMeterArchive(ApiError):
+    """Er is geen actieve bron of nog geen export van deze koppeling."""
+
+
+def verified_archive(request: Request, session: Session) -> tuple[UUID, ZoneInfo, str | None]:
+    state = request.app.state
+    try:
+        client, scope, revision = configured_client(session, state.settings, state.vault, state.http_transport)
+    except EnergyReadError as exc:
+        error = MissingMeterArchive if isinstance(exc, SourceInactive) else ApiError
+        raise error(501, "capability_unavailable", str(exc), {"reason": "bron_niet_beschikbaar"}) from None
+    try:
+        client.verify()
+        archive = session.get(ServiceState, STATE_KEY)
+        if archive is None or archive.value.get("revision") != revision:
+            raise MissingMeterArchive(
+                501, "capability_unavailable", "De eerste uur-export voor deze koppeling ontbreekt."
+            )
+        if reason := archive.value.get("reason_nl"):
+            raise EnergyReadError(reason)
+        zone = home_zone(archive.value.get("timezone"))
+    except EnergyReadError as exc:
+        raise ApiError(503, "dependency_unavailable", str(exc), headers={"Retry-After": "300"}) from None
+    return scope, zone, archive.value.get("currency")
+
+
 @router.get(
     "/usage",
     summary="Verbruik en variabele kosten per lokale woningdag (B14-002)",
@@ -165,27 +187,73 @@ def usage(
 ) -> UsageReport:
     if request.query_params.keys() - {"period", "date", "role", "direction", "timezone"}:
         raise ApiError(422, "validation_error", "Onbekend queryveld voor het verbruiksrapport.")
-    state = request.app.state
-    try:
-        client, scope, revision = configured_client(session, state.settings, state.vault, state.http_transport)
-    except EnergyReadError as exc:
-        raise ApiError(501, "capability_unavailable", str(exc), {"reason": "bron_niet_beschikbaar"}) from None
-    try:
-        client.verify()
-        archive = session.get(ServiceState, STATE_KEY)
-        if archive is None or archive.value.get("revision") != revision:
-            raise ApiError(501, "capability_unavailable", "De eerste uur-export voor deze koppeling ontbreekt.")
-        if reason := archive.value.get("reason_nl"):
-            raise EnergyReadError(reason)
-        zone = home_zone(archive.value.get("timezone"))
-    except EnergyReadError as exc:
-        raise ApiError(503, "dependency_unavailable", str(exc), headers={"Retry-After": "300"}) from None
+    scope, zone, currency = verified_archive(request, session)
     if timezone is not None and timezone != zone.key:
         raise ApiError(422, "validation_error", "De gevraagde tijdzone wijkt af van de tijdzone van de woning.")
     day = day or utcnow().astimezone(zone).date()
     if not 1 < day.year < 9999:
         raise ApiError(422, "validation_error", "De periode valt buiten het ondersteunde datumbereik.")
-    return usage_report(session, scope, zone, archive.value.get("currency"), period, day, role, direction)
+    return usage_report(session, scope, zone, currency, period, day, role, direction)
+
+
+@router.get(
+    "/advice",
+    summary="Kostenadvies voor een werkuur op vergelijkbare woningdagen (B14-004)",
+    description="Leest gemeten P1-netafname, afnametarieven en historische werklast. "
+    "Bij onvoldoende gegevens bevat de lijst een reden en nul adviezen.",
+    openapi_extra={"security": [{"HubJWT": []}], "x-required-roles": ["viewer", "operator", "admin"]},
+    responses={
+        401: {"description": "Een geldige aanmelding is vereist.", "model": ApiErrorBody},
+        403: {"description": "Een leesrol is vereist.", "model": ApiErrorBody},
+        422: {"description": "Ongeldige datum, meter of uurkeuze.", "model": ApiErrorBody},
+        501: {"description": "De ingestelde bron heeft geen bruikbare viewer-koppeling.", "model": ApiErrorBody},
+        503: {
+            "description": "De viewer-koppeling, de bron of het archief is tijdelijk onbereikbaar.",
+            "model": ApiErrorBody,
+            "headers": {"Retry-After": {"description": "Wachttijd in seconden", "schema": {"type": "integer"}}},
+        },
+    },
+)
+def advice(
+    request: Request,
+    day: date | None = Query(
+        None, alias="date", description="Laatste afgesloten woningdag van de terugblik. Standaard gisteren."
+    ),
+    meter_id: UUID | None = Query(
+        None, description="Fysieke P1-meter. Standaard de laatst herkende P1-meter in het tijdvak."
+    ),
+    busy_hour: int = Query(18, ge=0, le=23, description="Lokaal beginuur van het drukke werkuur."),
+    quiet_hour: int = Query(23, ge=0, le=23, description="Lokaal beginuur van het rustige alternatief."),
+    session: Session = Depends(archive_session),
+    _p: Principal = Depends(require_reader),
+) -> AdviceReport:
+    if (
+        busy_hour == quiet_hour
+        or (day and not 1 < day.year < 9999)
+        or any(
+            k not in {"date", "meter_id", "busy_hour", "quiet_hour"} or len(request.query_params.getlist(k)) != 1
+            for k in request.query_params
+        )
+    ):
+        raise ApiError(422, "validation_error", "Kies twee verschillende uren en geldige queryparameters.")
+    try:
+        scope, zone, currency = verified_archive(request, session)
+    except MissingMeterArchive:
+        return AdviceReport(reason_nl=NO_METER)
+    today = utcnow().astimezone(zone).date()
+    if day is not None and day >= today:
+        raise ApiError(422, "validation_error", "De laatste woningdag moet afgesloten zijn.")
+    return cost_advice(
+        session,
+        scope,
+        request.app.state.hublink_store.read(),
+        zone,
+        currency,
+        day or today - DAY,
+        busy_hour,
+        quiet_hour,
+        meter_id,
+    )
 
 
 @router.get("/alert-thresholds", summary="Ingestelde meldingsdrempels (leeg tot een beheerder ze vastlegt)")
