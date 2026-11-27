@@ -6,9 +6,10 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from integrations.domains.energy.load_history import cpu_readings
 from integrations.domains.energy.models import EnergyEstimateProvenance, EnergyUsageInterval
 from tests.conftest import idem
 from tests.integration.test_b14_001_dekkingsmatrix import ENERGY
@@ -185,6 +186,20 @@ def test_ontbrekend_of_dubbel_lokaal_uur_telt_niet_mee(linked, auth, history, mo
     assert [d["date"] for d in item["days"]] == [d.isoformat() for d in ordinary]
     assert item["savings"]["low"] == item["savings"]["high"] == 0.9
     assert item["disclaimer_nl"] == "De besparing is niet gegarandeerd."
+
+
+def test_verschillende_utc_metingen_bij_hetzelfde_databaseklokuur(linked, fake_hub):
+    first = datetime(2026, 10, 25, 0, 15, tzinfo=UTC)
+    second = first + HOUR
+    for at, value in [(first, 75), (second, 20)]:
+        received = linked.post(
+            "/integrations/v1/automation/events", json=cpu(at, value), headers=idem(fake_hub.service_auth())
+        )
+        assert received.status_code == 201
+    with linked.app.state.db.sessions() as db:
+        db.execute(text("SET LOCAL TIME ZONE 'Europe/Amsterdam'"))
+        samples = list(cpu_readings(db, datetime(2000, 1, 1, tzinfo=UTC), first, second))
+    assert samples == [(first, Decimal(75)), (second, Decimal(20))]
 
 
 def test_een_ontbrekende_prijs_of_valuta_sluit_het_bedrag_uit(linked, auth, source, history, sync):

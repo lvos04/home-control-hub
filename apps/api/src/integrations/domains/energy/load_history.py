@@ -1,7 +1,7 @@
 """Historische CPU-belasting uit het afgeschermde, lokale Hub-eventarchief."""
 
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import groupby, islice
 
@@ -46,7 +46,8 @@ def cpu_readings(
         if not latest_four
         else reversed(db.execute(query.order_by(event.timestamp_utc.desc()).limit(5)).all())
     )
-    for at, group in groupby(readings, key=lambda r: r[0]):
+    # Twee verschillende UTC-meettijden kunnen in de database dezelfde lokale kloktijd hebben.
+    for at, group in groupby(readings, key=lambda r: r[0].astimezone(UTC)):
         rows = list(islice(group, 2))  # DISTINCT voegt identieke lezingen samen.
         _, value, unit, status, observed = rows[0]
         valid = (
