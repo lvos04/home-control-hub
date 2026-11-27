@@ -7,6 +7,7 @@ De nep-Node-RED volgt het gedrag dat met ``tools/node_red_verify.py`` tegen de g
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,11 @@ def client_for(
 
 
 # ------------------------------------------------------------------------------------------------- de simulator zelf
+def test_imageproeven_met_gelijk_procesnummer_hebben_eigen_containernamen() -> None:
+    script = str(REPO_ROOT / "tools/node_red_verify.py")
+    assert runpy.run_path(script)["PREFIX"] != runpy.run_path(script)["PREFIX"]
+
+
 def test_fake_matches_the_verified_image_facts() -> None:
     """De simulator hoort bij dezelfde image en dezelfde feiten als het verificatierapport (geen eigen aannames)."""
     report = json.loads((REPO_ROOT / "docs/b11/node-red-verificatie.json").read_text(encoding="utf-8"))
@@ -68,7 +74,9 @@ def test_fake_matches_the_verified_image_facts() -> None:
     assert report["image"]["tag"] == NODE_RED_TAG == NodeRedFake().version
     assert report["image"]["digest"] == NODE_RED_DIGEST
     assert report["validatie_echte_nas"] == "NIET GEVALIDEERD (echte NAS)"
-    ids = {c["id"] for c in report["checks"]}
+    gemeten = {c["id"]: c for c in report["checks"]}
+    assert gemeten["dienstaccount_rechten"]["detail"]["rechten"] == list(policy.SERVICE_PERMISSIONS)
+    assert gemeten["dienstaccount_kan_geen_flows_zetten"]["detail"]["http"] == 401
     # elk gedrag dat de simulator nabootst, is tegen de echte image gemeten
     assert {
         "kaal_geen_aanmelding",
@@ -85,7 +93,7 @@ def test_fake_matches_the_verified_image_facts() -> None:
         "andere_sleutel_geweigerd",
         "palette_installatie_uit",
         "token_ingetrokken",
-    } <= ids
+    } <= gemeten.keys()
 
 
 def test_unhardened_fake_is_open_like_a_fresh_install() -> None:

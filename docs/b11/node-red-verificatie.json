@@ -1,5 +1,5 @@
 {
-  "checked_on": "2026-11-21",
+  "checked_on": "2026-11-27",
   "tool": "tools/node_red_verify.py",
   "image": {
     "repository": "docker.io/nodered/node-red",
@@ -211,7 +211,6 @@
       "detail": {
         "rechten": [
           "flows.read",
-          "flows.write",
           "nodes.read",
           "settings.read",
           "diagnostics.read"
@@ -294,6 +293,14 @@
       "id": "dienstaccount_leest_geen_credentials",
       "ok": true,
       "title_nl": "Het dienstaccount kan geen credentials opvragen",
+      "detail": {
+        "http": 401
+      }
+    },
+    {
+      "id": "dienstaccount_kan_geen_flows_zetten",
+      "ok": true,
+      "title_nl": "Het dienstaccount kan alleen lezen",
       "detail": {
         "http": 401
       }

@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import re
 import secrets
 import subprocess
@@ -51,7 +50,7 @@ from integrations.domains.automation.catalog import (
 from integrations.domains.automation.nodered import NodeRedClient, NodeRedError
 
 IMAGE_REF = f"{NODE_RED_IMAGE}@{NODE_RED_DIGEST}"
-PREFIX = f"hch-nrverify-{os.getpid()}"
+PREFIX = f"hch-nrverify-{secrets.token_hex(12)}"
 SETTINGS = Settings()
 CRED_BLOB_RE = re.compile(r"^[0-9a-f]{32}[A-Za-z0-9+/]+=*$")
 
