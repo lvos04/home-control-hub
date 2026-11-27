@@ -181,13 +181,13 @@
  },
  {
   "id": "B14-005",
-  "status": "Niet gestart",
-  "validatie": "Unit-getest; NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
-  "bewijs": "commit 3816636, 8ac9dd9; apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database. De bestaande meetroute is getoetst in apps/api/tests/integration/test_b14_001_dekkingsmatrix.py::test_meters_rollen_en_herkomst.",
-  "blokkade": "Meldregels voor meteruitval, afwijkend boilerverbruik, NAS-belasting en budget bouwen en simuleren. Toets met de fysieke meters dat de meldingen de juiste bron noemen en dat de boiler uitsluitend wordt gemeten (EX27, N-P6-06).",
-  "opmerking": "De database weigert een beschrijfbare meter. De leesroute van my_house levert ook boilervermogen. VERSIE 2: afwijkingsmeldingen en hun weergave op de statuspagina zijn uitgesteld (S-P3-340 en S-P3-350).",
+  "status": "Bezig",
+  "validatie": "Sim-getest; NIET GEVALIDEERD (hardware); NIET GEVALIDEERD (echte NAS); NIET GEVALIDEERD (account)",
+  "bewijs": "Codecommit 1b691fc, Forgejo-run 33. De elf proeven in apps/api/tests/integration/test_b14_005_meldingen.py dekken de vier regels, bronuitval, beheerrechten, eenmalig probleem en herstel, behoud van het uurarchief en de OpenAPI-export. Eerder bewijs dat meters alleen leesbaar zijn en dat hun rol wordt herkend: commits 3816636 en 8ac9dd9, apps/api/tests/integration/test_platform_core.py::test_schema_invariants_enforced_by_database en apps/api/tests/integration/test_b14_001_dekkingsmatrix.py::test_meters_rollen_en_herkomst.",
+  "blokkade": "De Hub moet CPU-metingen automatisch aanleveren via de beveiligde gebeurtenisingang. De statuspagina volgt in S-P3-350. Beproef de bron en meetuitkomsten met fysieke meters en de echte boiler in S-P6-21 (EX27) en N-P6-06.",
+  "opmerking": "De simulator voedde zowel de woningreeks als de NAS-CPU-reeks. Bij veroudering bleef verbruik onbekend. De payload van de uitgaande gebeurtenis bevatte regel, rol, bron en ernst. De enige schrijvende energieroute wijzigt drempelinstellingen. De boiler wordt uitsluitend gemeten.",
   "repo": "home-control-hub",
-  "bijgewerkt": "2026-11-24"
+  "bijgewerkt": "2026-11-27"
  },
  {
   "id": "I11-11-01",
