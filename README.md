@@ -94,7 +94,15 @@ Bij meerdere terugstappen legt de dienst elke revisie apart vast, zodat de back-
 het bijbehorende schema kan lezen.
 
 **B14-005 afwijkingsmeldingen.** Een beheerder stelt via `PUT /integrations/v1/energy/alert-thresholds`
-vier drempels in. Gebruik een `Idempotency-Key` en bij een wijziging de ETag uit de bijbehorende GET.
+vier drempels in. Elke PUT vereist een `Idempotency-Key` (UUID). Bij de eerste instelling mag
+`If-Match` ontbreken. Bij een wijziging staat de actuele ETag in het antwoord van de bijbehorende GET.
+Voor een bestaande instelling op versie 2 gelden onder meer deze voorbeelden.
+
+| If-Match | HTTP | Gevolg |
+|---|---:|---|
+| `W/"1"` | 412 | Verouderde versie. De opgeslagen drempels blijven behouden. |
+| `*` | 200 | De wijziging wordt aanvaard, ook als een andere beheerder de versie heeft verhoogd. |
+
 Een lezer ziet per regel de bron, meterrol, meettijd en uitkomst via `GET /integrations/v1/energy/alerts`.
 
 | Regel | Wanneer de worker meldt |
