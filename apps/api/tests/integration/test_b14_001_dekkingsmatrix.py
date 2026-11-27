@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -13,7 +14,7 @@ from sqlalchemy import event, select
 from integrations.domains.energy.client import BoundViewer, ViewerPairing
 from integrations.domains.energy.meters import STATUS_KEY
 from integrations.domains.energy.models import EnergyMeter, EnergyMeterRole
-from integrations.models import ServiceState
+from integrations.models import IntegrationSource, ServiceState
 from integrations.worker import Worker
 from tests.conftest import idem
 from tests.fakes.my_house_energy import MyHouseEnergy
@@ -134,6 +135,31 @@ def test_statuspagina_leest_bestaande_meettijden_zonder_watt_te_verzinnen(linked
     assert blok.count("Verouderd</span>") == 1 and "74 W." not in blok and "-42,5 W." in blok
 
 
+def test_statuspagina_behoudt_bevestigde_meettijden_na_eerste_leesfout(linked, auth, bron):
+    meettijd = datetime.fromisoformat(bron.at)
+    for i, deelmeter in enumerate(bron.live["parts"][:2], start=1):
+        deelmeter["at"] = (meettijd - timedelta(minutes=i)).isoformat()
+    rows(linked, auth, ENERGY + "/meters")
+    with linked.app.state.db.sessions.begin() as db:
+        db.delete(db.get_one(ServiceState, STATUS_KEY))  # oude opslagvorm
+        db.get_one(IntegrationSource, "my_house").credential_ref = None
+    patroon = r"Laatste meting van my_house op [^<]+"
+    tijden = re.findall(patroon, energieblok(linked))
+    assert len(tijden) == len(set(tijden)) == 3
+    verzoeken = (list(bron.calls), list(bron.checks))
+    worker = Worker(linked.app.state.settings, linked.app.state.http_transport)
+    try:
+        worker.meter_step(0)
+    finally:
+        worker.db.dispose()
+    blok = energieblok(linked)
+    assert "Storing</span>" in blok and blok.count("Onbekend</span>") == 4 and " W." not in blok
+    assert re.findall(patroon, blok) == tijden
+    assert (bron.calls, bron.checks) == verzoeken
+    assert configure(linked, auth, MyHouseEnergy()).status_code == 200
+    assert not re.findall(patroon, energieblok(linked))
+
+
 def test_statuspagina_laat_ongeldige_opgeslagen_hublink_weg(linked):
     store = linked.app.state.hublink_store
     store.update(lambda stand: stand.model_copy(update={"hub_url": "https://hub.test/ongeldig"}))
@@ -141,6 +167,25 @@ def test_statuspagina_laat_ongeldige_opgeslagen_hublink_weg(linked):
     assert pagina.status_code == 200 and 'id="h-energie"' in pagina.text
     assert "Hub openen</a>" not in pagina.text and 'href=""' not in pagina.text
     assert "hub.test/ongeldig" not in pagina.text
+
+
+@pytest.mark.parametrize(
+    ("opgeslagen", "verwacht"),
+    [
+        ("https://hub.localhost", None),
+        ("https://hub\u3002localhost", None),
+        ("https://BÜCHER.test:8443/", "https://xn--bcher-kva.test:8443"),
+    ],
+    ids=["lokaal", "lokaal-idna", "geldige-testhub"],
+)
+def test_statuspagina_gebruikt_gecontroleerde_hubbestemming(linked, opgeslagen, verwacht):
+    assert not linked.app.state.settings.allow_loopback_hub
+    linked.app.state.hublink_store.update(lambda stand: stand.model_copy(update={"hub_url": opgeslagen}))
+    blok = energieblok(linked)
+    if verwacht is None:
+        assert "Hub openen</a>" not in blok and 'href=""' not in blok
+    else:
+        assert f'href="{verwacht}">Hub openen</a>' in blok
 
 
 def test_meters_rollen_en_herkomst(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:
@@ -304,6 +349,22 @@ def test_wisseling_bronadres_stuurt_geen_oud_geheim(linked: Any, auth: Any, bron
     assert not bron.calls
 
 
+def test_bestaande_viewerkoppeling_behoudt_haar_bronadres(linked, auth, bron):
+    oud_adres = bron.address.replace("woning.test", "WONING.test")
+    with linked.app.state.db.sessions.begin() as db:
+        woning = db.get_one(IntegrationSource, "my_house")
+        woning.base_url = oud_adres
+        oud_bewijs = viewer(bron).model_copy(update={"address": oud_adres})
+        linked.app.state.vault.put(db, woning.credential_ref, oud_bewijs.model_dump_json(), last4=bron.token[-4:])
+    result = linked.put(
+        SOURCE,
+        headers=idem(auth("admin"), **{"If-Match": "*"}),
+        json={"base_url": oud_adres, "enabled": True},
+    )
+    assert result.status_code == 200 and result.json()["runtime"]["credential_present"]
+    assert rows(linked, auth, ENERGY + "/meters")["p1_net"]["last_measurement"] == -42.5
+
+
 @pytest.mark.parametrize("summary_status", [404, 503])
 def test_deelmeters_houden_eigen_bewijs_bij_ontbrekend_dagoverzicht(
     linked: Any, auth: Any, bron: MyHouseEnergy, summary_status: int
@@ -312,6 +373,14 @@ def test_deelmeters_houden_eigen_bewijs_bij_ontbrekend_dagoverzicht(
     matrix = rows(linked, auth, ENERGY + "/coverage")
     assert matrix["p1_net"]["quality"] == "onbekend"
     assert matrix["boiler_socket"]["quality"] == "gemeten" and matrix["airco_outdoor"]["quality"] == "gemeten"
+    blok = energieblok(linked)
+    assert "Het dagoverzicht van my_house is niet leesbaar." in blok
+    assert "Daardoor is het vermogen van de slimme meter (P1) onbekend." in blok
+    assert "0 W." in blok and "74 W." in blok and "-42,5 W." not in blok
+    bron.summary_status = 200
+    rows(linked, auth, ENERGY + "/coverage")
+    hersteld = energieblok(linked)
+    assert "dagoverzicht" not in hersteld and "-42,5 W." in hersteld
 
 
 def test_geweigerd_token_bij_tweede_get_maakt_alles_onbekend(linked: Any, auth: Any, bron: MyHouseEnergy) -> None:

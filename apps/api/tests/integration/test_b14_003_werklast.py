@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 
 from integrations.domains.energy.models import EnergyWorkload, EnergyWorkloadReservation
-from integrations.models import AuditEvent
+from integrations.models import AuditEvent, IntegrationSource
 from integrations.timeutil import utcnow
 from tests.conftest import HUB_URL, PAIR_CODE, REPO_ROOT, idem
 
@@ -122,6 +122,18 @@ def test_werklast_leest_alleen_de_twee_contractroutes_en_toont_de_brontijd(plann
     assert [h["encoding"] for h in plan["hours"] if h["encoding"]["status"] == "gemeten"] == [measured]
     assert all(h["slots"] == [] for h in plan["hours"])
     assert hub.calls == [("GET", HTTPS_HUB + NAS), ("GET", HTTPS_HUB + hub.path)]
+
+
+def test_bestaand_adapteradres_blijft_leesbaar(planner, auth):
+    client, hub = planner
+    oud_adres = HTTPS_HUB.replace("hub.test", "HUB.test")
+    state = client.app.state
+    state.hublink_store.update(lambda link: link.model_copy(update={"hub_url": oud_adres}))
+    with state.db.sessions.begin() as db:
+        db.get_one(IntegrationSource, "mediaguard_encoding").base_url = oud_adres + hub.path
+    response = client.get(PLAN, headers=auth("viewer"))
+    assert response.status_code == 200 and response.json()["sources"]["mediaguard_encoding"]["status"] == "gemeten"
+    assert ("GET", HTTPS_HUB + hub.path) in hub.calls
 
 
 def test_uitval_en_ingetrokken_dienst_toont_onbekend(planner, auth, fake_hub):

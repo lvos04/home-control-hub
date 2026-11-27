@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ...config import Settings
 from ...errors import TRACE_HEADER
-from ...hubclient import HubClient, validate_hub_url
+from ...hubclient import HubClient, HubUrlError, validate_hub_url
 from ...hublink_store import LinkState
 from ...models import IntegrationSource
 from ...timeutil import utcnow
@@ -170,7 +170,9 @@ def workload_sources(session: Session, hub: HubClient, link: LinkState, trace_id
         with contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
             result.truenas_metrics = _nas(read(NAS_PATH), utcnow())
     mg = session.get(IntegrationSource, "mediaguard_encoding")
-    if mg is not None and mg.enabled and (path := mediaguard_path(mg.base_url, base)):
-        with contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
-            result.mediaguard_encoding = _encoding(read(path), utcnow())
+    if mg is not None and mg.enabled and mg.base_url:
+        with contextlib.suppress(HubUrlError, httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
+            address = validate_hub_url(mg.base_url, hub.settings.allow_loopback_hub, allow_path=True)
+            if path := mediaguard_path(address, base):
+                result.mediaguard_encoding = _encoding(read(path), utcnow())
     return result

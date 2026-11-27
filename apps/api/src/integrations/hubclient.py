@@ -25,12 +25,15 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import idna
 
 from . import __version__
 from .config import Settings
 
 #: alleen cijfers, punten en hexadecimale delen: een IPv4-adres in welke vorm dan ook (geen geldige DNS-naam)
 _NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*")
+_DNS_LABEL = r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?"
+DNS_NAME = re.compile(rf"{_DNS_LABEL}(?:\.{_DNS_LABEL})*")
 
 
 log = logging.getLogger("integrations.hubclient")
@@ -91,7 +94,10 @@ def validate_hub_url(
         raise HubUrlError(f"{label} ontbreekt.")
     if len(url) > 512 or any(ch.isspace() for ch in url):  # §3.7: Hub-adres ≤ 512 tekens
         raise HubUrlError(f"{label} is te lang of bevat spaties.")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise HubUrlError(f"{label} heeft een ongeldige hostnaam of IP-adres.") from exc
     if parts.scheme not in ("http", "https"):
         raise HubUrlError(f"{label} moet met http:// of https:// beginnen.")
     if parts.username is not None or parts.password is not None or "@" in parts.netloc:
@@ -100,13 +106,25 @@ def validate_hub_url(
         raise HubUrlError(f"{label} mag geen ?-parameters of #-deel bevatten.")
     if parts.path not in ("", "/") and not allow_path:
         raise HubUrlError(f"{label} mag geen pad bevatten: alleen http(s)://<NAS-adres>:<poort>.")
-    host = (parts.hostname or "").lower()
+    host = parts.hostname or ""
     if not host:
         raise HubUrlError(f"{label} mist een hostnaam of IP-adres.")
+    if parts.netloc.startswith("["):
+        if ":" not in host or "%" in host:
+            raise HubUrlError(f"{label} heeft een ongeldig IPv6-adres.")
+        authority = f"[{host}]"  # urlsplit heeft het IPv6-adres gecontroleerd
+    else:
+        # Gebruik voor de link dezelfde ASCII-naam als voor de bestemmingscontrole.
+        try:
+            authority = host if host.isascii() else idna.encode(host, uts46=True).decode("ascii")
+        except idna.IDNAError as exc:
+            raise HubUrlError(f"{label} heeft een ongeldige hostnaam.") from exc
+        host = authority.removesuffix(".")  # behoud de absolute DNS-naam in het adres
+        if len(host) > 253 or not DNS_NAME.fullmatch(host):
+            raise HubUrlError(f"{label} heeft een ongeldige hostnaam.")
     # 'localhost.' en '127.0.0.1.' (punt achteraan) zijn dezelfde adressen; verkorte, decimale, octale of hexadecimale
     # IPv4-vormen ('127.1', '2130706433', '0x7f000001', '0', '010.0.0.1') zet de resolver om naar bv. loopback of
     # 0.0.0.0 en zouden de regels hieronder omzeilen: die worden geweigerd (alleen a.b.c.d; review contract 1.2)
-    host = host.rstrip(".")
     if _NUMERIC_HOST.fullmatch(host):
         try:
             ipaddress.IPv4Address(host)
@@ -137,8 +155,10 @@ def validate_hub_url(
             "Loopback-adressen (localhost/127.0.0.1) wijzen naar deze container zelf. Gebruik het LAN-adres van de NAS "
             "met de poort van de Hub."
         )
+    if port is not None:
+        authority = f"{authority}:{port}"
     path = parts.path.rstrip("/") if allow_path else ""
-    return f"{parts.scheme}://{parts.netloc}{path}"
+    return urlunsplit((parts.scheme, authority, path, "", ""))
 
 
 class HubClient:

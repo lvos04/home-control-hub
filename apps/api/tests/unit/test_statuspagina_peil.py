@@ -632,6 +632,7 @@ def test_unsafe_hub_address_is_never_a_link() -> None:
         "http://hub.test:99999",
         "https://[",
         "http://hub%2ftest",
+        f"https://{'h' * 64}.test",
     ):
         link.hub_url = slecht
         data = bouw_model(_meting(link), csrf="c")

@@ -108,7 +108,7 @@ def lees_energie(db: Session, bron: IntegrationSource | None, link: LinkState, n
         stand = {}
     rijen = []
     meters = stand.get("meters", {})
-    if not stand:
+    if not stand or (stand.get("failed") and not meters):
         # Vóór het energieblok bewaarde de inventaris alleen de bronmeettijd. Die bewijst geen vermogen of kwaliteit.
         tijden = db.execute(
             select(EnergyMeterRole.role, EnergyMeterRole.confirmed_at)
@@ -120,10 +120,20 @@ def lees_energie(db: Session, bron: IntegrationSource | None, link: LinkState, n
             )
         )
         meters = {rol: {"at": tijd.isoformat()} for rol, tijd in tijden if tijd is not None}
+    if not stand:
         reden = "De dienst wacht op een nieuwe vermogensmeting." if meters else "De dienst wacht op de eerste meting."
         rijen.append(_rij("Meterdekking", "nog-niet", "Bezig", "De woningbron is ingesteld. " + reden))
     elif stand.get("failed"):
         rijen.append(_rij("Meterdekking", "storing", "Storing", "De laatste leespoging bij de woningbron is mislukt."))
+    elif stand.get("summary_unavailable"):
+        rijen.append(
+            _rij(
+                "Meterdekking",
+                "beperkt",
+                "Beperkt",
+                "Het dagoverzicht van my_house is niet leesbaar. Daardoor is het vermogen van de slimme meter (P1) onbekend.",
+            )
+        )
     rijen.extend(_meter(spec, meters.get(spec.role, {}), nu) for spec in EXPECTED_METER_ROLES)
     rijen.append(_afwijkingen(regels, woning, link, nu))
     return rijen

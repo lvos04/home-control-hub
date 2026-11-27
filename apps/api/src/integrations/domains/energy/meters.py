@@ -53,7 +53,7 @@ class Inventory:
     reason: str = ABSENT
 
 
-def _read(client: EnergyClient) -> tuple[dict[str, Reading], str]:
+def _read(client: EnergyClient) -> tuple[dict[str, Reading], str | None]:
     live = client.read(EnergyRoute.LIVE)
     try:
         declared = declared_roles(client.read(EnergyRoute.SUMMARY))
@@ -62,7 +62,7 @@ def _read(client: EnergyClient) -> tuple[dict[str, Reading], str]:
     except EnergyReadError as exc:
         # Het dagoverzicht identificeert P1. De deelmeters dragen zelf rol, meettijd en kwaliteit in /live.
         return live_readings(live, set(), utcnow()), str(exc)
-    return live_readings(live, declared, utcnow()), ABSENT
+    return live_readings(live, declared, utcnow()), None
 
 
 def configured_client(
@@ -105,20 +105,24 @@ def refresh_inventory(
         return Inventory({}, str(exc))
 
     failed = False
+    summary_error = None
     try:
-        readings, reason = _read(client)
+        readings, summary_error = _read(client)
+        reason = summary_error or ABSENT
     except EnergyReadError as exc:
         readings = {}
         reason = str(exc)
         failed = True
 
     inventory = _register(session, scope, revision, readings, reason)
-    _save_status(session, revision, inventory, failed=failed)
+    _save_status(session, revision, inventory, failed=failed, summary_unavailable=summary_error is not None)
     session.commit()
     return inventory
 
 
-def _save_status(session: Session, revision: str, inventory: Inventory | None, *, failed: bool) -> None:
+def _save_status(
+    session: Session, revision: str, inventory: Inventory | None, *, failed: bool, summary_unavailable: bool = False
+) -> None:
     """Kleine projectie voor de statuspagina, in dezelfde transactie en onder dezelfde brongrendel."""
     state = session.get(ServiceState, STATUS_KEY)
     previous = state.value if state and state.value.get("revision") == revision else {}
@@ -135,7 +139,7 @@ def _save_status(session: Session, revision: str, inventory: Inventory | None, *
             }
             for role, item in inventory.meters.items()
         }
-    value = {"revision": revision, "failed": failed, "meters": rows}
+    value = {"revision": revision, "failed": failed, "summary_unavailable": summary_unavailable, "meters": rows}
     if state is None:
         session.add(ServiceState(key=STATUS_KEY, value=value))
     else:

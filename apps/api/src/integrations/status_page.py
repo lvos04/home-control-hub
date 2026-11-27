@@ -50,7 +50,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -60,7 +59,7 @@ from .domains import DOMAIN_TITLES_NL, DOMAINS
 from .domains.sso import service as sso_service
 from .enrollment import stale_koppelcode
 from .errors import trace_id_for
-from .hubclient import validate_hub_url
+from .hubclient import DNS_NAME, HubUrlError, validate_hub_url
 from .hublink_store import ERROR_MESSAGES, LINK_FILE, LinkState
 from .peil import MELDING_ICOON, TONEN, TOTAAL_TONEN, SjabloonOntbreekt, render, sjabloon
 from .security.secrets import secrets_present
@@ -129,7 +128,6 @@ _BRON_TOON = {"healthy": "gezond", "degraded": "beperkt", "down": "storing", "un
 _HERSTEL_TOON = {"ok": "gezond", "risico": "beperkt", "onbekend": "onbekend"}
 _HTTP_ADRES = re.compile(r"""https?://[^\s\x00-\x1f\x7f"'<>\\]+""", re.I)
 _NUMERIEK = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*")
-_NAAM = re.compile(r"[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?)*")
 
 # ------------------------------------------------------------------------------------------------ vaste meldingen
 
@@ -304,7 +302,7 @@ def host_toegestaan(host_header: str | None) -> bool:
         return False
     if naam.endswith("."):
         naam = naam[:-1]
-    if not naam or not _NAAM.fullmatch(naam):
+    if not DNS_NAME.fullmatch(naam):
         return False
     if _NUMERIEK.fullmatch(naam):
         try:
@@ -506,13 +504,8 @@ def _hub_adres(m: Meting) -> str:
     if m.link.corrupt or not m.link.first_linked_at or not _HTTP_ADRES.fullmatch(adres):
         return ""
     try:
-        adres = validate_hub_url(adres, allow_loopback=m.loopback_hub)
-        host = urlsplit(adres).hostname or ""
-        if ":" in host:  # IPv6 is door urlsplit en validate_hub_url gecontroleerd
-            return adres if "%" not in host else ""
-        naam = host.rstrip(".").encode("idna").decode("ascii").lower()
-        return adres if _NAAM.fullmatch(naam) else ""
-    except ValueError:
+        return validate_hub_url(adres, allow_loopback=m.loopback_hub)
+    except HubUrlError:
         return ""
 
 

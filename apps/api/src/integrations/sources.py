@@ -16,6 +16,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.exceptions import InvalidTag
@@ -175,13 +176,14 @@ def probe_source(request: Request, session: Session, source_id: str) -> tuple[st
 
 
 router = APIRouter(prefix=API_PREFIX, tags=["bronnen"], route_class=AuthFirstRoute)
+MAX_SOURCE_URL = 500
 
 
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str | None = Field(
         default=None,
-        max_length=500,
+        max_length=MAX_SOURCE_URL,
         description="LAN-adres van de app (http/https). Voor my_house HTTPS met /api/v1/homes/<woning-UUID>.",
     )
     enabled: bool = False
@@ -231,10 +233,10 @@ def put_source(
     if spec is None:
         raise not_found("Bron")
     settings: Settings = request.app.state.settings
-    base_url: str | None = None
+    checked_url: str | None = None
     if body.base_url:
         try:
-            base_url = validate_hub_url(
+            checked_url = validate_hub_url(
                 body.base_url, settings.allow_loopback_hub, label="Het adres van de bron", allow_path=True
             )
         except HubUrlError as exc:
@@ -243,18 +245,18 @@ def put_source(
         if body.credential:
             raise ApiError(422, "validation_error", "De planner gebruikt de bestaande dienstaanmelding bij de Hub.")
         base = confirmed_hub(request.app.state.hublink_store.read(), settings)
-        if not base or not mediaguard_path(base_url, base):
+        if not base or not mediaguard_path(checked_url, base):
             raise ApiError(422, "validation_error", "Kies de MediaGuard-adapterroute op de bevestigde HTTPS-Hub.")
-    if source_id == "my_house" and base_url:
+    if source_id == "my_house" and checked_url:
         try:
-            energy_address(base_url, settings)
+            energy_address(checked_url, settings)
         except EnergyReadError as exc:
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
     if body.my_house_pairing and (source_id != "my_house" or not body.credential):
         raise ApiError(422, "validation_error", "De koppelgegevens horen bij een nieuw my_house-credential.")
-    if body.enabled and not base_url:
+    if body.enabled and not checked_url:
         raise ApiError(422, "validation_error", "Een bron aanzetten kan alleen met een adres.", {"veld": "base_url"})
-    if source_id == "authentik" and body.credential and not base_url:
+    if source_id == "authentik" and body.credential and not checked_url:
         raise ApiError(
             422, "validation_error", "Stel het Authentik-adres samen met de aanmelding in.", {"veld": "base_url"}
         )
@@ -291,6 +293,18 @@ def put_source(
         else:
             check_if_match(row.version, match)
             row.version += 1
+        base_url = checked_url
+        previous_url = row.base_url or row.credential_base_url
+        # Bij opnieuw opslaan van hetzelfde gevalideerde adres blijft ook een oudere credentialbinding geldig.
+        if (
+            row.credential_ref
+            and previous_url
+            and body.base_url
+            and urlsplit(body.base_url.strip()).geturl().rstrip("/") == previous_url
+        ):
+            base_url = previous_url
+        if base_url and len(base_url) > MAX_SOURCE_URL:
+            raise ApiError(422, "validation_error", "Het genormaliseerde bronadres is te lang.", {"veld": "base_url"})
         row.link_revision = str(uuid.uuid4())  # elke put maakt eerder bewijs van deze koppeling ongeldig
         changed_url = row.base_url != base_url
         row.base_url = base_url

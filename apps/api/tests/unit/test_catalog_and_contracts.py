@@ -179,6 +179,16 @@ def test_hub_url_ok_and_loopback_only_in_dev() -> None:
         assert validate_hub_url(ok) == ok
 
 
+def test_hub_adres_controleert_de_genormaliseerde_hostnaam() -> None:
+    with pytest.raises(HubUrlError):
+        validate_hub_url("https://localhost\u3002")
+    lokaal_adres = str(netwerk.LINK_LOCAL[20]).replace(".", "\u3002")
+    with pytest.raises(HubUrlError):
+        validate_hub_url(f"https://{lokaal_adres}", allow_loopback=True)
+    assert validate_hub_url("https://LOCALHOST:8443", allow_loopback=True) == "https://localhost:8443"
+    assert validate_hub_url("https://faß.test:8443/bron/", allow_path=True) == "https://xn--fa-hia.test:8443/bron"
+
+
 def test_hub_client_never_follows_redirects_and_ignores_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """§3.2/§5: 3xx is een storing (nooit volgen) en proxy-omgevingsvariabelen worden genegeerd; één poging per
     aanroep (herhalen met backoff regelt de koppellogica zelf)."""
