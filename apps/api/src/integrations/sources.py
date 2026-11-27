@@ -291,9 +291,8 @@ def put_source(
             )
         vault = request.app.state.vault
         ref = source_ref(source_id)
-        # my_house en Node-RED: de aanmelding hoort bij de bevestigde bestemming, een ander adres krijgt de oude niet
-        # (R-VEILIG-1 van S-P3-360); Authentik houdt zijn kluisrij bewust bij een tijdelijk leeg adres
-        if body.clear_credential or (source_id in ("my_house", "node_red") and changed_url):
+        # De aanmelding hoort bij de bevestigde bestemming. Authentik bewaart zijn eigen koppeling bij herconfiguratie.
+        if body.clear_credential or (changed_url and source_id != "authentik"):
             previous = row.credential_ref
             if previous and not body.credential and (source_id != "my_house" or previous == ref):
                 vault.delete(session, previous)

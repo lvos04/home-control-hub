@@ -19,6 +19,33 @@ from tests.conftest import AUTHENTIK_URL, FakeHub, fresh, idem, recreate_databas
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize(
+    "source_id",
+    ["netalertx", "adguard_home", "tailscale", "cloudflared", "router", "truenas_metrics", "mediaguard_encoding"],
+)
+def test_bronadres_bindt_de_aanmelding(paired_client: Any, auth: Any, source_id: str) -> None:
+    import secrets
+
+    from integrations.models import VaultSecret
+    from integrations.sources import source_ref
+
+    url = f"/integrations/v1/sources/{source_id}"
+
+    def put(address: str, **fields: str) -> dict[str, Any]:
+        r = paired_client.put(
+            url, json={"base_url": address, **fields}, headers=idem(auth("admin"), **{"If-Match": "*"})
+        )
+        assert r.status_code in (200, 201), r.text
+        return r.json()["runtime"]
+
+    original = "https://eerste.test"
+    assert put(original, credential=secrets.token_urlsafe(32))["credential_present"]
+    assert put(original)["credential_present"]
+    assert not put("https://tweede.test")["credential_present"]
+    with paired_client.app.state.db.sessions() as db:
+        assert db.get(VaultSecret, source_ref(source_id)) is None
+
+
 # ------------------------------------------------------------------ migraties
 def test_migrations_up_down_up_and_no_drift() -> None:
     url = recreate_database("hch_test_migrations")
