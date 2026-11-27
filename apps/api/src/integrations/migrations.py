@@ -14,6 +14,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from psycopg import ProgrammingError
 from psycopg.conninfo import make_conninfo
@@ -59,20 +60,41 @@ def upgrade(settings: Settings, revision: str = "head") -> None:
 def downgrade(settings: Settings, revision: str, backup_dir: Path | None = None) -> Path | None:
     """Geef een gegevensverwijderende revisie toegang tot de gedeelde dumpvoorziening."""
     dump = None
+    destination = backup_dir or settings.data_dir / "backups"
 
     def backup(current: str, connection: Connection) -> None:
         nonlocal dump
         snapshot = connection.scalar(text("SELECT pg_export_snapshot()"))
         if snapshot is None:
             raise BackupError("De terugmigratie kon geen databasesnapshot voor de dump delen")
-        dump = _write_backup(
-            settings, current, backup_dir or settings.data_dir / "backups", "voor-terugmigratie", snapshot=snapshot
-        )
+        dump = _write_backup(settings, current, destination, "voor-terugmigratie", snapshot=snapshot)
 
     cfg = alembic_config(settings)
+    cfg.attributes["downgrade_target"] = revision
+    cfg.attributes["downgrade_backup_dir"] = destination
     cfg.attributes["backup_before_downgrade"] = backup
     command.downgrade(cfg, revision)
     return dump
+
+
+def preflight_downgrade(cfg: Config, connection: Connection) -> None:
+    """Controleer de gegevensvoorwaarden van alle geplande stappen op het beginschema."""
+    scripts = ScriptDirectory.from_config(cfg)
+    heads = MigrationContext.configure(connection).get_current_heads()
+    needs_backup = False
+    for step in scripts.iterate_revisions(heads, cfg.attributes["downgrade_target"], select_for_downgrade=True):
+        check = getattr(step.module, "check_downgrade", None)
+        if check is not None and check(connection):
+            needs_backup = True
+    if needs_backup:
+        backup_dir = cfg.attributes["downgrade_backup_dir"]
+        _prepare_backup_dir(backup_dir)
+        try:
+            # Een bestaande map kan leesbaar zijn terwijl de ACL het maken van een dumplocatie weigert.
+            with tempfile.TemporaryDirectory(dir=backup_dir):
+                pass
+        except OSError as exc:
+            raise BackupError("De back-upmap is niet beschrijfbaar") from exc
 
 
 def pending(settings: Settings, db: Database) -> bool:
@@ -96,11 +118,21 @@ def pre_upgrade_backup(settings: Settings, db: Database, backup_dir: Path, keep:
     return _write_backup(settings, current, backup_dir, "voor-upgrade", keep)
 
 
+def _prepare_backup_dir(backup_dir: Path) -> None:
+    if shutil.which("pg_dump") is None:
+        raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with contextlib.suppress(PermissionError):  # NFSv4-ACL met aclmode=restricted weigert chmod
+            os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
+    except OSError as exc:
+        raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
+
+
 def _write_backup(
     settings: Settings, current: str, backup_dir: Path, prefix: str, keep: int = 3, *, snapshot: str | None = None
 ) -> Path:
-    if shutil.which("pg_dump") is None:
-        raise BackupError("pg_dump ontbreekt; zonder back-up vooraf wordt niet gemigreerd")
+    _prepare_backup_dir(backup_dir)
     try:
         # Dezelfde URL-uitleg als de migratie, inclusief dbname en Unix-sockets in de query.
         url = make_url(settings.database_url)
@@ -112,12 +144,6 @@ def _write_backup(
     env = os.environ.copy()
     if password is not None:
         env["PGPASSWORD"] = str(password)
-    try:
-        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with contextlib.suppress(PermissionError):  # NFSv4-ACL met aclmode=restricted weigert chmod
-            os.chmod(backup_dir, 0o700)  # back-ups bevatten de (versleutelde) vault en de audit: alleen de app zelf
-    except OSError as exc:
-        raise BackupError(f"de back-upmap {backup_dir} kan niet worden aangemaakt") from exc
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     target = backup_dir / f"{prefix}-{current}-{stamp}.dump"
     checksum = target.with_suffix(".dump.sha256")

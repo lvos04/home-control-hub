@@ -51,6 +51,13 @@ vóór de schemawijziging. De dump en de bijbehorende SHA-256 staan in de map va
 `backups` onder de datamap. Mislukt de back-up, dan stopt de terugmigratie. Herstel de geverifieerde dump op
 revisie `0008` om dezelfde koppelrevisie en herstelbasis terug te krijgen. Opnieuw upgraden maakt nieuwe koppelrevisies.
 
+Bij meerdere terugstappen controleert de dienst eerst de gegevensvoorwaarden voor de hele reeks en de benodigde
+back-upmap. Past een uurwaarde bijvoorbeeld niet in de precisie van revisie `0008`, dan blijft het beginschema actief.
+Valt de opslag tijdens een latere dump uit, dan vermeldt de opdracht de bereikte revisie. Controleer die voordat
+je verdergaat. Bij een onderbroken terugweg van `0009` naar `0007` waarbij de opdracht nog op `0008` staat,
+zijn de koppelrevisies nog aanwezig. De databaseproef vergelijkt na de upgrade terug naar `0009` de kolommen,
+rijaantallen en inhoudshashes van alle gegevenstabellen met de beginstand.
+
 ## Upgraden
 Wacht met **Update** in de TrueNAS-web-UI totdat de catalogusinterop is getoetst en de gate de exacte doelversie
 vrijgeeft. Catalogustreinen bieden vaak alleen de nieuwste versie aan. Beoordeel een andere doelversie opnieuw

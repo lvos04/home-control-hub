@@ -28,24 +28,30 @@ def upgrade() -> None:
         """)
 
 
-def downgrade() -> None:
-    if context.is_offline_mode():
-        raise BackupError("Controleer vóór terugmigratie of er een Authentik-aanmelding is.")
-    op.execute("LOCK TABLE integration_source IN SHARE MODE")
-    connection = op.get_bind()
+def check_downgrade(connection: sa.Connection) -> bool:
     bron = connection.execute(
         sa.text("""
         SELECT base_url, credential_base_url, credential_ref FROM integration_source
         WHERE source_id = 'authentik' AND credential_ref IS NOT NULL
         """)
     ).one_or_none()
-    if bron is not None:
-        if (
-            not bron.base_url
-            or bron.base_url != bron.credential_base_url
-            or bron.credential_ref != "vault://source/authentik"
-        ):
-            raise BackupError("Schema 0009 zou een onbevestigde Authentik-aanmelding kunnen activeren.")
+    if bron is None:
+        return False
+    if (
+        not bron.base_url
+        or bron.base_url != bron.credential_base_url
+        or bron.credential_ref != "vault://source/authentik"
+    ):
+        raise BackupError("Schema 0009 zou een onbevestigde Authentik-aanmelding kunnen activeren.")
+    return True
+
+
+def downgrade() -> None:
+    if context.is_offline_mode():
+        raise BackupError("Controleer vóór terugmigratie of er een Authentik-aanmelding is.")
+    op.execute("LOCK TABLE integration_source IN SHARE MODE")
+    connection = op.get_bind()
+    if check_downgrade(connection):
         backup = context.config.attributes.get("backup_before_downgrade")
         if backup is None:
             raise BackupError("Gebruik 'integrations migrate --down' om het aanmeldadres vooraf te archiveren.")

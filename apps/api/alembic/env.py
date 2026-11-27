@@ -7,6 +7,7 @@ import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from integrations.migrations import preflight_downgrade
 from integrations.models import all_models
 
 config = context.config
@@ -29,6 +30,9 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool
     )
     with connectable.connect() as connection:
+        if "downgrade_target" in config.attributes:
+            with connection.begin():
+                preflight_downgrade(config, connection)
         # Een terugmigratie kan pg_dump vanuit een tweede verbinding starten. Geef de DDL-sloten
         # van de voorgaande revisie eerst vrij, met haar versie en wijzigingen samen vastgelegd.
         context.configure(

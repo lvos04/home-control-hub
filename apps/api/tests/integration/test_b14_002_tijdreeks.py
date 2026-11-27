@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import random
+import subprocess
+import sys
 from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import Any
@@ -349,8 +352,9 @@ def test_woningzone_bronwissel_en_alleen_uurcijfers(linked, auth, source, sync):
     assert reply.status_code == 501 and "days" not in reply.json()
 
 
-def test_terugmigratie_zonder_precisieverlies(linked, source, sync):
-    from integrations.migrations import BackupError, downgrade, upgrade
+@pytest.mark.parametrize(("start", "doel"), [("0009", "0008"), ("head", "0008"), ("head", "-2")])
+def test_terugmigratie_zonder_precisieverlies(linked, source, sync, start, doel):
+    from integrations.migrations import downgrade, upgrade
 
     day = date(2026, 5, 5)
     # Beide richtingen en beide afgesloten dagen volledig gemeten. Alleen de vierde decimaal blokkeert.
@@ -363,17 +367,37 @@ def test_terugmigratie_zonder_precisieverlies(linked, source, sync):
     beginrevisie = state.db.current_revision()
     assert beginrevisie is not None
     try:
-        # De precisiecontrole hoort bij de stap van 0009 naar 0008.
-        downgrade(state.settings, "0009")
-        with pytest.raises(BackupError, match="zonder verlies"):
-            downgrade(state.settings, "0008")
-        assert state.db.current_revision() == "0009"
+        if start != "head":
+            downgrade(state.settings, start)
+        revisie = state.db.current_revision()
+        ready = linked.get("/readyz").status_code
+        if start == "head":
+            assert ready == 200
+        meting = select(EnergyUsageInterval.__table__).order_by(EnergyUsageInterval.id)
         with state.db.sessions() as db:
-            stored = db.scalars(select(EnergyUsageInterval)).all()
-            assert len(stored) == 96
-            assert all(r.meter_id and r.quality == "gemeten" and str(r.delta) == "0.0001" for r in stored)
+            voor = db.execute(meting).all()
+        assert len(voor) == 96
+        assert all(r.meter_id and r.quality == "gemeten" and str(r.delta) == "0.0001" for r in voor)
+
+        poging = subprocess.run(  # noqa: S603 - vaste module en doelen uit de proefmatrix, zonder shell
+            [sys.executable, "-m", "integrations", "migrate", "--down", doel],
+            env={
+                **os.environ,
+                "HCH_DATABASE_URL": state.settings.database_url,
+                "HCH_DATA_DIR": str(state.settings.data_dir),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert poging.returncode == 3
+        assert "zonder verlies" in poging.stderr and "De database is ongewijzigd" in poging.stderr
+        assert state.db.current_revision() == revisie
+        assert linked.get("/readyz").status_code == ready
+        with state.db.sessions() as db:
+            assert db.execute(meting).all() == voor
     finally:
-        # Elke afgeronde terugmigratie is apart vastgelegd. Herstel het beginschema voor de volgende proef.
         upgrade(state.settings, beginrevisie)
     assert state.db.current_revision() == beginrevisie
 

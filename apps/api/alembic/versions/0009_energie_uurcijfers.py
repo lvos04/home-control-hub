@@ -39,11 +39,8 @@ def upgrade() -> None:
     )
 
 
-def downgrade() -> None:
-    if context.is_offline_mode():
-        raise BackupError("Verifieer eerst in de database of de uurcijfers in schema 0008 passen.")
-    op.execute("LOCK TABLE energy_estimate_provenance, energy_usage_interval IN SHARE MODE")
-    if op.get_bind().scalar(
+def check_downgrade(connection: sa.Connection) -> None:
+    if connection.scalar(
         sa.text(
             "SELECT EXISTS (SELECT 1 FROM energy_usage_interval WHERE delta <> round(delta, 3) OR meter_id IS NULL) "
             "OR EXISTS (SELECT 1 FROM energy_estimate_provenance WHERE method = 'bronaggregatie')"
@@ -52,6 +49,13 @@ def downgrade() -> None:
         raise BackupError(
             "Schema 0008 kan de uurcijfers niet zonder verlies bewaren. Herstel de voor-upgradeback-up in een afzonderlijke datamap."
         )
+
+
+def downgrade() -> None:
+    if context.is_offline_mode():
+        raise BackupError("Verifieer eerst in de database of de uurcijfers in schema 0008 passen.")
+    op.execute("LOCK TABLE energy_estimate_provenance, energy_usage_interval IN SHARE MODE")
+    check_downgrade(op.get_bind())
     op.drop_constraint(op.f("ck_energy_estimate_provenance_confidence_for_local_estimate"), PROVENANCE, type_="check")
     op.alter_column(PROVENANCE, "confidence", nullable=False)
     change_methods(OLD_METHODS)

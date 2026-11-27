@@ -214,6 +214,11 @@ def test_terugmigratie_0008_archiveert_de_koppelrevisies(
         # De dump van 0008 moet ook in een terugmigratie vanaf 0009 leesbaar zijn. Een achtergebleven
         # DDL-slot geeft binnen de proef een fout in plaats van een onbeperkt wachtende pg_dump.
         upgrade(vorige_versie, "0009")
+        kolommen_start = _columns(eng)
+        inhoud_start = _measure(eng, kolommen_start)
+        assert cmd_migrate(vorige_versie, str(bezet_pad), "0007") == 3
+        assert _revision(eng) == "0009"
+        assert _columns(eng) == kolommen_start and _measure(eng, kolommen_start) == inhoud_start
         monkeypatch.setenv("PGOPTIONS", os.environ.get("PGOPTIONS", "") + " -c lock_timeout=10s")
         assert cmd_migrate(vorige_versie, None, "0007") == 0
         assert _revision(eng) == "0007"
@@ -226,6 +231,32 @@ def test_terugmigratie_0008_archiveert_de_koppelrevisies(
             assert _columns(hersteld) == kolommen and _measure(hersteld, kolommen) == voor
         finally:
             hersteld.dispose()
+    finally:
+        eng.dispose()
+
+
+def test_late_dumpfout_meldt_bereikte_revisie(vorige_versie: Settings, monkeypatch, capsys) -> None:
+    eng = create_engine(vorige_versie.database_url)
+    try:
+        _fill(eng)
+        upgrade(vorige_versie, "0008")
+        kolommen = _columns(eng)
+        voor = _measure(eng, kolommen)
+        upgrade(vorige_versie, "0009")
+        kolommen_start = _columns(eng)
+        inhoud_start = _measure(eng, kolommen_start)
+
+        def uitgevallen(*args, **kwargs):
+            raise BackupError("Gesimuleerde opslaguitval tijdens pg_dump")
+
+        monkeypatch.setattr("integrations.migrations._write_backup", uitgevallen)
+        assert cmd_migrate(vorige_versie, None, "0007") == 3
+        assert _revision(eng) == "0008"
+        assert "De database staat nu op revisie 0008" in capsys.readouterr().err
+        assert _columns(eng) == kolommen and _measure(eng, kolommen) == voor
+        upgrade(vorige_versie, "0009")
+        assert _revision(eng) == "0009" and _columns(eng) == kolommen_start
+        assert _measure(eng, kolommen_start) == inhoud_start
     finally:
         eng.dispose()
 

@@ -33,22 +33,26 @@ def cmd_migrate(settings: Settings, backup_dir: str | None, down: str | None) ->
     from .db import Database
     from .migrations import BackupError, downgrade, pre_upgrade_backup, revision_known, upgrade
 
-    if down:
-        try:
-            dump = downgrade(settings, down, Path(backup_dir) if backup_dir else None)
-        except BackupError as exc:
-            print(
-                f"FOUT: terugmigratie geweigerd: {exc}. De database is ongewijzigd.",
-                file=sys.stderr,
-            )
-            return 3
-        if dump:
-            print(f"back-up vóór terugmigratie: {dump}")
-        print(f"teruggezet naar {down}")
-        return 0
     db = Database(settings.database_url)
     try:
         current = db.current_revision()
+        if down:
+            try:
+                dump = downgrade(settings, down, Path(backup_dir) if backup_dir else None)
+            except BackupError as exc:
+                reached = db.current_revision()
+                if reached is None:
+                    state = "Controleer de schemarevisie vóór hervatten."
+                elif reached == current:
+                    state = "De database is ongewijzigd."
+                else:
+                    state = f"De database staat nu op revisie {reached}. Controleer het herstelpunt vóór hervatten."
+                print(f"FOUT: terugmigratie geweigerd: {exc}. {state}", file=sys.stderr)
+                return 3
+            if dump:
+                print(f"back-up vóór terugmigratie: {dump}")
+            print(f"teruggezet naar {down}")
+            return 0
         if current is not None and not revision_known(settings, current):
             print(
                 f"FOUT: de database staat op revisie {current}, die deze versie van de app niet kent: de database is "

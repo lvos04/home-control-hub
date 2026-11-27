@@ -23,13 +23,17 @@ def upgrade() -> None:
     op.alter_column("integration_source", "link_revision", nullable=False)
 
 
+def check_downgrade(connection: sa.Connection) -> bool:
+    return bool(connection.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM integration_source)")))
+
+
 def downgrade() -> None:
     if context.is_offline_mode():
         raise BackupError("Terugmigratie van 0008 vereist een databaseverbinding om de koppelrevisies te beschermen")
     # Blokkeer nieuwe of gewijzigde koppelrevisies tot het einde van de migratie. Pg_dump kan de tabel wel lezen.
     op.execute("LOCK TABLE integration_source IN SHARE MODE")
     connection = op.get_bind()
-    if connection.scalar(sa.text("SELECT EXISTS (SELECT 1 FROM integration_source)")):
+    if check_downgrade(connection):
         backup = context.config.attributes.get("backup_before_downgrade")
         if backup is None:
             raise BackupError("Gebruik 'integrations migrate --down' om de koppelrevisies vooraf te archiveren")
