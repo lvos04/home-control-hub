@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -71,8 +71,8 @@ class Reservation(BaseModel):
             {
                 "id": row.id,
                 "workload_id": row.workload_id,
-                "window_start": row.window_start,
-                "window_end": row.window_end,
+                "window_start": row.window_start.astimezone(UTC),
+                "window_end": row.window_end.astimezone(UTC),
                 "status": row.status,
                 "wait_reason": reason,
             }

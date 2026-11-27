@@ -9,12 +9,15 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from integrations.domains.energy.models import EnergyWorkload, EnergyWorkloadReservation
+from integrations.domains.energy.workload_sources import WorkloadSources
+from integrations.domains.energy.workloads import day_plan
 from integrations.models import AuditEvent, IntegrationSource
 from integrations.timeutil import utcnow
 from tests.conftest import HUB_URL, PAIR_CODE, REPO_ROOT, idem
@@ -179,6 +182,26 @@ def test_onbruikbare_meetwaarden_en_vrije_brontekst(planner, auth):
     assert client.get(PLAN, headers=auth("viewer")).json()["sources"]["mediaguard_encoding"]["banen"] is None
 
 
+def test_versheid_na_het_wachten_op_de_tweede_bron(planner, auth, monkeypatch):
+    from integrations.domains.energy import workload_sources
+
+    client, hub = planner
+    now = datetime.fromisoformat(hub.encoding["observed_at"])
+    monkeypatch.setattr(workload_sources, "utcnow", lambda: now)
+
+    def delayed_media(request):
+        nonlocal now
+        if request.url.path == hub.path:
+            now += timedelta(seconds=hub.nas["ttl_seconden"] + 1)
+            hub.encoding["observed_at"] = now.isoformat()
+        return hub.handle(request)
+
+    client.app.state.hub.transport = httpx.MockTransport(delayed_media)
+    sources = client.get(PLAN, headers=auth("viewer")).json()["sources"]
+    assert sources["truenas_metrics"]["status"] == "onbekend" and not sources["truenas_metrics"]["items"]
+    assert sources["mediaguard_encoding"]["status"] == "gemeten"
+
+
 def test_bronrechten_en_bevestigd_adres(planner, auth):
     client, hub = planner
     assert client.get(PLAN).status_code == 401
@@ -315,6 +338,22 @@ def test_r1_voorstel_replay_audit_en_geen_uitvoering(planner, auth, fake_hub):
         audit = db.scalars(select(AuditEvent).where(AuditEvent.action == "reservation.proposed")).one()
         assert audit.entity_id == saved["proposal_id"] and PRIVATE_TEXT not in json.dumps(audit.details)
     assert hub.calls == [("GET", HTTPS_HUB + NAS), ("GET", HTTPS_HUB + hub.path)] and hub.encoding == before
+
+
+def test_herhaalde_lokale_tijd_in_de_database_houdt_beide_utc_uren(linked, auth):
+    catalog = linked.get(PLAN, headers=auth("viewer")).json()
+    for offset in (0, 1):
+        start = DAY + timedelta(hours=offset)
+        payload = proposal(catalog, start, start + timedelta(hours=1))
+        assert linked.post(PROPOSE, json=payload, headers=idem(auth("admin"))).status_code == 201
+    with linked.app.state.db.sessions() as db:
+        db.execute(text("SET LOCAL TIME ZONE 'Europe/Amsterdam'"))
+        plan = day_plan(db, DAY.date(), ZoneInfo("Europe/Amsterdam"), WorkloadSources())
+    slots = [s for hour in plan.hours for s in hour.slots]
+    assert [(s.start.isoformat(), s.end.isoformat()) for s in slots] == [
+        ("2026-10-25T00:00:00+00:00", "2026-10-25T01:00:00+00:00"),
+        ("2026-10-25T01:00:00+00:00", "2026-10-25T02:00:00+00:00"),
+    ]
 
 
 def test_overlap_grenzen_doel_en_parametercontrole(linked, auth):

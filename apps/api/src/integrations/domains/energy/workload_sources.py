@@ -160,19 +160,27 @@ def workload_sources(session: Session, hub: HubClient, link: LinkState, trace_id
     headers = {"Authorization": f"Bearer {link.service_token}", TRACE_HEADER: trace_id}
 
     def read(path: str) -> object:
-        with hub.stream_get(base, path, headers=headers, params={}) as response:
-            if response.status_code != 200:
-                raise EnergyReadError("De Hub levert deze werklastbron niet.")
-            return read_energy_json(response, "De Hub")
+        with (
+            contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError),
+            hub.stream_get(base, path, headers=headers, params={}) as response,
+        ):
+            if response.status_code == 200:
+                return read_energy_json(response, "De Hub")
+        return None
 
     nas = session.get(IntegrationSource, "truenas_metrics")
-    if nas is None or nas.enabled:
-        with contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
-            result.truenas_metrics = _nas(read(NAS_PATH), utcnow())
+    nas_body = read(NAS_PATH) if nas is None or nas.enabled else None
     mg = session.get(IntegrationSource, "mediaguard_encoding")
+    mg_body: object = None
     if mg is not None and mg.enabled and mg.base_url:
-        with contextlib.suppress(HubUrlError, httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
+        with contextlib.suppress(HubUrlError):
             address = validate_hub_url(mg.base_url, hub.settings.allow_loopback_hub, allow_path=True)
             if path := mediaguard_path(address, base):
-                result.mediaguard_encoding = _encoding(read(path), utcnow())
+                mg_body = read(path)
+    # Tijdens het wachten op de tweede bron kan de eerste meting zijn verlopen.
+    now = utcnow()
+    with contextlib.suppress(ValidationError):
+        result.truenas_metrics = _nas(nas_body, now)
+    with contextlib.suppress(ValidationError):
+        result.mediaguard_encoding = _encoding(mg_body, now)
     return result
