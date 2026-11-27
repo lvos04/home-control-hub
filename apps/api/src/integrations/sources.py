@@ -239,13 +239,12 @@ def put_source(
             )
         except HubUrlError as exc:
             raise ApiError(422, "validation_error", str(exc), {"veld": "base_url"}) from exc
-    if source_id == "mediaguard_encoding":
+    if source_id == "mediaguard_encoding" and body.enabled:
         if body.credential:
             raise ApiError(422, "validation_error", "De planner gebruikt de bestaande dienstaanmelding bij de Hub.")
-        if body.enabled:
-            base = confirmed_hub(request.app.state.hublink_store.read(), settings)
-            if not base or not mediaguard_path(base_url, base):
-                raise ApiError(422, "validation_error", "Kies de MediaGuard-adapterroute op de bevestigde HTTPS-Hub.")
+        base = confirmed_hub(request.app.state.hublink_store.read(), settings)
+        if not base or not mediaguard_path(base_url, base):
+            raise ApiError(422, "validation_error", "Kies de MediaGuard-adapterroute op de bevestigde HTTPS-Hub.")
     if source_id == "my_house" and base_url:
         try:
             energy_address(base_url, settings)

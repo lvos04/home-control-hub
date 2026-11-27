@@ -1099,6 +1099,10 @@
             "title": "Bron",
             "type": "string"
           },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
           "metriek": {
             "enum": [
               "cpu.gebruik",
@@ -1119,6 +1123,7 @@
           }
         },
         "required": [
+          "id",
           "metriek",
           "bron",
           "waarde_pct",
@@ -2697,6 +2702,7 @@
     },
     "/connector/v1/propose": {
       "post": {
+        "description": "energy.reservations.propose verwacht workload_id, window_start en window_end in parameters. De dienst bewaart alleen het voorstel.",
         "operationId": "propose_connector_v1_propose_post",
         "parameters": [
           {
@@ -2738,7 +2744,7 @@
             "description": "Successful Response"
           },
           "409": {
-            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
+            "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, node_red_niet_ingesteld, momentopname_onleesbaar, niets_te_herstellen of reservering_overlapt"
           },
           "422": {
             "description": "onbekende_actie, validation_error (ook bij een NUL-teken of losse surrogaat), voorstel_geblokkeerd, parameters_ongeldig of momentopname_niet_toegestaan"
@@ -2750,7 +2756,7 @@
             "description": "De bron (Authentik of Node-RED) is onbereikbaar"
           }
         },
-        "summary": "Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in de bron)",
+        "summary": "Voorstel met gebonden preview voor een werklastvenster (R1), Authentik of Node-RED (R2)",
         "tags": [
           "connector"
         ]

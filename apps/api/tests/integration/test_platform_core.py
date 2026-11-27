@@ -238,6 +238,7 @@ def test_connector_discover_health_items(paired_client: Any, auth: Any) -> None:
     assert {a["action_id"]: a["apply_status"] for a in d["actions"]} == {
         "sso.oidc.hub.register": "nog_niet_toepasbaar",
         "sso.sessions.revoke": "nog_niet_toepasbaar",
+        "energy.reservations.propose": "alleen_voorstel",
         "automation.flows.restore": "vereist_execution_request",
     }
     assert set(d["domains"]) == {"network", "automation", "sso", "energy"} and d["timestamp_utc"].endswith("Z")

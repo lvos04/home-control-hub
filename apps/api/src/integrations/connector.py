@@ -37,6 +37,7 @@ from .domains.automation.models import (
     AutomationRestore,
     AutomationSnapshot,
 )
+from .domains.energy import reservations
 from .domains.energy.meters import meter_inventory
 from .domains.energy.readings import LIVE_MAX_AGE
 from .domains.energy.router import coverage_payload as energy_coverage
@@ -133,12 +134,20 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
                 "task_id": automation_restore.TASK_ID,
                 "risk_class_min": automation_restore.MIN_RISK_CLASS,
                 "apply_status": automation_restore.APPLY_STATUS,
-            }
+            },
+            {
+                "action_id": reservations.ACTION_ID,
+                "title_nl": "Reserveringsvenster voorstellen",
+                "task_id": "B14-003",
+                "risk_class_min": "R1",
+                "apply_status": reservations.APPLY_STATUS,
+            },
         ],
         "apply_status_nl": sso_proposals.APPLY_UNAVAILABLE_NL,
         "apply_status_per_actie_nl": {
             "nog_niet_toepasbaar": sso_proposals.APPLY_UNAVAILABLE_NL,
             automation_restore.APPLY_STATUS: automation_restore.APPLY_STATUS_NL,
+            reservations.APPLY_STATUS: reservations.APPLY_STATUS_NL,
         },
         "permissions": [
             "read:sources",
@@ -146,6 +155,7 @@ def discover(_p: Principal = Depends(require_connector_reader)) -> dict[str, Any
             "read:sso.recovery_status",
             "read:sso.admin_account (alleen admin)",
             "read:energy.coverage",
+            "propose:energy.reservations.propose (admin of Hub)",
             "read:sso.role_mapping",
             "read:sso.proposal",
             "read:sso.anomaly",
@@ -287,11 +297,12 @@ def items(
 @router.post(
     "/propose",
     status_code=201,
-    summary="Voorstel maken: preview, diff, preview_hash en resource_etag (R2; alleen lezen in de bron)",
+    summary="Voorstel met gebonden preview voor een werklastvenster (R1), Authentik of Node-RED (R2)",
+    description="energy.reservations.propose verwacht workload_id, window_start en window_end in parameters. De dienst bewaart alleen het voorstel.",
     responses={
         409: {
             "description": "authentik_niet_ingesteld, authentik_versie_niet_geverifieerd, resource_gewijzigd, "
-            "node_red_niet_ingesteld, momentopname_onleesbaar of niets_te_herstellen"
+            "node_red_niet_ingesteld, momentopname_onleesbaar, niets_te_herstellen of reservering_overlapt"
         },
         422: {
             "description": "onbekende_actie, validation_error (ook bij een NUL-teken of losse surrogaat), "
@@ -309,6 +320,8 @@ def propose(
     key: uuid.UUID = Depends(idempotency_key),
     tid: str = Depends(trace_id),
 ) -> Any:
+    if body.action_id == reservations.ACTION_ID:
+        return reservations.propose(request, session, principal, key, tid, _fingerprint(body))
     if body.action_id == automation_restore.ACTION_ID:
         return _propose_restore(body, request, session, principal, key, tid)
     params = validate_parameters(body.action_id, body.parameters)
@@ -422,6 +435,8 @@ def apply(
 ) -> Any:
     proposal = body.get("proposal")
     action_id = proposal.get("action_id") if isinstance(proposal, dict) else None
+    if action_id == reservations.ACTION_ID:
+        raise capability_unavailable("apply", reservations.APPLY_STATUS_NL)
     if isinstance(action_id, str) and action_id in sso_proposals.ACTIONS:
         # De blokkade gaat vóór het claimen van nonces, idempotentieopslag en elke Authentik-aanroep.
         sso_verification.verify(session, body, action_id, _policy_keys(request), utcnow())

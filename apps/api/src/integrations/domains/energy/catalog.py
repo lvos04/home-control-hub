@@ -75,7 +75,14 @@ SOURCES: tuple[SourceSpec, ...] = (
         api_verification="geverifieerd_docs",
         api_verification_ref="Platformcontract 1.4 §4.4, GET /api/v1/adapterkoppelingen/{link_id}/mediaguard. NIET GEVALIDEERD (echte NAS).",
         capabilities=(
-            cap("energy.reservations.propose", "Werkloadreservering/pauzevoorstel", "propose", ("B14-003",), "R1"),
+            cap(
+                "energy.reservations.propose",
+                "Reserveringsvenster voorstellen",
+                "propose",
+                ("B14-003",),
+                "R1",
+                build_status="gebouwd",
+            ),
         ),
     ),
 )

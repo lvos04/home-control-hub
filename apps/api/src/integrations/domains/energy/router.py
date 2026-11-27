@@ -253,6 +253,7 @@ def workloads(
     timezone: str = Query("UTC", max_length=128, description="IANA-tijdzone voor de daggrenzen."),
     session: Session = Depends(archive_session),
     _p: Principal = Depends(require_reader),
+    tid: str = Depends(trace_id),
 ) -> WorkloadPlan:
     try:
         zone = home_zone(timezone)
@@ -264,5 +265,5 @@ def workloads(
     ):
         raise ApiError(422, "validation_error", "Ongeldige datum of queryparameters voor de dagplanner.")
     state = request.app.state
-    sources = workload_sources(session, state.hub, state.hublink_store.read())
+    sources = workload_sources(session, state.hub, state.hublink_store.read(), tid)
     return day_plan(session, day, zone, sources)

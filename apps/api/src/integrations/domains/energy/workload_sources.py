@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_fie
 from sqlalchemy.orm import Session
 
 from ...config import Settings
+from ...errors import TRACE_HEADER
 from ...hubclient import HubClient, validate_hub_url
 from ...hublink_store import LinkState
 from ...models import IntegrationSource
@@ -25,6 +26,7 @@ NAS_PATH = "/api/v1/observability/nas"
 
 
 class LoadReading(BaseModel):
+    id: int
     metriek: Metric
     bron: Literal["truenas.reporting.realtime", "beszel"]
     waarde_pct: float
@@ -61,6 +63,7 @@ class WorkloadSources(BaseModel):
 
 class _MetricRow(BaseModel):
     model_config = ConfigDict(strict=True)
+    id: int = Field(gt=0)
     metriek: Metric
     bron: Literal["truenas.reporting.realtime", "beszel"]
     eenheid: Literal["%"]
@@ -126,7 +129,7 @@ def _nas(raw: object, now: datetime) -> NasLoad:
             and 0 <= value <= 100
             and (row.metriek != "gpu.gebruik" or row.bron == "beszel")
         ):
-            items.append(LoadReading(metriek=row.metriek, bron=row.bron, waarde_pct=value, observed_at=at))
+            items.append(LoadReading(id=row.id, metriek=row.metriek, bron=row.bron, waarde_pct=value, observed_at=at))
     known = {row.metriek for row in items}
     missing = [metric for metric in METRICS if metric not in known]
     return NasLoad(
@@ -149,12 +152,12 @@ def _encoding(raw: object, now: datetime) -> Encoding:
     return Encoding(observed_at=at)
 
 
-def workload_sources(session: Session, hub: HubClient, link: LinkState) -> WorkloadSources:
+def workload_sources(session: Session, hub: HubClient, link: LinkState, trace_id: str) -> WorkloadSources:
     result = WorkloadSources()
     base = confirmed_hub(link, hub.settings)
     if base is None:
         return result
-    headers = {"Authorization": f"Bearer {link.service_token}"}
+    headers = {"Authorization": f"Bearer {link.service_token}", TRACE_HEADER: trace_id}
 
     def read(path: str) -> object:
         with hub.stream_get(base, path, headers=headers, params={}) as response:
@@ -164,10 +167,10 @@ def workload_sources(session: Session, hub: HubClient, link: LinkState) -> Workl
 
     nas = session.get(IntegrationSource, "truenas_metrics")
     if nas is None or nas.enabled:
-        with contextlib.suppress(httpx.HTTPError, EnergyReadError, ValidationError):
+        with contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
             result.truenas_metrics = _nas(read(NAS_PATH), utcnow())
     mg = session.get(IntegrationSource, "mediaguard_encoding")
     if mg is not None and mg.enabled and (path := mediaguard_path(mg.base_url, base)):
-        with contextlib.suppress(httpx.HTTPError, EnergyReadError, ValidationError):
+        with contextlib.suppress(httpx.HTTPError, httpx.InvalidURL, EnergyReadError, ValidationError):
             result.mediaguard_encoding = _encoding(read(path), utcnow())
     return result

@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import itertools
 import json
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from threading import Barrier
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from integrations.domains.energy.models import EnergyWorkload, EnergyWorkloadReservation
+from integrations.models import AuditEvent
 from integrations.timeutil import utcnow
 from tests.conftest import HUB_URL, PAIR_CODE, REPO_ROOT, idem
 
@@ -241,3 +245,159 @@ def test_openapi_energie_heeft_alleen_leesroutes_en_de_bestaande_drempelinstelli
     assert {(p, m) for p, ops in paths.items() if p.startswith(ENERGY + "/") for m in ops if m != "get"} == {
         (ENERGY + "/alert-thresholds", "put")
     }
+
+
+PROPOSE = "/connector/v1/propose"
+ACTION = "energy.reservations.propose"
+
+
+def proposal(plan, start=DAY, end=DAY + timedelta(hours=1), workload="av1"):
+    choice = next(w for w in plan["items"] if w["workload_key"] == workload)
+    return {
+        "action_id": ACTION,
+        "parameters": {"workload_id": choice["id"], "window_start": start.isoformat(), "window_end": end.isoformat()},
+    }
+
+
+def test_r1_voorstel_replay_audit_en_geen_uitvoering(planner, auth, fake_hub):
+    client, hub = planner
+    assert (
+        client.get("/connector/v1/discover", headers=auth("viewer"))
+        .json()["actions"]
+        .count(
+            {
+                "action_id": ACTION,
+                "title_nl": "Reserveringsvenster voorstellen",
+                "task_id": "B14-003",
+                "risk_class_min": "R1",
+                "apply_status": "alleen_voorstel",
+            }
+        )
+        == 1
+    )
+    day = {"date": DAY.date().isoformat()}
+    request = proposal(client.get(PLAN, params=day, headers=auth("viewer")).json())
+    request.update(risk_claim="R0", reason=PRIVATE_TEXT)
+    before = deepcopy(hub.encoding)
+    hub.calls.clear()
+    assert client.post(PROPOSE, json=request, headers=idem(auth("viewer"))).status_code == 403
+    assert client.post(PROPOSE, json=request, headers=auth("admin")).status_code == 400
+    key = str(uuid4())
+    r = client.post(PROPOSE, json=request, headers=idem(fake_hub.service_auth(), key))
+    assert r.status_code == 201, r.text
+    saved = r.json()
+    assert saved["status"] == "voorstel" and saved["risk_class_min"] == saved["risk_claim"] == "R1"
+    assert saved["apply_status"] == "alleen_voorstel" and saved["diff"][0]["after"]["status"] == "voorstel"
+    assert r.headers["ETag"] == f'"{saved["preview_hash"]}"' and PRIVATE_TEXT not in r.text
+    again = client.post(PROPOSE, json=request, headers=idem(fake_hub.service_auth(), key))
+    assert again.status_code == 201 and again.json() == saved and again.headers["Idempotent-Replay"] == "true"
+    apply = client.post("/connector/v1/apply", json={"proposal": saved}, headers=idem(fake_hub.service_auth()))
+    assert apply.status_code == 501 and apply.json()["code"] == "capability_unavailable"
+    assert not hub.calls
+    plan = client.get(PLAN, params=day, headers=auth("viewer")).json()
+    assert [r["id"] for r in plan["reservations"]] == [saved["proposal_id"]]
+    assert plan["hours"][0]["slots"][0]["status"] == "voorstel" and not plan["hours"][1]["slots"]
+    with client.app.state.db.sessions() as db:
+        row = db.get(EnergyWorkloadReservation, UUID(saved["proposal_id"]))
+        assert row.status == "voorstel" and row.wait_reason_nl is None and row.resources == {}
+        audit = db.scalars(select(AuditEvent).where(AuditEvent.action == "reservation.proposed")).one()
+        assert audit.entity_id == saved["proposal_id"] and PRIVATE_TEXT not in json.dumps(audit.details)
+    assert hub.calls == [("GET", HTTPS_HUB + NAS), ("GET", HTTPS_HUB + hub.path)] and hub.encoding == before
+
+
+def test_overlap_grenzen_doel_en_parametercontrole(linked, auth):
+    client = linked
+    plan = client.get(PLAN, headers=auth("viewer")).json()
+    body = proposal(plan)
+    p = body["parameters"]
+
+    def send(b):
+        return client.post(PROPOSE, json=b, headers=idem(auth("admin")))
+
+    assert send(body | {"target": {"app_id": "onbekend"}}).status_code == 422
+    for change in (
+        {"window_start": "2026-10-25T01:00:00"},
+        {"window_end": p["window_start"]},
+        {"status": "actief"},
+        {"wait_reason_nl": PRIVATE_TEXT},
+        {"window_start": 0},
+    ):
+        assert send(body | {"parameters": p | change}).status_code == 422
+    assert send(body | {"parameters": p | {"workload_id": str(uuid4())}}).status_code == 404
+    assert send(body | {"expected_version": "verouderd"}).status_code == 409
+    assert send(body).status_code == 201
+    for start, end in ((-30, 1), (0, 60), (10, 20), (59, 70), (-1, 61)):
+        r = send(proposal(plan, DAY + timedelta(minutes=start), DAY + timedelta(minutes=end)))
+        assert r.status_code == 409 and r.json()["code"] == "reservering_overlapt"
+    assert send(proposal(plan, DAY + timedelta(hours=1), DAY + timedelta(hours=2))).status_code == 201
+    assert send(proposal(plan, workload="backup")).status_code == 201
+    assert (
+        len(client.get(PLAN, params={"date": DAY.date().isoformat()}, headers=auth("viewer")).json()["reservations"])
+        == 3
+    )
+
+
+@pytest.mark.parametrize("same_key", [False, True])
+def test_gelijktijdig_eerste_voorstel_is_atomair(linked, auth, same_key):
+    plan = linked.get(PLAN, headers=auth("viewer")).json()
+    body = proposal(plan)
+    first = str(uuid4())
+    start = Barrier(2)
+
+    def send(key):
+        headers = idem(auth("admin"), key)
+        start.wait(timeout=10)
+        return linked.post(PROPOSE, json=body, headers=headers)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(send, (first, first if same_key else str(uuid4()))))
+    assert sorted(r.status_code for r in replies) == ([201, 201] if same_key else [201, 409])
+    if same_key:
+        assert replies[0].json() == replies[1].json()
+        assert sum(r.headers.get("Idempotent-Replay") == "true" for r in replies) == 1
+    with linked.app.state.db.sessions() as db:
+        assert len(db.scalars(select(EnergyWorkloadReservation)).all()) == 1
+        assert len(db.scalars(select(AuditEvent).where(AuditEvent.action == "reservation.proposed")).all()) == 1
+
+
+def test_voor_na_kijkgegevens_voortgang_en_mediabestand(planner, auth, tmp_path):
+    client, hub = planner
+    state_file = tmp_path / "eigenaar.json"
+    media = tmp_path / "testmedia"
+    media.write_bytes(b"synthetische mediainhoud")
+    state_file.write_text(
+        json.dumps(
+            {
+                "mediaserver": "actief",
+                "stream": True,
+                "kijkers": [{"gezien": True, "favoriet": False}, {"gezien": False, "hervatpunt": 40}],
+                "av1": [{"lane": "cpu", "checkpoint": 37}, {"lane": "gpu", "checkpoint": 68}],
+            }
+        )
+    )
+    before = state_file.read_bytes(), media.read_bytes()
+
+    def source_read(request):
+        if request.url.path == hub.path:
+            owner = json.loads(state_file.read_text())
+            # De eigenaar levert de pauzestand en houdt zelf de checkpoints en kijkgegevens.
+            hub.encoding["banen"] = [
+                {"lane": job["lane"], "running": int(not owner["stream"]), "paused": owner["stream"]}
+                for job in owner["av1"]
+            ]
+        return hub.handle(request)
+
+    client.app.state.hub.transport = httpx.MockTransport(source_read)
+    first = client.get(PLAN, headers=auth("viewer")).json()
+    saved = client.post(PROPOSE, json=proposal(first), headers=idem(auth("admin")))
+    assert saved.status_code == 201
+    assert (
+        client.post("/connector/v1/apply", json={"proposal": saved.json()}, headers=idem(auth("admin"))).status_code
+        == 501
+    )
+    last = client.get(PLAN, headers=auth("viewer")).json()
+    assert first["sources"] == last["sources"]
+    assert all(b["wait_reason"] == "eigenaar_gepauzeerd" for b in last["sources"]["mediaguard_encoding"]["banen"])
+    assert len(last["sources"]["mediaguard_encoding"]["banen"]) == 2
+    assert hub.calls == [("GET", HTTPS_HUB + NAS), ("GET", HTTPS_HUB + hub.path)] * 2
+    assert (state_file.read_bytes(), media.read_bytes()) == before
