@@ -82,7 +82,7 @@ SET_FILES = {"90-exec.js": "node-red/exec"}
 TEST_ADMIN_USER = "beheerder"
 #: dienstaccount en rechten zoals deze dienst ze verwacht (``policy.SERVICE_USER``, ``policy.SERVICE_PERMISSIONS``)
 TEST_SERVICE_USER = "hub-dienst"
-TEST_SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read")
+TEST_SERVICE_PERMISSIONS = ("flows.read", "nodes.read", "settings.read", "diagnostics.read")
 
 
 def hash_password(password: str) -> str:
@@ -90,15 +90,20 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("ascii")
 
 
-def hardening_arguments(service_hash: str, admin_hash: str, credential_secret: str | None = None) -> list[str]:
+def hardening_arguments(
+    service_hash: str, admin_hash: str, credential_secret: str | None = None, *, herstelproef: bool = False
+) -> list[str]:
     """ALLEEN voor tests: de ``--define``-argumenten waarmee een test de nep-Node-RED beveiligt zoals een beheerder dat
     in Node-RED zelf doet. Geen productiecode en geen installatieweg: deze dienst maakt sinds besluit C-12 geen
     formulierargumenten meer (S-P3-360). Zonder ``credentialSecret`` (de standaard) maakt Node-RED zijn sleutel zelf."""
+    rights = list(TEST_SERVICE_PERMISSIONS)
+    if herstelproef:
+        rights.append("flows.write")
     admin_auth = {
         "type": "credentials",
         "sessionExpiryTime": 3600,
         "users": [
-            {"username": TEST_SERVICE_USER, "password": service_hash, "permissions": list(TEST_SERVICE_PERMISSIONS)},
+            {"username": TEST_SERVICE_USER, "password": service_hash, "permissions": rights},
             {"username": TEST_ADMIN_USER, "password": admin_hash, "permissions": ALL_PERMISSIONS},
         ],
     }

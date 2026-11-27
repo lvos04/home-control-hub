@@ -349,7 +349,9 @@ def flow_request_becomes_a_hub_proposal(lab: Lab) -> None:
 
     lab.start_node_red()
     profile = _beveiliging()  # de beheerder beveiligt Node-RED zelf (besluit C-12); alleen testwaarden
-    assert httpx.post(f"{lab.nr_url}/sim/arguments", json={"arguments": profile["arguments"]}).json()["beveiligd"]
+    assert httpx.post(f"{lab.nr_url}/sim/arguments", json={"arguments": profile["herstelargumenten"]}).json()[
+        "beveiligd"
+    ]
     assert httpx.post(f"{lab.nr_url}/sim/deploy", json={"flows": _flows_v1(), "credentials": {}}).status_code == 200
     bron = {"base_url": lab.nr_url, "enabled": True, "credential": f"{DIENST}:{profile['dienstwachtwoord']}"}
     r = lab.api("PUT", "/integrations/v1/sources/node_red", lab.user_jwt(), idem=True, body=bron, if_match=True)

@@ -90,7 +90,7 @@ class Scene:
 
     def __init__(self, linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any) -> None:
         self.linked, self.fake_hub, self.auth, self.nr = linked, fake_hub, auth, node_red_fake
-        self.profile = setup_node_red(linked, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1)
+        self.profile = setup_node_red(linked, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1, herstelproef=True)
         self.blob1 = cred_blob(node_red_fake)
         self.snap1 = b11.snapshot(linked, auth)["snapshot"]
         node_red_fake.deploy(flows_v2(), CREDS_V2)
@@ -225,7 +225,7 @@ def test_snapshot_without_linked_data_dir_says_so(
 ) -> None:
     plain = app_factory()  # zonder HCH_NODE_RED_DATA_DIR
     assert pair(plain, fake_hub).ok
-    setup_node_red(plain, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1)
+    setup_node_red(plain, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1, herstelproef=True)
     first = b11.snapshot(plain, auth)["snapshot"]
     assert first["credentials_present"] is False and first["credentials_status"] == "niet_gekoppeld"
     sync = plain.get(f"{A}/isolation", headers=auth("viewer")).json()["synchronisatie"]
@@ -263,7 +263,7 @@ def test_a_writable_data_dir_never_counts_as_linked(
     assert not os.statvfs(data_dir).f_flag & os.ST_RDONLY, "deze proef vraagt een beschrijfbare map"
     writable = app_factory(node_red_data_dir=data_dir)
     assert pair(writable, fake_hub).ok
-    setup_node_red(writable, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1)
+    setup_node_red(writable, fake_hub, auth, flows=flows_v1(), credentials=CREDS_V1, herstelproef=True)
     assert (data_dir / "flows_cred.json").is_file(), "het bestand staat er wel"
     first = b11.snapshot(writable, auth)["snapshot"]
     assert first["credentials_present"] is False and first["credentials_status"] == "niet_gekoppeld"

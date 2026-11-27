@@ -857,7 +857,9 @@ def test_c12_b_anonymous_access_is_still_reported(linked: Any, fake_hub: Any, au
     assert row["status"] == "ok" and row["detail"]["http"] == {"/flows": 401, "/nodes": 401, "/settings": 401}
 
 
-@pytest.mark.parametrize("rechten", ["*", [*policy.SERVICE_PERMISSIONS, "nodes.write"]])
+@pytest.mark.parametrize(
+    "rechten", ["*", [*policy.SERVICE_PERMISSIONS, "nodes.write"], [*policy.SERVICE_PERMISSIONS, "flows.write"]]
+)
 def test_c12_c_a_service_account_with_more_rights_is_a_deviation(
     linked: Any, fake_hub: Any, auth: Any, node_red_fake: Any, rechten: Any
 ) -> None:

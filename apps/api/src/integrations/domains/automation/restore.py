@@ -488,7 +488,9 @@ def apply(
         )
     if proposal["actor"]["type"] != "user":
         return refused(
-            _refuse_403("menselijke_voorsteller_verplicht", "Alleen een gebruiker mag flowherstel voorstellen.", trace_id)
+            _refuse_403(
+                "menselijke_voorsteller_verplicht", "Alleen een gebruiker mag flowherstel voorstellen.", trace_id
+            )
         )
     # 6: parameterschema en doel
     snapshot_id = parse_parameters(proposal["parameters"])

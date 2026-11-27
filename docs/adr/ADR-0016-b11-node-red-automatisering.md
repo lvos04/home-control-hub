@@ -76,7 +76,9 @@ Deze ronde bouwt de vijf werkpakketten:
   punt 3), versleuteld in de eigen vault, nooit in een log of antwoord. Voor Node-RED koos de gebruiker "Wachten"
   (punt 7): het manifest heeft nog geen `accounts`, dus `SERVICE_USER` (`hub-dienst`) en `SERVICE_PERMISSIONS` blijven
   de eigen waarden; ze worden `accounts[].id` en `accounts[].rechten` (met een repotest tegen het manifest) zodra dat
-  manifest een dienstaccount heeft. Tests: `test_b11_001_isolatie.py::test_c12_*` en
+  manifest een dienstaccount heeft. Het C-12-dienstaccount heeft alleen leesrechten. De isolatiecontrole meldt
+  `flows.write` als afwijking. De positieve herstelproeven gebruiken een simulator met afzonderlijk toegekend
+  schrijfrecht. Tests: `test_b11_001_isolatie.py::test_c12_*` en
   `test_node_red_client.py::test_credential_secret_from_the_form_is_a_deviation`.
 - Image `docker.io/nodered/node-red`, tag `5.0.9`, vastgezet op de digest van de multi-arch-index
   (`catalog.NODE_RED_DIGEST`); dezelfde digest als in het manifest van `jelly-leon-platform` (daar tag `5.0.9-24`).

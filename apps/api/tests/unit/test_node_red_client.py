@@ -115,6 +115,7 @@ def test_hardened_fake_refuses_anonymous_and_limits_the_service_account(fake: No
     }
     # het dienstaccount mag geen modules installeren (geen nodes.write); de beheerder krijgt 404 (palette uit)
     assert t.post("/nodes", json={"module": "x"}, headers=h).status_code == 401
+    assert t.post("/flows", json=[], headers=h).status_code == 401 and fake.writes == []
     admin = fake.login(TEST_ADMIN_USER, ADMIN_PW, "*")
     assert admin is not None
     assert t.post("/nodes", json={"module": "x"}, headers={"Authorization": f"Bearer {admin}"}).status_code == 404
@@ -171,6 +172,8 @@ def test_client_relogs_in_once_when_the_token_is_revoked(fake: NodeRedFake) -> N
 
 def test_post_flows_needs_the_current_rev_and_is_never_repeated(fake: NodeRedFake) -> None:
     fake.deploy(simple_flow())
+    assert fake.admin_auth is not None
+    fake.admin_auth["users"][0]["permissions"].append("flows.write")  # historische installatie met schrijfrecht
     c = client_for(fake)
     stale = c.get_flows().rev
     fake.deploy(simple_flow(label="Intussen gewijzigd"))
@@ -200,7 +203,7 @@ def test_credentials_blob_round_trip_and_other_secret(fake: NodeRedFake, hashes:
     fake.deploy(flows, {flows[1]["id"]: {"user": "mqtt", "password": secret_value}})
     blob = json.loads((fake.data_dir / "flows_cred.json").read_text())  # type: ignore[operator]
     assert set(blob) == {"$"} and secret_value not in json.dumps(blob)
-    c = client_for(fake)
+    c = client_for(fake, user=TEST_ADMIN_USER, password=ADMIN_PW)
     rev = c.post_flows(c.get_flows().rev, [])
     assert fake.credentials == {}
     c.post_flows(rev, flows, credentials=blob)
@@ -209,7 +212,7 @@ def test_credentials_blob_round_trip_and_other_secret(fake: NodeRedFake, hashes:
     # een andere Node-RED (met een eigen, zelfgemaakte sleutel) weigert het blok en verandert niets
     other = NodeRedFake()
     other.apply_arguments(hardening_arguments(hashes[0], hashes[1]))
-    c2 = client_for(other)
+    c2 = client_for(other, user=TEST_ADMIN_USER, password=ADMIN_PW)
     with pytest.raises(NodeRedError) as err:
         c2.post_flows(c2.get_flows().rev, flows, credentials=blob)
     assert err.value.reason == "credentials_niet_te_ontsleutelen" and other.flows == [] and other.writes == []
@@ -429,7 +432,7 @@ def _modules(fake: NodeRedFake) -> dict[str, str]:
 
 
 def test_scan_blocks_an_exec_node_even_when_node_red_accepts_the_flow(fake: NodeRedFake) -> None:
-    c = client_for(fake)
+    c = client_for(fake, user=TEST_ADMIN_USER, password=ADMIN_PW)
     c.post_flows(c.get_flows().rev, [*simple_flow(), *exec_flow()])  # Node-RED weigert dit niet (gemeten)
     result = policy.scan(c.get_flows().flows, _modules(fake), ("node-red",))
     by_label = {t.label: t for t in result.tabs}

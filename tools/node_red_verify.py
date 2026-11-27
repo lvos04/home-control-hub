@@ -435,7 +435,15 @@ def verify_profile() -> None:
             http=service_cred,
         )
         checksum_before = policy.flows_checksum(doc.flows)
+        denied = raw(base, "POST", "/flows", token=service_token, json={"rev": doc.rev, "flows": doc.flows})
+        check(
+            "dienstaccount_kan_geen_flows_zetten",
+            denied.status_code in (401, 403),
+            "Het dienstaccount kan alleen lezen",
+            http=denied.status_code,
+        )
 
+    with NodeRedClient(base, ADMIN_USER, admin_password, SETTINGS) as client:
         # --- verouderde rev wordt geweigerd; er wordt niets overschreven
         try:
             client.post_flows(first.rev, [])
@@ -523,7 +531,7 @@ def verify_profile() -> None:
         )
 
     # --- andere sleutel (elke container maakt zijn eigen): Node-RED weigert het blok en verandert niets
-    with NodeRedClient(other, policy.SERVICE_USER, service_password, SETTINGS) as client2:
+    with NodeRedClient(other, ADMIN_USER, admin_password, SETTINGS) as client2:
         before = client2.get_flows()
         try:
             client2.post_flows(before.rev, demo_flows(), credentials=blob)

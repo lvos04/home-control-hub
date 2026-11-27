@@ -45,7 +45,7 @@ PLUG = {"type": "device", "id": "stekker-3"}
 APP_DOEL = {"type": "app", "id": "uptime-kuma"}
 STATE: dict[str, Any] = {}
 DIENST = "hub-dienst"
-DIENST_RECHTEN = ["flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read"]
+DIENST_RECHTEN = ["flows.read", "nodes.read", "settings.read", "diagnostics.read"]
 
 
 def _beveiliging() -> dict[str, Any]:
@@ -74,7 +74,10 @@ def _beveiliging() -> dict[str, Any]:
         "--define=functionExternalModules=false",
         f"--define=externalModules={json.dumps(extern, separators=(',', ':'))}",
     ]
-    return {"arguments": args, "dienstwachtwoord": dienst, "beheerwachtwoord": beheer}
+    # De positieve herstelproef gebruikt een historische configuratie met expliciet schrijfrecht.
+    admin_auth["users"][0]["permissions"] = [*DIENST_RECHTEN, "flows.write"]
+    herstel = [f"--define=adminAuth={json.dumps(admin_auth, separators=(',', ':'))}", *args[1:]]
+    return {"arguments": args, "herstelargumenten": herstel, "dienstwachtwoord": dienst, "beheerwachtwoord": beheer}
 
 
 class Apparaten:
@@ -448,6 +451,9 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     gekozen momentopname, nadat de huidige zijn vastgelegd."""
     admin = stack.token("admin")
     snap1 = STATE["snap1"]
+    assert httpx.post(
+        f"{stack.node_red}/sim/arguments", json={"arguments": STATE["profile"]["herstelargumenten"]}
+    ).json()["beveiligd"]
     # iemand past de flow en het broker-wachtwoord aan in de editor
     httpx.post(
         f"{stack.node_red}/sim/deploy",
@@ -528,6 +534,9 @@ def test_05_herstel_met_door_de_hub_ondertekend_verzoek(stack: Stack) -> None:
     assert httpx.post(f"{stack.hch}/connector/v1/rollback", json={}, headers=_idem(stack.service())).status_code == 501
     assert APPARATEN.mutaties == [{"actie": "app.restart", "doel": "uptime-kuma", "door": "hub"}]
     STATE["signature"] = signed["signature"]
+    assert httpx.post(f"{stack.node_red}/sim/arguments", json={"arguments": STATE["profile"]["arguments"]}).json()[
+        "beveiligd"
+    ]
 
 
 def test_06_health_volgt_node_red_en_geen_geheimen_in_de_logs(stack: Stack) -> None:

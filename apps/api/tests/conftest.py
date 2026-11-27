@@ -391,6 +391,7 @@ def setup_node_red(
     auth: Callable[..., dict[str, str]],
     *,
     harden: bool = True,
+    herstelproef: bool = False,
     flows: list[dict[str, Any]] | None = None,
     credentials: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -399,7 +400,9 @@ def setup_node_red(
     het dienstaccount. Geeft de testwachtwoorden en de argumenten terug."""
     service_password, admin_password = secrets.token_urlsafe(32), secrets.token_urlsafe(18)
     profile: dict[str, Any] = {
-        "arguments": hardening_arguments(hash_password(service_password), hash_password(admin_password)),
+        "arguments": hardening_arguments(
+            hash_password(service_password), hash_password(admin_password), herstelproef=herstelproef
+        ),
         "beheerwachtwoord": admin_password,
         "dienstwachtwoord": service_password,
     }

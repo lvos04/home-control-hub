@@ -66,8 +66,8 @@ OUTBOUND_TYPES = frozenset(
 LINK_TYPES = frozenset({"link out", "link in", "link call"})
 #: naam van het dienstaccount; wordt ``accounts[].id`` zodra het Node-RED-manifest een dienstaccount heeft (C-12)
 SERVICE_USER = "hub-dienst"
-#: precies wat deze dienst nodig heeft: flows lezen en (alleen bij herstel) zetten, nodes/instellingen/diagnose lezen
-SERVICE_PERMISSIONS = ("flows.read", "flows.write", "nodes.read", "settings.read", "diagnostics.read")
+#: C-12: het dienstaccount leest flows, nodes, instellingen en diagnostiek.
+SERVICE_PERMISSIONS = ("flows.read", "nodes.read", "settings.read", "diagnostics.read")
 MAX_FINDINGS = 50
 #: langste ``id`` en ``z`` die de dienst kan plaatsen (``automation_flow.source_flow_id`` is String(120)); langer is
 #: ``vorm_ongeldig`` (R-VEILIG-8: de echte Node-RED neemt een langere id aan)

@@ -385,7 +385,7 @@ def get_editor(session: Session = Depends(get_session), _p: Principal = Depends(
         "toegang_nl": [
             "Alleen een beheerder krijgt dit adres; een lezer of operator krijgt 403.",
             "Node-RED vraagt zelf een aanmelding; zonder aanmelding geeft de editor geen flows, nodes of instellingen.",
-            "Het dienstaccount van deze dienst kan de editor niet beheren (alleen lezen en flows terugzetten).",
+            "Het dienstaccount heeft alleen leesrechten voor flows, nodes, instellingen en diagnostiek.",
         ],
     }
 
