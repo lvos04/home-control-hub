@@ -46,8 +46,8 @@ class Vault:
             row.nonce, row.ciphertext, row.last4, row.version = nonce, ct, last4, row.version + 1
         return last4
 
-    def get(self, session: Session, ref: str) -> str | None:
-        row = session.get(VaultSecret, self.check_ref(ref))
+    def get(self, session: Session, ref: str, *, refresh: bool = False) -> str | None:
+        row = session.get(VaultSecret, self.check_ref(ref), populate_existing=refresh)
         if row is None:
             return None
         return self._aead.decrypt(row.nonce, row.ciphertext, ref.encode("utf-8")).decode("utf-8")

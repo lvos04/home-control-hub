@@ -32,10 +32,14 @@ from psycopg.conninfo import make_conninfo
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
+from integrations import audit
 from integrations.cli import cmd_migrate
 from integrations.config import Settings
 from integrations.migrations import BackupError, alembic_config, alembic_dir, downgrade, head_revision, upgrade
+from integrations.models import IntegrationSource
+from integrations.security.vault import Vault
 from tests.conftest import ADMIN_DB_URL, recreate_database
 
 DB = "hch_test_migratie_0005"
@@ -119,6 +123,67 @@ def _measure(eng: Engine, columns: dict[str, list[str]]) -> Meting:
 
 def _differences(before: Meting, after: Meting) -> list[str]:
     return sorted(t for t in before if after.get(t) != before[t])
+
+
+@pytest.mark.parametrize(
+    ("historie", "bevestigd"),
+    [(("zelfde", "zelfde"), True), (("ander", "zelfde"), False), ((None, "zelfde"), False), (("zelfde",), False)],
+    ids=["zelfde-adres", "adreswissel", "tijdelijk-leeg", "onvolledig-auditspoor"],
+)
+def test_0010_bindt_alleen_een_aantoonbare_oude_bestemming(
+    vorige_versie: Settings, historie: tuple[str | None, ...], bevestigd: bool
+) -> None:
+    settings = vorige_versie
+    eng = create_engine(settings.database_url)
+    adres = "https://zelfde.test"
+    ref = "vault://source/authentik"
+    try:
+        _fill(eng)
+        upgrade(settings, "0009")
+        with Session(eng) as db, db.begin():
+            db.execute(
+                IntegrationSource.__table__.insert().values(
+                    source_id="authentik",
+                    domain="sso",
+                    enabled=True,
+                    base_url=adres,
+                    credential_ref=ref,
+                    version=2,
+                    updated_by="proef",
+                )
+            )
+            Vault(os.urandom(32)).put(db, ref, uuid.uuid4().hex)
+            for bestemming in historie:
+                audit.record(
+                    db,
+                    action="source.configured",
+                    domain="sso",
+                    entity_type="integration_source",
+                    entity_id="authentik",
+                    principal=None,
+                    trace_id=str(uuid.uuid4()),
+                    message_nl="Bron ingesteld.",
+                    details={"base_url": f"https://{bestemming}.test" if bestemming else None},
+                )
+        kolommen = _columns(eng)
+        voor = _measure(eng, kolommen)
+        upgrade(settings, "0010")
+        assert _measure(eng, kolommen) == voor
+        with Session(eng) as db:
+            bron = db.get(IntegrationSource, "authentik")
+            assert bron is not None
+            assert bron.credential_base_url == (adres if bevestigd else None)
+            assert bron.active_credential_ref == (ref if bevestigd else None)
+        if bevestigd:
+            archief = downgrade(settings, "0009")
+            assert archief is not None and _checksum_ok(archief)
+            assert _columns(eng) == kolommen and _measure(eng, kolommen) == voor
+        else:
+            with pytest.raises(BackupError, match="onbevestigde Authentik-aanmelding"):
+                downgrade(settings, "0009")
+            assert _revision(eng) == "0010" and _measure(eng, kolommen) == voor
+    finally:
+        eng.dispose()
 
 
 @pytest.mark.parametrize("databasenaam_in_query", [False, True], ids=["url-pad", "dbname"])
@@ -563,8 +628,11 @@ def test_sso_voorstellen_en_noodtoegang_blijven_gelijk_bij_0006(vorige_versie: S
             else:
                 upgrade(settings, revision)
             assert _revision(eng) == revision
-            # 0008 voegt alleen de koppelrevisie toe aan integration_source; de rest blijft gelijk
-            nieuw = {**columns, "integration_source": [*columns["integration_source"], "link_revision"]}
+            # 0008 en 0010 voegen de koppelrevisie en het bevestigde aanmeldadres toe.
+            nieuw = {
+                **columns,
+                "integration_source": [*columns["integration_source"], "link_revision", "credential_base_url"],
+            }
             assert _columns(eng) == (nieuw if revision == head_revision(settings) else columns)
             assert _differences(before, _measure(eng, columns)) == []
             checks = _constraints(eng)

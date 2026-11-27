@@ -97,7 +97,7 @@ def runtime_view(spec: SourceSpec, row: IntegrationSource | None, last4: str | N
         "configured": bool(row.base_url),
         "enabled": row.enabled,
         "base_url": row.base_url,
-        "credential_present": row.credential_ref is not None,
+        "credential_present": row.active_credential_ref is not None,
         "credential_last4": last4,
         "health": _health_view(row),
         "version": row.version,
@@ -126,7 +126,10 @@ def _last4(session: Session, ref: str | None) -> str | None:
 
 def source_view(session: Session, spec: SourceSpec) -> dict[str, Any]:
     row = session.get(IntegrationSource, spec.source_id)
-    return {**spec.to_dict(), "runtime": runtime_view(spec, row, _last4(session, row.credential_ref if row else None))}
+    return {
+        **spec.to_dict(),
+        "runtime": runtime_view(spec, row, _last4(session, row.active_credential_ref if row else None)),
+    }
 
 
 def probe_http(
@@ -244,6 +247,10 @@ def put_source(
         raise ApiError(422, "validation_error", "De koppelgegevens horen bij een nieuw my_house-credential.")
     if body.enabled and not base_url:
         raise ApiError(422, "validation_error", "Een bron aanzetten kan alleen met een adres.", {"veld": "base_url"})
+    if source_id == "authentik" and body.credential and not base_url:
+        raise ApiError(
+            422, "validation_error", "Stel het Authentik-adres samen met de aanmelding in.", {"veld": "base_url"}
+        )
     # de credential gaat alleen als HMAC mee in de verzoek-hash, dus niet door de centrale controle van
     # run_idempotent: een NUL-teken of losse surrogaat erin is hier al 422, vóór er iets gebeurt (KLEIN-22)
     refusal = unstorable_text({"credential": body.credential})
@@ -267,7 +274,7 @@ def put_source(
     )
 
     def action() -> tuple[int, Any, dict[str, str]]:
-        row = session.get(IntegrationSource, source_id, with_for_update=True)
+        row = session.get(IntegrationSource, source_id, with_for_update=True, populate_existing=True)
         created = row is None
         if row is None:
             if match not in (None, "*"):
@@ -291,12 +298,18 @@ def put_source(
             )
         vault = request.app.state.vault
         ref = source_ref(source_id)
-        # De aanmelding hoort bij de bevestigde bestemming. Authentik bewaart zijn eigen koppeling bij herconfiguratie.
-        if body.clear_credential or (changed_url and source_id != "authentik"):
+        # Authentik mag tijdelijk zonder adres staan. Alleen het eerder bevestigde adres kan dan heractiveren.
+        changed_destination = changed_url
+        if source_id == "authentik":
+            changed_destination = (
+                base_url is not None and row.credential_base_url is not None and base_url != row.credential_base_url
+            )
+        if body.clear_credential or changed_destination:
             previous = row.credential_ref
             if previous == ref and not body.credential:
                 vault.delete(session, ref)
             row.credential_ref = None
+            row.credential_base_url = None
         if source_id == "my_house" and (body.credential or (body.enabled and row.credential_ref)):
             try:
                 if not base_url:
@@ -320,6 +333,8 @@ def put_source(
         elif body.credential:
             vault.put(session, ref, body.credential)
             row.credential_ref = ref
+            if source_id == "authentik":
+                row.credential_base_url = base_url
         session.flush()
         audit.record(
             session,

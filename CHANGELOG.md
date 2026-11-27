@@ -2,6 +2,9 @@
 
 ## Nog niet uitgebracht
 
+- Een Authentik-aanmelding blijft bruikbaar na heractivering op hetzelfde adres. Een andere bestemming vereist
+  een nieuwe aanmelding. Bij een upgrade blijft een bestaande aanmelding bruikbaar als het volledige auditspoor
+  hetzelfde adres bevestigt. Ontbreekt dat bewijs, voer het token opnieuw in bij het bedoelde adres.
 - De connector controleert bij flowherstel ook zelf of een gebruiker het voorstel deed.
 - Bij de overgang naar de event-ID als bron-ID kan een eerder ontvangen event lokaal nog op verzending wachten.
   Weigert de Hub de tweede levering, dan blijft het event zichtbaar als `dead_letter` met reden `bron_id_conflict`.

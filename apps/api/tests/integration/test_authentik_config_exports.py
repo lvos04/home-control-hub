@@ -13,7 +13,9 @@ import pytest
 from sqlalchemy import func, select
 
 from integrations.domains.sso import authaudit
+from integrations.domains.sso.authentik.client import AuthentikError, client_from_source
 from integrations.domains.sso.models import SsoAnomaly, SsoAuthentikSnapshot
+from integrations.models import IntegrationSource, VaultSecret
 from tests.conftest import idem
 from tests.fakes.authentik_fake import AuthentikFake
 from tests.integration.test_b13_p1_authentik import BASE, _outbox, _source
@@ -290,6 +292,80 @@ def _zet_bron(client: Any, admin: Any, **velden: Any) -> None:
     assert antwoord.status_code == 200
 
 
+@pytest.mark.parametrize("tijdelijk_leeg", [False, True])
+def test_authentik_adreswissel_vereist_nieuwe_aanmelding(paired_client: Any, auth: Any, tijdelijk_leeg: bool) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    if tijdelijk_leeg:
+        _zet_bron(client, admin, base_url=None, enabled=False)
+    ander = "https://andere-bron.test/authentik"
+    _zet_bron(client, admin, base_url=ander, enabled=True)
+    runtime = client.get(SOURCE, headers=admin).json()["runtime"]
+    assert runtime["credential_present"] is False and runtime["credential_last4"] is None
+    state = client.app.state
+    with state.db.sessions() as db, pytest.raises(AuthentikError, match="geen_token"):
+        client_from_source(db, state.settings, state.vault, state.http_transport)
+    nieuw = secrets.token_urlsafe(32)
+    _zet_bron(client, admin, base_url=ander, enabled=True, credential=nieuw)
+
+    # Alleen dit lokale transport ziet de nieuw bevestigde aanmelding.
+    def controleer(verzoek: httpx.Request) -> httpx.Response:
+        juist = verzoek.headers.get("Authorization") == f"Bearer {nieuw}"
+        assert juist and verzoek.url.host == "andere-bron.test"
+        return httpx.Response(200, json={})
+
+    with state.db.sessions() as db:
+        lezer = client_from_source(db, state.settings, state.vault, httpx.MockTransport(controleer))
+        assert lezer.get_json("/root/config/") == {}
+
+
+def test_authentik_geen_client_voor_een_onbevestigde_opgeslagen_bestemming(paired_client: Any, auth: Any) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    state = client.app.state
+    with state.db.sessions.begin() as db:
+        db.get(IntegrationSource, "authentik").base_url = "https://andere-bron.test"
+    with state.db.sessions() as db, pytest.raises(AuthentikError, match="geen_token"):
+        client_from_source(db, state.settings, state.vault, state.http_transport)
+    runtime = client.get(SOURCE, headers=admin).json()["runtime"]
+    assert runtime["credential_present"] is False and runtime["credential_last4"] is None
+
+
+def test_authentik_aanmelding_zonder_adres_laat_de_koppeling_intact(paired_client: Any, auth: Any) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    voor = client.get(SOURCE, headers=admin).json()["runtime"]
+    antwoord = client.put(
+        SOURCE,
+        json={"base_url": None, "credential": secrets.token_urlsafe(32)},
+        headers=idem(admin, **{"If-Match": voor["etag"]}),
+    )
+    assert antwoord.status_code == 422
+    assert client.get(SOURCE, headers=admin).json()["runtime"] == voor
+
+
+def test_authentik_adreswissel_ververst_eerder_gelezen_kluisrij(paired_client: Any, auth: Any) -> None:
+    client, admin = paired_client, auth("admin")
+    _source(client, admin)
+    ander = "https://andere-bron.test"
+    nieuw = secrets.token_urlsafe(32)
+
+    def controleer(verzoek: httpx.Request) -> httpx.Response:
+        juist = verzoek.headers.get("Authorization") == f"Bearer {nieuw}"
+        assert juist
+        return httpx.Response(200, json={})
+
+    state = client.app.state
+    with state.db.sessions() as leessessie:
+        bron = leessessie.get(IntegrationSource, "authentik")
+        kluisrij = leessessie.get(VaultSecret, bron.credential_ref)
+        assert kluisrij is not None
+        _zet_bron(client, admin, base_url=ander, enabled=True, credential=nieuw)
+        lezer = client_from_source(leessessie, state.settings, state.vault, httpx.MockTransport(controleer))
+        assert lezer.base_url == ander
+        assert lezer.get_json("/root/config/") == {}
+
+
 def test_opruimen_begrenst_exports_van_vervallen_koppelrevisies(
     paired_client: Any, auth: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -372,7 +448,6 @@ def test_oude_koppeling_komt_niet_terug_na_verwijderen_en_opnieuw_instellen(pair
 
 def test_export_krijgt_de_revisie_van_de_client_ook_als_de_bron_daarna_wijzigt(paired_client: Any, auth: Any) -> None:
     from integrations.domains.sso import backup
-    from integrations.domains.sso.authentik.client import client_from_source
 
     client, admin = paired_client, auth("admin")
     _source(client, admin)

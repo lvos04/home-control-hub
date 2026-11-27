@@ -18,7 +18,6 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .... import __version__
@@ -225,9 +224,7 @@ def client_from_source(
     """Bouwt een client uit de bronconfiguratie (adres + token in de vault). Fail-closed bij ontbrekende delen."""
     # Eén vergrendelende lezing van de bronrij: een gelijktijdige put_source wacht tot deze transactie klaar is, dus
     # adres, token en revisie horen bij dezelfde koppeling.
-    row = session.scalar(
-        select(IntegrationSource).where(IntegrationSource.source_id == SOURCE_ID).with_for_update(read=True)
-    )
+    row = session.get(IntegrationSource, SOURCE_ID, with_for_update={"read": True}, populate_existing=True)
     if row is None or not row.base_url:
         raise AuthentikError("niet_geconfigureerd")
     if not row.enabled:
@@ -236,9 +233,10 @@ def client_from_source(
         base = validate_hub_url(row.base_url, settings.allow_loopback_hub, label="Het Authentik-adres", allow_path=True)
     except HubUrlError as exc:
         raise AuthentikError("ongeldig_adres") from exc
-    if not row.credential_ref:
+    ref = row.active_credential_ref
+    if not ref:
         raise AuthentikError("geen_token")
-    token = vault.get(session, row.credential_ref)
+    token = vault.get(session, ref, refresh=True)
     if not token:
         raise AuthentikError("geen_token")
     return AuthentikClient(base, token, settings, transport=transport, link_revision=row.link_revision)

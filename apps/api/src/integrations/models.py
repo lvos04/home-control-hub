@@ -114,6 +114,8 @@ class IntegrationSource(Timestamps, Base):
     domain: Mapped[str] = mapped_column(String(20), nullable=False)
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     credential_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Bestemming die de beheerder samen met het Authentik-token heeft ingesteld.
+    credential_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_probe_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
@@ -124,6 +126,16 @@ class IntegrationSource(Timestamps, Base):
     #: Willekeurige, niet-geheime revisie van de koppeling: nieuw bij elke wijziging van de bron en nooit hersteld.
     #: Bewijs (zoals een Authentik-export) dat bij een oude revisie hoort, geldt niet voor de huidige koppeling.
     link_revision: Mapped[str] = mapped_column(String(36), nullable=False, default=lambda: str(uuid.uuid4()))
+
+    @property
+    def active_credential_ref(self) -> str | None:
+        if self.source_id == "authentik" and (
+            not self.base_url
+            or self.base_url != self.credential_base_url
+            or self.credential_ref != "vault://source/authentik"
+        ):
+            return None
+        return self.credential_ref
 
     __table_args__ = (
         CheckConstraint("domain IN ('network','automation','sso','energy')", name="domain"),
