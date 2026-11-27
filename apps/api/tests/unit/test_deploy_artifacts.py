@@ -176,6 +176,42 @@ def test_dockerfile_pins_base_images_by_digest_and_no_latest() -> None:
     assert main.index("wissel()") < main.index("--controle") < main.index("/readyz")
 
 
+@pytest.mark.parametrize(
+    ("commands", "second", "expected", "attempts"),
+    [
+        (["runc init"], "OK 4", 0, 2),
+        (["runc init"], "OK 3", 1, 2),
+        (["runc init"], "", 1, 3),
+        (["runc init", "app"], "OK 4", 1, 1),
+        (["app runc init"], "OK 4", 1, 1),
+    ],
+)
+def test_rookproef_wacht_alleen_op_runc_init(tmp_path: Path, commands, second, expected, attempts) -> None:
+    script = (DEPLOY / "allinone/smoke-test.sh").read_text()
+    function = script[script.index("procs_ok()") : script.index("pid1_is_supervisor_568()")]
+    fixture = """
+WORK=$1
+PROC_CHECK=proef
+docker() {
+  echo poging >> "$WORK/pogingen"
+  if [ "$(wc -l < "$WORK/pogingen")" -eq 1 ] || [ -z "$volgende" ]; then
+    echo "$eerste"
+  else
+    echo "$volgende"
+  fi
+}
+eerste=$2
+volgende=$3
+"""
+    first = "\n".join(f"{pid} uid=['0'] caps={{}} nnp=0 cmd={cmd}" for pid, cmd in enumerate(commands, 2))
+    result = subprocess.run(  # noqa: S603 - vaste rookfunctie, alleen gesimuleerde procesuitvoer
+        ["/bin/bash", "-c", fixture + function + "\nprocs_ok proef 1", "proef", str(tmp_path), first, second],
+        capture_output=True,
+    )
+    assert result.returncode == expected
+    assert len((tmp_path / "pogingen").read_text().splitlines()) == attempts
+
+
 def test_smoke_test_runs_like_the_custom_app_form() -> None:
     """A6: de rooktest draait zonder --security-opt no-new-privileges en zonder --cap-drop (zoals het formulier) en
     controleert per proces Uid 568, CapEff 0 en NoNewPrivs 1."""

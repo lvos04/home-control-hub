@@ -105,10 +105,19 @@ for p in sorted(int(x) for x in os.listdir("/proc") if x.isdigit()):
 print("\n".join(bad) if bad else f"OK {seen}")
 '
 procs_ok() { # container [bnd: 1 = start als root, dan ook CapBnd 0]
-  local out
-  out="$(docker exec -u 568:568 "$1" python -c "$PROC_CHECK" "${2:-1}" 2>&1)"
-  echo "$out" > "$WORK/procs.txt"
-  case "$out" in OK*) [ "${out#OK }" -ge 4 ] ;; *) cat "$WORK/procs.txt"; return 1 ;; esac
+  local out poging
+  for poging in 1 2 3; do
+    out="$(docker exec -u 568:568 "$1" python -c "$PROC_CHECK" "${2:-1}" 2>&1)" || { echo "$out"; return 1; }
+    echo "$out" > "$WORK/procs.txt"
+    case "$out" in "OK "*) [ "${out#OK }" -ge 4 ]; return ;; esac
+    # Een runc init tijdens een exec kan nog naar de gebruiker van de container wisselen.
+    # Alleen bij uitsluitend zulke regels nemen we een volledig nieuw procesbeeld.
+    if [ "$poging" = 3 ] || grep -qvE '^[0-9]+ uid=.* cmd=(/[^ ]*/)?runc init$' "$WORK/procs.txt"; then
+      cat "$WORK/procs.txt"
+      return 1
+    fi
+    sleep 0.2
+  done
 }
 pid1_is_supervisor_568() {
   [ "$(docker exec -u 568:568 "$1" sh -c 'tr "\0" " " < /proc/1/cmdline; echo; awk "/^Uid:/{print \$2}" /proc/1/status' | tr '\n' '|')" \
