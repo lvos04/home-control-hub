@@ -192,6 +192,7 @@ def test_dockerfile_pins_base_images_by_digest_and_no_latest() -> None:
         (["runc init"], "", 1, 3),
         (["runc init", "app"], "OK 4", 1, 1),
         (["app runc init"], "OK 4", 1, 1),
+        (["app cmd=runc init"], "OK 4", 1, 1),
     ],
 )
 def test_rookproef_wacht_alleen_op_runc_init(tmp_path: Path, commands, second, expected, attempts) -> None:

@@ -112,7 +112,7 @@ procs_ok() { # container [bnd: 1 = start als root, dan ook CapBnd 0]
     case "$out" in "OK "*) [ "${out#OK }" -ge 4 ]; return ;; esac
     # Een runc init tijdens een exec kan nog naar de gebruiker van de container wisselen.
     # Alleen bij uitsluitend zulke regels nemen we een volledig nieuw procesbeeld.
-    if [ "$poging" = 3 ] || grep -qvE '^[0-9]+ uid=.* cmd=(/[^ ]*/)?runc init$' "$WORK/procs.txt"; then
+    if [ "$poging" = 3 ] || grep -qvE '^[0-9]+ uid=\[[^]]*\] caps=\{[^}]*\} nnp=[^ ]+ cmd=(/([^ /]+/)*)?runc init$' "$WORK/procs.txt"; then
       cat "$WORK/procs.txt"
       return 1
     fi
